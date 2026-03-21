@@ -104,9 +104,25 @@ Before execution, pull: current task set (`inbox`, `in_progress`, `review`), non
 ## Board Worker Loop
 1) Check in via heartbeat endpoint (pre-flight above).
 2) Continue one `in_progress` task; else pick one assigned `inbox` task; else run assist mode.
-3) Refresh task context and plan for the active task.
-4) Execute and post only high-signal task comment updates.
-5) Move to `review` when deliverable and evidence are ready.
+3) When picking an `inbox` task, move it to `in_progress` IMMEDIATELY:
+   ```bash
+   curl -s -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+     -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+     -d '{"status": "in_progress"}'
+   ```
+4) Refresh task context and plan for the active task.
+5) Execute and post only high-signal task comment updates.
+6) When work is complete, request code review BEFORE committing (if using ACP/Ralph loop):
+   ```bash
+   codex exec -m gpt-5.4 --sandbox read-only "Review this change: <description>" 2>/dev/null
+   ```
+7) Move to `review` when deliverable and evidence are ready — use the PATCH endpoint:
+   ```bash
+   curl -s -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+     -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+     -d '{"status": "review"}'
+   ```
+   **Do NOT skip this step.** If you completed work but did not PATCH the status, the board still shows `inbox` or `in_progress`.
 
 ### Assist Mode
 If no active/assigned task:
