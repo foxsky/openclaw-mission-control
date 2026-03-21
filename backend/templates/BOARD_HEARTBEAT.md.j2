@@ -96,6 +96,22 @@ Before execution, pull: current task set (`inbox`, `in_progress`, `review`), non
 - To communicate with agents on `in_progress` or `inbox` tasks, use the **nudge endpoint**.
 - Valid statuses are: `inbox`, `in_progress`, `review`, `done`. There is no `waiting` status.
 
+### Creating Sub-Tasks (when decomposing work)
+When you need to create sub-tasks for agents, **always include `depends_on_task_ids`** to enforce execution order:
+```bash
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "title": "TASK_TITLE",
+    "description": "CLEAR_DESCRIPTION with: what to build, tech stack, target host:port, acceptance criteria, where to find specs/plans",
+    "assigned_agent_id": "AGENT_UUID",
+    "depends_on_task_ids": ["UUID_OF_TASK_THAT_MUST_FINISH_FIRST"],
+    "priority": "high"
+  }'
+```
+**Every task description MUST include:** what to build, what tech/tools to use, where to deploy (host:port), how to know it's done (acceptance criteria), and where to find specs or plans.
+**Every downstream task MUST have `depends_on_task_ids`** pointing to its upstream dependency. Do NOT leave dependencies empty — agents will start work before prerequisites are ready.
+
 ### Step 1 — Check In
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/heartbeat" -H "X-Agent-Token: $AUTH_TOKEN"
@@ -219,15 +235,20 @@ for c in comments:
 **NEVER approve without reading comments first. "Looks good" is not evidence. Always post the comment BEFORE the PATCH (leads cannot include `comment` in PATCH).**
 
 ### Step 4 — Dependency Check
-Look at the Step 2 output. For each `in_progress` task that shows `BLOCKED` or has `deps=[...]`:
-1. Check if the dependency task_ids appear in the `done` lines of Step 2 output.
-2. If any dependency is NOT `done` → the agent should not be working yet. Nudge them:
+Look at the Step 2 output:
+- If an `in_progress` task shows `BLOCKED` or has `deps=[...]` with unfinished dependencies → nudge the agent to stop:
   ```bash
   curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$AGENT_ID/nudge" \
     -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
     -d '{"message": "Your task depends on DEPENDENCY_TASK_TITLE which is not done yet. Stop working and wait until it completes."}'
   ```
-If no tasks show `BLOCKED` or `deps=`, skip this step.
+- If an `in_progress` task has NO `deps=` but logically depends on another task (e.g., frontend started before spec is done) → **add the missing dependency now:**
+  ```bash
+  curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"depends_on_task_ids": ["DEPENDENCY_TASK_UUID"]}'
+  ```
+  Then nudge the agent to stop until the dependency completes.
 
 ### Step 5 — QA Failure Routing
 Check for QA failure reports. QA agents post blockers on their own `in_progress` tasks (not `review`), so also check comments on `in_progress` QA tasks from Step 2:
