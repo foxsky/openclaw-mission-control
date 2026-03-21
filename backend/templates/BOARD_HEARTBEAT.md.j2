@@ -219,16 +219,10 @@ Agents can get confused when their `MEMORY.md` claims a task is "Done" but the b
 
 If your task involves deploying to a remote machine:
 
-1) After deploying, **verify the deployed version matches your workspace build:**
-   - Compare file hashes: `sha256sum dist/assets/*.js` locally vs on the remote.
-   - If they differ, redeploy: `scp -r dist/* user@host:/path/`
-2) **Test the deployed URL, not localhost:**
-   - If you deployed to `192.168.2.63:3002`, test THAT — not `localhost:3001`.
-   - `curl -s http://<deployed-host>:<port>/` — does it return real content?
-3) **Verify API connectivity from the deployed frontend:**
-   - Open the deployed URL and check if the app loads data (not "Failed to fetch").
-   - If the API URL is misconfigured in the build, fix `.env` and rebuild.
-4) **If the deployed version is stale or broken:** redeploy before claiming done.
+1) After deploying, **verify the deployed version matches your workspace build.** If they differ, redeploy.
+2) **Test the deployed URL, not localhost.** Check `TOOLS.md` for the target host and port.
+3) **Verify the deployed app loads real data** — not "Failed to fetch" or empty state.
+4) **If the deployed version is stale or broken:** fix and redeploy before claiming done.
 
 ### Interrupted ACP Sessions
 
@@ -240,6 +234,24 @@ If your ACP session (Claude Code or Codex) was interrupted mid-work:
    - Update MEMORY.md with the exact state: "Components empty, ACP session interrupted, need to restart."
    - Do NOT return HEARTBEAT_OK — post a blocker: `@lead ACP session interrupted, deliverable incomplete. Need another cycle to finish.`
 4) **NEVER return HEARTBEAT_OK when you know the work is incomplete.** That signals "nothing needs attention" when something clearly does.
+
+### Test Failures and Blockers
+
+**If you are QA (QA-Unit or QA-E2E) and tests fail:**
+- Post a task comment with the exact failure: what test, what error, what was expected.
+- Notify `@lead`: `Tests failing on {task}. Blocker: {specific issue}. Needs developer fix.`
+- Move YOUR task to `waiting` status — you cannot proceed until the developer fixes the issue.
+- Do NOT keep retrying the same failing tests. Report once, wait for fix.
+
+**If you are a developer and QA reports a failure:**
+- Read the QA comment for the specific issue.
+- Fix the issue in your workspace, redeploy, and notify QA: `@qa_agent Fixed: {what you changed}. Please retest.`
+- Do NOT ignore QA failure reports.
+
+**If you are the Supervisor and QA reports a blocker:**
+- Route the failure to the responsible developer with a clear ask.
+- Track the blocker in `MEMORY.md`.
+- Follow up next heartbeat if the developer hasn't responded.
 
 ### Assist Mode
 If no active/assigned task:
