@@ -97,20 +97,24 @@ Before execution, pull: current task set (`inbox`, `in_progress`, `review`), non
 - Valid statuses are: `inbox`, `in_progress`, `review`, `done`. There is no `waiting` status.
 
 ### Creating Sub-Tasks (when decomposing work)
-When you need to create sub-tasks for agents, **always include `depends_on_task_ids`** to enforce execution order:
+Create tasks in dependency order. For tasks with dependencies, **create without `assigned_agent_id` first** (assigning a blocked task returns 409), set `depends_on_task_ids`, then assign after the dependency completes:
+
+Root task (no dependencies — assign immediately):
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-  -d '{
-    "title": "TASK_TITLE",
-    "description": "CLEAR_DESCRIPTION with: what to build, tech stack, target host:port, acceptance criteria, where to find specs/plans",
-    "assigned_agent_id": "AGENT_UUID",
-    "depends_on_task_ids": ["UUID_OF_TASK_THAT_MUST_FINISH_FIRST"],
-    "priority": "high"
-  }'
+  -d '{"title": "TITLE", "description": "DESCRIPTION", "assigned_agent_id": "AGENT_UUID", "priority": "high"}'
 ```
-**Every task description MUST include:** what to build, what tech/tools to use, where to deploy (host:port), how to know it's done (acceptance criteria), and where to find specs or plans.
-**Every downstream task MUST have `depends_on_task_ids`** pointing to its upstream dependency. Do NOT leave dependencies empty — agents will start work before prerequisites are ready.
+Downstream task (has dependencies — do NOT assign yet):
+```bash
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"title": "TITLE", "description": "DESCRIPTION", "depends_on_task_ids": ["UPSTREAM_TASK_UUID"], "priority": "high"}'
+```
+The system will automatically notify the assignee when all dependencies complete. Assign downstream tasks only after their dependencies are done, or leave them unassigned for you to assign later.
+
+**Task descriptions MUST include:** what to build, tech/tools, target host:port (when applicable), acceptance criteria, and where to find specs/plans.
+**Downstream tasks MUST have `depends_on_task_ids`.** Root/parallel tasks may have empty deps.
 
 ### Step 1 — Check In
 ```bash
@@ -242,13 +246,18 @@ Look at the Step 2 output:
     -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
     -d '{"message": "Your task depends on DEPENDENCY_TASK_TITLE which is not done yet. Stop working and wait until it completes."}'
   ```
-- If an `in_progress` task has NO `deps=` but logically depends on another task (e.g., frontend started before spec is done) → **add the missing dependency now:**
+- If an `in_progress` task has NO `deps=` but its description references an upstream artifact (spec, API, deployed service) that is not done yet → **add the missing dependency:**
   ```bash
   curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
     -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
     -d '{"depends_on_task_ids": ["DEPENDENCY_TASK_UUID"]}'
   ```
-  Then nudge the agent to stop until the dependency completes.
+  Then nudge the agent to move their task back to inbox and wait:
+  ```bash
+  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$AGENT_ID/nudge" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"message": "I added a dependency on UPSTREAM_TASK. Move your task back to inbox and wait: curl -fsS -X PATCH ... -d {\"status\": \"inbox\"}"}'
+  ```
 
 ### Step 5 — QA Failure Routing
 Check for QA failure reports. QA agents post blockers on their own `in_progress` tasks (not `review`), so also check comments on `in_progress` QA tasks from Step 2:
