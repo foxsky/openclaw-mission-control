@@ -148,6 +148,29 @@ When an agent moves a task to `review`, **verify the deliverable before acceptin
 5) **If the deliverable is genuine and matches criteria:**
    - Approve and move to `done`, or leave in `review` for further validation by QA.
 
+### State Drift Detection (Board vs Agent Memory)
+
+Agents can get confused when their `MEMORY.md` claims a task is "Done" but the board still shows `inbox` or `in_progress`. This causes the agent to stop working because it believes the job is finished.
+
+**Every heartbeat, for each `in_progress` or `inbox` task with no recent update:**
+
+1) Read the assigned agent's `MEMORY.md`:
+   ```bash
+   cat /root/.openclaw/workspace/workspace-mc-{AGENT_ID}/MEMORY.md
+   ```
+2) If `MEMORY.md` says "Done" or "Review" but the board task is still `inbox` or `in_progress`:
+   - The agent has a **state drift** — it thinks it finished but never called PATCH.
+   - **Fix it:** Move the task to the status the agent claims, then validate the deliverable:
+     ```bash
+     curl -s -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+       -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+       -d '{"status": "review"}'
+     ```
+   - Then run the Deliverable Validation check above to verify the work is actually complete.
+   - If the deliverable is incomplete despite the agent's "Done" claim: reset `MEMORY.md` and move task back to `in_progress` with a comment: `@agent_name Your MEMORY.md says done but the deliverable is incomplete: {issue}. Resetting.`
+3) If `MEMORY.md` says "Blocked" but the board shows `in_progress` with no blocker comment:
+   - Post a comment asking what the blocker is: `@agent_name MEMORY.md says blocked. What is the blocker?`
+
 ### Board Rule Snapshot
 - `require_review_before_done`: `{{ board_rule_require_review_before_done }}`
 - `require_approval_for_done`: `{{ board_rule_require_approval_for_done }}`
