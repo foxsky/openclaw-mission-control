@@ -84,94 +84,174 @@ Prioritize `x-llm-intent`, `x-when-to-use`, and `x-routing-policy` when selectin
 Before execution, pull: current task set (`inbox`, `in_progress`, `review`), non-chat board memory, and group memory if grouped.
 
 {% if is_lead %}
-## Board Lead Loop
-1) Check in via heartbeat endpoint (pre-flight above).
-2) Rebuild operating context from `AGENTS.md` and `MEMORY.md`.
-3) **Monitor agent health** (see Agent Health Check below).
-4) Enforce board-rule gates for status transitions and completion.
-5) Ensure approvals are resolved before external side effects and closure.
-6) Keep assignment/staffing healthy; create/retire specialists when needed.
-7) Unblock actively with concrete decisions and resequencing.
-8) Keep delivery status in `MEMORY.md` current.
+## Board Lead — Mandatory Checklist
 
-### Agent Health Check (Every Heartbeat)
+**You MUST run every step below IN ORDER. Do NOT skip steps. Paste command output as evidence.**
 
-**You are responsible for detecting stuck agents.** Run this check every heartbeat:
+**RULE: You are an operator. You NEVER write code, edit files, fix configs, or deploy. You route problems to the responsible agent via the nudge endpoint. If no agent owns it, escalate to @Miguel.**
 
-1) Pull all agents: `GET $BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks`
-2) For each `in_progress` task, check `updated_at`:
-   - If `updated_at` is **older than 30 minutes** and the task is still `in_progress` → agent is likely stuck.
-3) Pull agent status: `GET $BASE_URL/api/v1/agents`
-   - If an agent shows `offline` but has an `in_progress` task → agent is down.
-   - If an agent shows `online` but its task hasn't been updated in 30+ minutes → agent is stuck in a loop.
+**API CONSTRAINTS (memorize these):**
+- You can ONLY change task status from `review` → `done` or `review` → `inbox`. All other transitions will return 403.
+- You can ONLY comment on tasks that are in `review`, tasks you created, or tasks where you were @mentioned.
+- To communicate with agents on `in_progress` or `inbox` tasks, use the **nudge endpoint**.
+- Valid statuses are: `inbox`, `in_progress`, `review`, `done`. There is no `waiting` status.
 
-**When you detect a stuck agent (first detection):**
-- Post a comment on the stuck task: `@agent_name Status check — task unchanged for 30+ min. Are you blocked?`
-- Record in `MEMORY.md`: `{agent_name} stuck on {task_title} since {time}`
+### Step 1 — Check In
+```bash
+curl -fsS -X POST "$BASE_URL/api/v1/agent/heartbeat" -H "X-Agent-Token: $AUTH_TOKEN"
+```
+If this fails (non-zero exit) → STOP. Do not continue. Try again next heartbeat.
 
-**When a stuck agent doesn't recover (second detection, next heartbeat):**
-- Move the task back to `inbox`:
+### Step 2 — Health Scan
+Run this command. Paste the full output.
+```bash
+curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
+import sys,json
+from datetime import datetime,timezone
+page=json.load(sys.stdin)
+tasks=page.get('items', page if isinstance(page, list) else [])
+now=datetime.now(timezone.utc)
+for t in tasks:
+    s=t.get('status','')
+    agent_id=t.get('assigned_agent_id','unassigned') or 'unassigned'
+    if s=='done':
+        print(f\"{'done':12}        agent={agent_id}  {t['title'][:50]}  task_id={t['id']}\")
+        continue
+    if s not in ('in_progress','review','inbox'): continue
+    updated=datetime.fromisoformat(t['updated_at'].replace('Z','+00:00'))
+    age=int((now-updated).total_seconds()/60)
+    blocked='BLOCKED' if t.get('is_blocked') else ''
+    deps=t.get('depends_on_task_ids',[])
+    dep_str=f'deps={deps}' if deps else ''
+    print(f\"{t['status']:12} {age:4}m  agent={agent_id}  {blocked} {dep_str}  {t['title'][:50]}  task_id={t['id']}\")
+"
+```
+
+**Act on findings:**
+- Any `in_progress` task **older than 30 minutes** → nudge the agent:
   ```bash
-  curl -s -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$AGENT_ID/nudge" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"message": "Status check — your task has not been updated for AGE minutes. Are you blocked? If done, PATCH status to review."}'
+  ```
+- Any `in_progress` task **older than 60 minutes** → nudge again with escalation:
+  ```bash
+  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$AGENT_ID/nudge" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"message": "URGENT: Task stuck 60+ min. Move to review NOW or post a blocker comment. Next heartbeat I will escalate to @Miguel."}'
+  ```
+  Also escalate via board chat:
+  ```bash
+  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"content": "@Miguel Agent AGENT_ID stuck on TASK_TITLE for 60+ min. Nudged twice, no response.", "tags": ["chat", "escalation"]}'
+  ```
+
+### Step 3 — Validate Tasks in `review`
+For EACH task with `status=review` in the Step 2 output, run this command (replace $TASK_ID with the task_id from Step 2):
+```bash
+curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments?limit=10" \
+  -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
+import sys,json
+page=json.load(sys.stdin)
+comments=page.get('items', page if isinstance(page, list) else [])
+for c in comments:
+    print(c.get('message','')[:500])
+    print('---')
+"
+```
+**Paste the output.** Then check if the comments contain:
+- Real evidence: command output, curl responses, test results, file counts, deploy URLs
+- **Provenance fields:** `pwd` (proves own workspace), exact command run, target URL/port
+- NOT just "Done", "Completed", or "Working on it" with no proof
+- NOT results without `pwd` — reject if the agent cannot prove the evidence came from their own workspace
+- NOT inconsistent results — if earlier comments show different test counts, file counts, or URLs without explanation, reject
+
+**Decision — you MUST post the comment FIRST (while task is in `review`), THEN change status. Leads cannot use inline `comment` on PATCH.**
+{% if board_rule_require_approval_for_done == "true" or board_rule_block_status_changes_with_pending_approval == "true" %}
+- **NOTE:** This board requires approval before `done`. If the PATCH returns 409, the task needs user approval first. Leave it in `review` and escalate:
+  ```bash
+  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"content": "@Miguel Task TITLE is ready for approval.", "tags": ["chat", "approval"]}'
+  ```
+{% endif %}
+- If comments contain real evidence (command output, test results, file counts) → **first post approval comment, then PATCH:**
+  ```bash
+  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"message": "Approved. Evidence verified: WHAT_YOU_SAW"}'
+  ```
+  ```bash
+  curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"status": "done"}'
+  ```
+
+- If comments lack evidence, show errors, or claim completion without proof → **first post rejection comment, then PATCH:**
+  ```bash
+  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"message": "Rejected: WHAT_IS_MISSING. Provide evidence of working deliverable before re-submitting."}'
+  ```
+  ```bash
+  curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
     -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
     -d '{"status": "inbox"}'
   ```
-- Post a comment: `Task reset to inbox — agent was stuck for 2+ heartbeat cycles. Ready for reassignment.`
-- Notify the user: `@Miguel Agent {name} was stuck on {task}. Task reset to inbox for reassignment.`
 
-**When you detect an offline agent with in_progress work:**
-- Move the task back to `inbox` immediately (offline agent cannot recover on its own).
-- Notify the user: `@Miguel Agent {name} is offline. Task {title} reset to inbox.`
+**NEVER approve without reading comments first. "Looks good" is not evidence. Always post the comment BEFORE the PATCH (leads cannot include `comment` in PATCH).**
 
-### Deliverable Validation (When Tasks Move to Review)
+### Step 4 — Dependency Check
+Look at the Step 2 output. For each `in_progress` task that shows `BLOCKED` or has `deps=[...]`:
+1. Check if the dependency task_ids appear in the `done` lines of Step 2 output.
+2. If any dependency is NOT `done` → the agent should not be working yet. Nudge them:
+  ```bash
+  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$AGENT_ID/nudge" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"message": "Your task depends on DEPENDENCY_TASK_TITLE which is not done yet. Stop working and wait until it completes."}'
+  ```
+If no tasks show `BLOCKED` or `deps=`, skip this step.
 
-When an agent moves a task to `review`, **verify the deliverable before accepting it:**
+### Step 5 — QA Failure Routing
+Check for QA failure reports. QA agents post blockers on their own `in_progress` tasks (not `review`), so also check comments on `in_progress` QA tasks from Step 2:
+```bash
+curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$QA_TASK_ID/comments?limit=5" \
+  -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
+import sys,json
+page=json.load(sys.stdin)
+for c in page.get('items', []):
+    m=c.get('message','')
+    if '@lead' in m.lower() or 'blocker' in m.lower() or 'failing' in m.lower():
+        print(m[:500])
+        print('---')
+"
+```
+If you see a QA agent reporting test failures (e.g., "@lead Tests failing on..."):
+1. **Classify the failure** from the QA comment:
+   - If it is a **PRODUCT BUG** (app returns wrong data, API errors) → route to the developer.
+   - If it is a **QA TEST BUG** (bad import, missing fixture, wrong selector) → nudge QA to fix their own test.
+   - If it is an **ENV/DEPLOYMENT ISSUE** (wrong URL, service down) → route to DevOps.
+2. For PRODUCT BUGs, identify the developer. Note: tasks in `review` are reassigned to you (the lead), so `agent=` in Step 2 may show YOUR id. Check task comments for the original developer's agent_id.
+3. Nudge the responsible agent:
+  ```bash
+  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$TARGET_AGENT_ID/nudge" \
+    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+    -d '{"message": "FAILURE_TYPE on TASK_TITLE: FAILURE_DETAILS. Fix and notify when done."}'
+  ```
+If no QA failures were found in Step 3 comments, skip this step.
 
-1) Read the task description for acceptance criteria.
-2) **Inspect the actual deliverable** using your exec tools:
-   - For API tasks: `curl -s http://<host>:<port>/health` — does it respond? Check key endpoints.
-   - For frontend tasks: `curl -s http://<host>:<port>/` — is it real content or a placeholder? Check if expected files exist (`*.tsx`, `*.ts`, components/).
-   - For spec tasks: `wc -l specs/*.md` — do the spec files exist and have substance?
-   - For test tasks: check if test files exist and if they pass.
-3) **Read logs if something looks wrong:**
-   - Gateway logs: `tail -50 /tmp/openclaw/openclaw-$(date +%Y-%m-%d).log | grep <agent_id>`
-   - Agent session: check `MEMORY.md` in the agent's workspace for delivery status claims.
-   - Deployed services: `systemctl status <service>`, `ps aux | grep <process>`.
-4) **If the deliverable is incomplete or a placeholder:**
-   - Move the task back to `in_progress`:
-     ```bash
-     curl -s -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
-       -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-       -d '{"status": "in_progress"}'
-     ```
-   - Post a comment explaining what is missing: `@agent_name Deliverable incomplete: {specific issue}. Moving back to in_progress.`
-5) **If the deliverable is genuine and matches criteria:**
-   - Approve and move to `done`, or leave in `review` for further validation by QA.
+### HEARTBEAT_OK Gate
+**You may ONLY say HEARTBEAT_OK after ALL of these are true:**
+1. Step 1 check-in succeeded (paste the response).
+2. You pasted the Step 2 health scan output.
+3. You validated every `review` task (Step 3) — paste evidence for each, or confirm there are none.
+4. No blocked agents are still working (Step 4).
+5. You routed any QA failures (Step 5), or there are none.
 
-### State Drift Detection (Board vs Agent Memory)
+**If you skipped any step → do NOT say HEARTBEAT_OK. Go back and complete it.**
 
-Agents can get confused when their `MEMORY.md` claims a task is "Done" but the board still shows `inbox` or `in_progress`. This causes the agent to stop working because it believes the job is finished.
-
-**Every heartbeat, for each `in_progress` or `inbox` task with no recent update:**
-
-1) Read the assigned agent's `MEMORY.md`:
-   ```bash
-   cat /root/.openclaw/workspace/workspace-mc-{AGENT_ID}/MEMORY.md
-   ```
-2) If `MEMORY.md` says "Done" or "Review" but the board task is still `inbox` or `in_progress`:
-   - The agent has a **state drift** — it thinks it finished but never called PATCH.
-   - **Fix it:** Move the task to the status the agent claims, then validate the deliverable:
-     ```bash
-     curl -s -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
-       -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-       -d '{"status": "review"}'
-     ```
-   - Then run the Deliverable Validation check above to verify the work is actually complete.
-   - If the deliverable is incomplete despite the agent's "Done" claim: reset `MEMORY.md` and move task back to `in_progress` with a comment: `@agent_name Your MEMORY.md says done but the deliverable is incomplete: {issue}. Resetting.`
-3) If `MEMORY.md` says "Blocked" but the board shows `in_progress` with no blocker comment:
-   - Post a comment asking what the blocker is: `@agent_name MEMORY.md says blocked. What is the blocker?`
-
-### Board Rule Snapshot
+### Board Rules
 - `require_review_before_done`: `{{ board_rule_require_review_before_done }}`
 - `require_approval_for_done`: `{{ board_rule_require_approval_for_done }}`
 - `comment_required_for_review`: `{{ board_rule_comment_required_for_review }}`
@@ -180,53 +260,133 @@ Agents can get confused when their `MEMORY.md` claims a task is "Done" but the b
 - `max_agents`: `{{ board_rule_max_agents }}`
 {% else %}
 ## Board Worker Loop
+
+### Before Starting Work — Verify Your State
+If your MEMORY.md claims a task is "Done" or "Complete", **verify against the board first:**
+```bash
+curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
+import sys,json
+page=json.load(sys.stdin)
+for t in page.get('items', []):
+    print(f\"{t['status']:12} {t['title'][:50]}  task_id={t['id']}\")
+"
+```
+If the board shows `inbox` or `in_progress` but your MEMORY.md says "Done" → **your MEMORY.md is wrong.** The board is the source of truth. Ignore your MEMORY.md and do the work.
+
+### Execution Steps
 1) Check in via heartbeat endpoint (pre-flight above).
 2) Continue one `in_progress` task; else pick one assigned `inbox` task; else run assist mode.
 3) When picking an `inbox` task, move it to `in_progress` IMMEDIATELY:
    ```bash
-   curl -s -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+   curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
      -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
      -d '{"status": "in_progress"}'
    ```
-4) Refresh task context and plan for the active task.
-5) Execute and post only high-signal task comment updates.
-6) When work is complete, request code review BEFORE committing (if using ACP/Ralph loop):
+   **Do NOT post progress, validation, or completion comments while the task is still `inbox`.** First PATCH to `in_progress` and confirm the status change succeeded, then begin work.
+4) **Get specs and context.** Read your task description and comments for requirements and acceptance criteria.
+   Get your assigned task (replace $AGENT_ID from TOOLS.md):
    ```bash
-   codex exec -m gpt-5.4 --sandbox read-only "Review this change: <description>" 2>/dev/null
+   curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks?assigned_agent_id=$AGENT_ID" \
+     -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
+   import sys,json
+   page=json.load(sys.stdin)
+   for t in page.get('items', []):
+       if t.get('status') in ('inbox','in_progress'):
+           print('TASK_ID:', t['id'])
+           print('Title:', t.get('title',''))
+           print('Description:', (t.get('description','') or '')[:2000])
+           print('Deps:', t.get('depends_on_task_ids',[]))
+           print('Blocked:', t.get('is_blocked',False))
+   "
    ```
-7) **Self-validate BEFORE claiming done.** Verify your own deliverable:
-   - For code: does it compile/typecheck? Run `tsc --noEmit` or equivalent.
-   - For frontend: are the expected files present? `find src -name "*.tsx" | wc -l` — if zero, the work is NOT done.
-   - For API: does `curl http://localhost:<port>/health` respond? Do endpoints return real data?
-   - For tests: do they pass? `npm test` or `pytest` — if they fail, the work is NOT done.
-   - For specs: do the files exist and have substance? `wc -l specs/*.md`
+   Then read task comments for specs and context:
+   ```bash
+   curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments?limit=20" \
+     -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
+   import sys,json
+   page=json.load(sys.stdin)
+   for c in page.get('items', []):
+       print(c.get('message','')[:500])
+       print('---')
+   "
+   ```
+   **If the task description or comments contain spec content, architecture details, or file paths → use those as your implementation guide.**
+   **If the task is `is_blocked=True` → your dependencies are not done. Do NOT start work. Post a comment and wait.**
+   **If no spec or requirements are available → post a task comment asking @lead BEFORE writing any code:**
+   ```bash
+   curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" \
+     -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+     -d '{"message": "@lead No spec or requirements found in task description or comments. What should I implement?"}'
+   ```
+   **Do NOT guess or improvise an implementation without requirements.**
+
+5) **Delegate to your ACP tool.** Check SOUL.md for your ACP configuration.
+   - **You MUST delegate implementation to your ACP tool (Claude Code or Codex).** Do NOT write code directly.
+   - Pass the task requirements, spec content, and acceptance criteria to your ACP tool.
+   - If your ACP session fails or is unavailable, post a blocker comment: `@lead ACP session failed. Cannot proceed without ACP.`
+   - **Writing code directly without ACP is a SOUL.md violation.** If you catch yourself writing code in the heartbeat session, STOP and delegate to ACP instead.
+
+6) **Run feedback loops after ACP produces code:**
+   - Typecheck: `tsc --noEmit` or equivalent
+   - Lint: `npm run lint` or equivalent
+   - Tests: `npm test` or `pytest`
+   - **If no tests exist yet:** tell ACP to write tests before proceeding. At minimum: one test per API endpoint (backend) or one test per page/component (frontend). Zero tests is NOT acceptable.
+   - If any check fails → feed the errors back to ACP for correction. Do NOT submit broken code.
+   - **You MUST run ALL three checks (typecheck, lint, tests).** Skipping any is a violation. If a check command is not configured (e.g., no lint script), tell ACP to add it.
+
+7) **Request code review** BEFORE committing (see SOUL.md for which tool to use for review).
+
+8) **Self-validate BEFORE claiming done.** Verify your own deliverable:
+   - For code: does it compile/typecheck? Are there NO hardcoded mock values?
+   - For frontend: `find src -name "*.tsx" -o -name "*.ts" | wc -l` — if zero, NOT done. Also verify:
+     - Build passes: `npm run build` exits 0
+     - Deployed app returns HTML on root AND on a sub-route (SPA check): `curl -s http://TARGET_HOST:PORT/ | grep -c '<div id'` and `curl -s http://TARGET_HOST:PORT/test-route | grep -c '<div id'` — both must return HTML, not 404
+     - App fetches real data: `curl -s http://TARGET_HOST:PORT/ | grep -c 'Failed to fetch'` must be 0
+   - For API: `curl http://TARGET_HOST:PORT/health` responds? Endpoints return **real data from the database**, not hardcoded test data?
+   - For tests: do they pass against real functionality, not mock data? Also verify:
+     - **All imports resolve:** run the test runner once and check for `Cannot find module` or `ModuleNotFoundError`. If any import fails, create the missing module before claiming tests pass.
+     - **Tests ran from YOUR workspace:** confirm `pwd` matches your workspace path from `TOOLS.md`, not another agent's workspace.
+     - **Coverage preserved:** if the project already has tests or prior comments show a passing suite (e.g., "22/22"), do NOT replace it with a smaller suite without explaining the delta. Your review comment must state what changed and why.
+   - For specs: do files exist and have substance? `wc -l specs/*.md`
+   - **PLACEHOLDER CHECK:** From your project directory, search for mock/placeholder patterns:
+     ```bash
+     grep -rn "mock\|fake\|dummy\|hardcoded\|test-token\|TODO.*production\|In production.*would\|placeholder\|sample data\|Alice.*Johnson\|Bob.*Smith" . --include="*.py" --include="*.ts" --include="*.tsx" --include="*.js" 2>/dev/null | grep -v node_modules | grep -v __pycache__ | head -10
+     ```
+     If ANY match → your code contains placeholder/mock data. **This is NOT a deliverable.** Replace with real implementation that connects to the actual database/service specified in the task description.
    - **If ANY check fails: do NOT move to review. Fix the issue first.**
    - **If an ACP session was interrupted (empty output, partial files): restart the ACP session. Do NOT deploy partial work.**
-8) Request code review BEFORE committing (if using ACP/Ralph loop):
-   ```bash
-   codex exec -m gpt-5.4 --sandbox read-only "Review this change: <description>" 2>/dev/null
-   ```
+
 9) Move to `review` ONLY when self-validation passes — use the PATCH endpoint:
    ```bash
-   curl -s -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+   curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
      -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-     -d '{"status": "review"}'
+     -d '{"status": "review", "comment": "Self-validation passed. Evidence: PASTE_YOUR_EVIDENCE_HERE"}'
    ```
-   **Do NOT skip this step.** If you completed work but did not PATCH the status, the board still shows `inbox` or `in_progress`.
+   **Do NOT skip the PATCH.** If you completed work but did not PATCH, the board still shows `inbox` or `in_progress`.
    **Do NOT move to review if self-validation failed.** A placeholder or empty project is NOT a deliverable.
+   **Include evidence in the comment** — paste actual command output (test results, curl responses, file counts).
+   **Evidence must come from YOUR workspace.** Include `pwd` output, the exact command you ran, and the target URL/port. Do NOT paste output from another agent's workspace or tests.
+   **If your results differ from earlier comments** (e.g., test count changed from 22 to 17), explain what changed and why in your review comment.
 
 ### Workspace Isolation
 
-- Work ONLY in your own workspace. Do NOT read or write files in other agents' workspaces.
+- Work ONLY in your own workspace. Do NOT read, write, or execute commands in other agents' workspaces.
+- Running commands from another workspace is forbidden. Do NOT `cd` into another agent's workspace to build, test, lint, or collect output. Before running any command, confirm `pwd` is your own workspace from `TOOLS.md`.
 - Do NOT use shared global paths — those belong to the main agent, not to you.
 - If you need code from another agent, request it via task comment or board chat.
 - Your deliverable must be self-contained in your workspace or deployed to the target machine (see `TOOLS.md`).
+- **Do NOT claim credit for code, tests, or output produced by another agent.** If you reference another agent's work, label it explicitly. Do NOT present it as your own self-validation evidence.
 
 ### Port and URL Consistency
 
 - Before testing or deploying, check `TOOLS.md` and task comments for the correct port and URL.
 - If the task says one port but the actual deployment uses another, use the ACTUAL deployed port — post a comment noting the discrepancy.
 - Never assume localhost is the test target. Always test the DEPLOYED URL on the target machine.
+- **Before deploying to a target machine**, check what is already running on the target ports:
+  ```bash
+  ssh TARGET "ss -tlnp | grep -E ':PORT1|:PORT2'"
+  ```
+  If another agent's service is already running on your target port, do NOT deploy over it without coordination. Post a comment: `@lead Port PORT already in use by PROCESS. Need direction.`
 
 ### Task Threading
 
@@ -235,12 +395,77 @@ Agents can get confused when their `MEMORY.md` claims a task is "Done" but the b
 
 ### Deployment Validation
 
-If your task involves deploying to a remote machine:
+If your task involves deploying to a remote machine, run ALL of these checks before claiming done:
 
-1) After deploying, **verify the deployed version matches your workspace build.** If they differ, redeploy.
-2) **Test the deployed URL, not localhost.** Check `TOOLS.md` for the target host and port.
-3) **Verify the deployed app loads real data** — not "Failed to fetch" or empty state.
-4) **If the deployed version is stale or broken:** fix and redeploy before claiming done.
+**Step A — Process health:**
+If you created a systemd service, check it is stable:
+```bash
+ssh TARGET "systemctl status SERVICE_NAME 2>&1 | grep -E 'Active:|restart'"
+```
+- Must show `Active: active (running)`.
+- If you see `status=203/EXEC` → your ExecStart script is broken (empty, wrong path, or not executable). Fix it.
+- If you see `activating (auto-restart)` or restart count above 3 → service is crash-looping. Check logs: `ssh TARGET "journalctl --user -u SERVICE_NAME --no-pager -n 20"` and fix the root cause.
+
+**Step B — URL responds:**
+For APIs:
+```bash
+curl -fsS http://TARGET_HOST:API_PORT/health
+```
+For frontends (no `/health` endpoint — check root returns HTML):
+```bash
+curl -fsS http://TARGET_HOST:FRONTEND_PORT/ | head -5
+```
+Must return real content. Check `TOOLS.md` for the target host and port.
+
+**Step C — Real data, not empty:**
+For APIs: hit a data endpoint:
+```bash
+curl -fsS http://TARGET_HOST:API_PORT/api/v1/boards | head -5
+```
+Must return actual database records, not empty array or error.
+For frontends: check the HTML contains the correct API URL:
+```bash
+curl -fsS http://TARGET_HOST:FRONTEND_PORT/ | grep -o 'http://[^"]*' | head -3
+```
+If the API URL in the HTML is wrong (e.g., `localhost` instead of the target host), fix the `.env`, rebuild, and redeploy.
+
+**Step D — Version matches your build:**
+After deploying, verify the deployed files match your workspace. If they differ, redeploy.
+
+**Step E — Frontend SPA + browser check (React, Vue, etc.):**
+If Chrome MCP tools are available, use them to validate the frontend renders and loads data:
+```
+1. navigate_page → http://TARGET_HOST:FRONTEND_PORT/
+2. list_console_messages types=["error"] → must be empty (or only non-critical like favicon)
+3. list_network_requests resourceTypes=["fetch","xhr"] → API calls must return 200
+4. navigate_page → http://TARGET_HOST:FRONTEND_PORT/some/deep/route
+5. take_screenshot → must show the app, NOT a 404 page
+```
+If Chrome MCP is not available, fall back to curl:
+```bash
+# Root must return HTML with app content
+curl -fsS http://TARGET_HOST:FRONTEND_PORT/ | grep -c '<div id'
+# SPA sub-route must ALSO return HTML (not 404)
+curl -s -o /dev/null -w "%{http_code}" http://TARGET_HOST:FRONTEND_PORT/test/route
+```
+If the sub-route returns 404, your server does NOT support SPA routing. **Do NOT use `python3 -m http.server`** — it cannot handle SPA fallback. Use one of:
+- `npx serve -s dist -l PORT` (recommended, handles SPA fallback)
+- `nginx` with `try_files $uri /index.html`
+
+**Step F — End-to-end check (if your task covers both API and frontend):**
+Verify the frontend can actually load data from the API:
+```bash
+# 1. API is reachable
+curl -fsS http://TARGET_HOST:API_PORT/health
+# 2. Frontend HTML references the correct API URL (not localhost)
+curl -fsS http://TARGET_HOST:FRONTEND_PORT/ | grep -c 'TARGET_HOST:API_PORT'
+# 3. CORS headers allow the frontend origin (must return Access-Control-Allow-Origin)
+curl -fsS -I -H "Origin: http://TARGET_HOST:FRONTEND_PORT" http://TARGET_HOST:API_PORT/health | grep -i 'access-control-allow-origin'
+```
+- If check 2 returns 0 → frontend is calling the wrong API. Fix `.env`, rebuild, redeploy.
+- If check 3 returns no `Access-Control-Allow-Origin` header → CORS is not configured. Fix the API's CORS settings to allow the frontend origin.
+
+**If ANY check fails: do NOT move to review. Fix the issue and re-run ALL checks.**
 
 ### Interrupted ACP Sessions
 
@@ -256,30 +481,33 @@ If your ACP session (Claude Code or Codex) was interrupted mid-work:
 ### Test Failures and Blockers
 
 **If you are QA (QA-Unit or QA-E2E) and tests fail:**
-- Post a task comment with the exact failure: what test, what error, what was expected.
-- Notify `@lead`: `Tests failing on {task}. Blocker: {specific issue}. Needs developer fix.`
-- Move YOUR task to `waiting` — you cannot proceed until the developer fixes the issue:
-  ```bash
-  curl -s -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
-    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-    -d '{"status": "waiting"}'
-  ```
-- Do NOT keep retrying the same failing tests. Report once, wait for fix.
+First classify the failure:
+- **PRODUCT BUG** — the app/API returns wrong data or crashes → report to `@lead`, notify developer, stop until fix is ready.
+- **QA TEST BUG** — your test has a bad import, missing fixture, wrong selector, or syntax error → fix it yourself in your workspace, rerun once. If it still fails, post a blocker.
+- **ENV/DEPLOYMENT ISSUE** — wrong URL, port not responding, service down → post a comment with the specific issue, stop until resolved.
+
+**Quick test:** If the test command itself cannot start or import → QA TEST BUG. If the target cannot be reached → ENV. If the target responds incorrectly → PRODUCT BUG.
+
+**Never rerun the same failing command more than once without a concrete change** (code fix, config fix, or deployment fix). If you ran it and it failed, running it again without changing anything will produce the same result.
+
+For PRODUCT BUGs, post a task comment with: `pwd`, exact command, target URL, error output. Then:
+- Notify `@lead`: `@lead Tests failing on {task}. Blocker: {specific issue}. Needs developer fix.`
+- Stop working on this task until the developer notifies you the fix is ready.
 
 **If you are a developer and QA reports a failure:**
 - Read the QA comment for the specific issue.
 - Fix the issue in your workspace, redeploy, and notify QA: `@qa_agent Fixed: {what you changed}. Please retest.`
 - Do NOT ignore QA failure reports.
 
-**If you are the Supervisor and QA reports a blocker:**
-- Route the failure to the responsible developer with a clear ask.
-- Track the blocker in `MEMORY.md`.
-- Follow up next heartbeat if the developer hasn't responded.
-
 ### Assist Mode
 If no active/assigned task:
-1) Add one concrete assist comment to an `in_progress` or `review` task.
-2) If no meaningful assist exists, ask `@lead` for work and suggest 1-3 next tasks.
+1) Post a board memory entry asking @lead for work:
+   ```bash
+   curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
+     -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+     -d '{"content": "@lead I am idle with no assigned tasks. Available for work.", "tags": ["chat"]}'
+   ```
+2) Do NOT comment on other agents' tasks. Wait for @lead to assign you work.
 {% endif %}
 
 ## Task Comment Format
@@ -304,10 +532,14 @@ If blocked:
 - Work artifact exists, evidence is in task comments, required gates satisfied.
 
 ## When to Return `HEARTBEAT_OK`
+{% if is_lead %}
+**See the HEARTBEAT_OK Gate in the Board Lead Checklist above.** You must complete ALL 5 steps and paste evidence before saying HEARTBEAT_OK.
+{% else %}
 Return `HEARTBEAT_OK` only when:
 1) Pre-flight checks succeeded.
 2) This heartbeat produced a concrete outcome (task update, assist, or lead request when idle).
 3) No outage rule was violated.
+{% endif %}
 
 ## Memory Maintenance
 Do not perform memory maintenance every heartbeat. Only do it when explicitly instructed, idle for more than 1 hour, or when there is clear net-new durable information to preserve.
