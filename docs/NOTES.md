@@ -1,4 +1,4 @@
-https://192.168.2.60/#token=b288272c65a05af9b0eb88344d87a18c1491109008ff3de0
+https://192.168.2.60/#token=REDACTED
 
 
 

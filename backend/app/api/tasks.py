@@ -1000,7 +1000,8 @@ async def _notify_agents_on_dependency_unblocked(
                 task_id=task.id,
                 board_id=board.id,
             )
-        await session.commit()
+    # Batch commit all activity records after all notifications are sent.
+    await session.commit()
 
 
 def _status_values(status_filter: str | None) -> list[str]:
@@ -2598,6 +2599,9 @@ async def _record_task_comment_from_update(
     session.add(event)
     await session.commit()
     # Notify mentioned agents in inline PATCH comments (same as dedicated comment endpoint).
+    # No double-notification risk: this path (_record_task_comment_from_update) is called
+    # from _finalize_updated_task (PATCH), while the dedicated POST /comments endpoint
+    # calls _notify_task_comment_targets directly. These are mutually exclusive code paths.
     targets, mention_names = await _comment_targets(
         session,
         task=update.task,
