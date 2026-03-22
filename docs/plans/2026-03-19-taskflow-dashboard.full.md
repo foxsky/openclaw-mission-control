@@ -26,7 +26,7 @@
 - **TaskFlow DB:** `/home/nanoclaw/nanoclaw/data/taskflow/taskflow.db`
 - **API deployment path:** `/home/nanoclaw/taskflow-api/`
 - **API port:** `8100`
-- **Frontend:** Served as a static SPA on a separate port (e.g., `3001`) on the same machine or any other host on the LAN.
+- **Frontend:** Served as a static SPA on port `3000` (port 3001 is used by NanoClaw core).
 
 **First-time setup on the machine:**
 ```bash
@@ -463,7 +463,7 @@ Understanding how TaskFlow is actually used helps build the right dashboard:
 TASKFLOW_DB_PATH=/home/nanoclaw/nanoclaw/data/taskflow/taskflow.db
 TASKFLOW_API_PORT=8100
 TASKFLOW_API_TOKEN=change-me-to-a-strong-random-token
-TASKFLOW_CORS_ORIGINS=http://localhost:3001
+TASKFLOW_CORS_ORIGINS=http://localhost:3000
 TASKFLOW_POLL_INTERVAL=5
 ```
 
@@ -475,7 +475,7 @@ Bearer token via `Authorization: Bearer <token>` header. Token set via `TASKFLOW
 
 ### CORS
 
-Explicit origin allowlist via `TASKFLOW_CORS_ORIGINS` env var (comma-separated). No wildcard. Update this to match the actual URL where the frontend is served (e.g., `http://192.168.2.63:3001`).
+Explicit origin allowlist via `TASKFLOW_CORS_ORIGINS` env var (comma-separated). No wildcard. Update this to match the actual URL where the frontend is served (e.g., `http://192.168.2.63:3000`).
 
 ### Error Responses
 
@@ -684,7 +684,7 @@ def test_env(tmp_path):
 
     os.environ["TASKFLOW_DB_PATH"] = db_path
     os.environ["TASKFLOW_API_TOKEN"] = "test-token"
-    os.environ["TASKFLOW_CORS_ORIGINS"] = "http://localhost:3001"
+    os.environ["TASKFLOW_CORS_ORIGINS"] = "http://localhost:3000"
     os.environ["TASKFLOW_POLL_INTERVAL"] = "60"
 
     # Force reimport to pick up new env vars
@@ -1433,7 +1433,7 @@ cd /home/nanoclaw/taskflow-api
 cp .env.example .env
 # Edit .env:
 #   TASKFLOW_API_TOKEN=<generate: openssl rand -hex 32>
-#   TASKFLOW_CORS_ORIGINS=http://192.168.2.63:3001  (or wherever frontend is served)
+#   TASKFLOW_CORS_ORIGINS=http://192.168.2.63:3000  (or wherever frontend is served)
 sudo apt update && sudo apt install -y python3-pip  # first time only
 pip install -r requirements.txt
 sudo cp taskflow-api.service /etc/systemd/system/
@@ -1456,12 +1456,12 @@ npm run build
 
 Option A (simple):
 ```bash
-npx serve dist -l 3001
+npx serve -s dist -l 3000
 ```
 
 Option B (production — Caddy):
 ```
-:3001 {
+:3000 {
   root * /home/nanoclaw/taskflow-dashboard/dist
   try_files {path} /index.html
   file_server
@@ -1470,7 +1470,7 @@ Option B (production — Caddy):
 
 **Step 4: Verify**
 
-- Open `http://192.168.2.63:3001/` → dashboard loads with live data
+- Open `http://192.168.2.63:3000/` → dashboard loads with live data
 - Click SEC board → Kanban view with tasks
 - Toggle pt-BR / en-US → all labels, headers, dates switch
 - Toggle Board / List → view switches between Kanban and table
@@ -1528,3 +1528,27 @@ git tag v1.0.0-taskflow-dashboard
   │ DevOps                                                                 │ 30m      │
   └────────────────────────────────────────────────────────────────────────┴──────────┘
 
+      332 -**If you are the Supervisor and QA reports a blocker:**                                                                                                                                 
+      333 -- Route the failure to the responsible developer with a clear ask.                                                                                                                        
+      334 -- Track the blocker in `MEMORY.md`.                                                                                                                                                     
+      335 -- Follow up next heartbeat if the developer hasn't responded.    
+
+      are you reviewing the plan for the next board run? 
+
+skills list as:
+  - frontend-aesthetics — triggers when generating any frontend UI code
+  - frontend-architecture — triggers when planning greenfield or design-led frontend work
+  - frontend-review — triggers when reviewing frontend output (preflight or final review)
+
+  Pre-start fixes needed:
+
+  1. Copy missing fixture to QA-E2E's workspace
+  2. Clear QA-E2E's 22 stale sessions
+  3. Fix Frontend task status (inbox → review)
+  4. Replace python3 -m http.server with npx serve -s (SPA routing)
+  5. Kill stale port 8000 API
+  6. Run board-start.sh
+
+  Let me execute the 6 pre-start fixes, keeping all review tasks for the Supervisor to re-evaluate with the new checklist.
+  Ready for bash scripts/board-start.sh when you give
+  the word.

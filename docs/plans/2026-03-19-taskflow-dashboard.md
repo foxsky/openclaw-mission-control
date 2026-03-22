@@ -30,7 +30,7 @@
 - Deploy path: `/home/nanoclaw/taskflow-api/`
 - DB: `/home/nanoclaw/nanoclaw/data/taskflow/taskflow.db`
 - Python 3.12, **no pip** → first-time: `sudo apt install python3-pip`
-- API port: `8100`, frontend port: `3001`
+- API port: `8100`, frontend port: `3000` (port 3001 is used by NanoClaw core)
 
 ---
 
@@ -152,10 +152,11 @@ Frontend test examples → `### TDD Steps` (Tasks 3 & 4) in full spec.
 scp -r taskflow-api/ nanoclaw@192.168.2.63:/home/nanoclaw/taskflow-api/
 ssh nanoclaw@192.168.2.63
 cd /home/nanoclaw/taskflow-api
-sudo apt install -y python3-pip  # first time only
-pip install -r requirements.txt
-cp .env.example .env  # set TASKFLOW_API_TOKEN + TASKFLOW_CORS_ORIGINS
-sudo cp taskflow-api.service /etc/systemd/system/
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env  # set TASKFLOW_API_TOKEN + TASKFLOW_CORS_ORIGINS (include http://192.168.2.63:3000)
+# Create run.sh: #!/bin/bash\ncd /home/nanoclaw/taskflow-api && .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8100
+sudo cp taskflow-api.service /etc/systemd/system/  # ExecStart points to run.sh
 sudo systemctl daemon-reload && sudo systemctl enable --now taskflow-api
 curl http://localhost:8100/health  # verify: {"status":"ok"}
 ```
@@ -163,9 +164,9 @@ curl http://localhost:8100/health  # verify: {"status":"ok"}
 **Frontend:**
 ```bash
 cd taskflow-dashboard
-cp .env.example .env  # set TASKFLOW_API_URL + TASKFLOW_API_TOKEN
+cp .env.example .env  # set TASKFLOW_API_URL=http://192.168.2.63:8100 + TASKFLOW_API_TOKEN
 npm run build
-npx serve dist -l 3001  # or caddy/nginx
+npx serve -s dist -l 3000  # -s enables SPA fallback (all routes serve index.html)
 ```
 
 **Verify:** dashboard loads, click board → Kanban renders, toggle locale, check DevTools WS connected, unauthorized → 401.
