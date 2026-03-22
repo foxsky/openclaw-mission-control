@@ -185,7 +185,9 @@ memory_recall(query: "task status decisions blockers")
 Do NOT run these every heartbeat — only when Step 2 reveals problems.
 
 ### Step 3 — Validate Tasks in `review`
-For EACH task with `status=review` in the Step 2 output, run this command (replace $TASK_ID with the task_id from Step 2):
+For EACH task with `status=review` in the Step 2 output:
+
+**3a. Read the task comments:**
 ```bash
 curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments?limit=10" \
   -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
@@ -197,14 +199,29 @@ for c in comments:
     print('---')
 "
 ```
-**Paste the output.** Then check if the comments contain:
-- Real evidence: command output, curl responses, test results, file counts, deploy URLs
-- **Provenance fields:** `pwd` (proves own workspace), exact command run, target URL/port
-- NOT just "Done", "Completed", or "Working on it" with no proof
-- NOT results without `pwd` — reject if the agent cannot prove the evidence came from their own workspace
-- NOT inconsistent results — if earlier comments show different test counts, file counts, or URLs without explanation, reject
 
-**Decision — you MUST post the comment FIRST (while task is in `review`), THEN change status. Leads cannot use inline `comment` on PATCH.**
+**3b. Delegate the review to Codex (GPT-5.4) for deep evaluation:**
+```bash
+codex exec -m gpt-5.4 --sandbox read-only "Review this task deliverable for the TaskFlow Dashboard project.
+
+Task: TASK_TITLE
+Task comments (evidence from the agent):
+PASTE_COMMENTS_HERE
+
+Evaluate:
+1. Does the evidence contain real command output (not just 'Done')?
+2. Does it include pwd, exact command, and target URL (provenance)?
+3. Are results consistent with earlier comments (no unexplained count changes)?
+4. For code tasks: does the deliverable match the spec at \$SHARED_WORKSPACE/specs/?
+5. For deploy tasks: is the service actually running and healthy?
+
+Verdict: APPROVE (with evidence summary) or REJECT (with specific issues)."
+```
+
+**3c. Act on the Codex verdict:**
+- If Codex says **APPROVE** → post approval comment, then PATCH:
+
+**You MUST post the comment FIRST (while task is in `review`), THEN change status. Leads cannot use inline `comment` on PATCH.**
 {% if board_rule_require_approval_for_done == "true" or board_rule_block_status_changes_with_pending_approval == "true" %}
 - **NOTE:** This board requires approval before `done`. If the PATCH returns 409, the task needs user approval first. Leave it in `review` and escalate:
   ```bash
