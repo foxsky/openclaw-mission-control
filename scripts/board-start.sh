@@ -133,6 +133,20 @@ echo "--- Step 5: Restarting gateway ---"
 ssh root@$GATEWAY_HOST "systemctl --user restart openclaw-gateway"
 echo "  Gateway restarted"
 
+# Step 5b: Enable heartbeats via RPC (UI pause may have disabled them)
+echo ""
+echo "--- Step 5b: Enabling heartbeats ---"
+sleep 5
+ssh root@$MC_DB_HOST "cd /home/mcontrol/openclaw-mission-control/backend && .venv/bin/python3 -c '
+import asyncio
+from app.services.openclaw.gateway_rpc import openclaw_call, GatewayConfig
+async def enable():
+    config = GatewayConfig(url=\"ws://$GATEWAY_HOST:18789\",token=\"b288272c65a05af9b0eb88344d87a18c1491109008ff3de0\",allow_insecure_tls=True,disable_device_pairing=True)
+    result = await openclaw_call(\"set-heartbeats\", {\"enabled\": True}, config=config)
+    print(\"  Heartbeats enabled:\", result.get(\"enabled\", False))
+asyncio.run(enable())
+' 2>&1 | grep -E 'Heartbeats enabled|error' || echo '  Warning: could not enable heartbeats via RPC'"
+
 # Step 6: Wait for WhatsApp to connect, then sync groups (needed for group messaging)
 echo ""
 echo "--- Step 6: WhatsApp group sync ---"
