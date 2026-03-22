@@ -182,22 +182,28 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
 Then nudge the agent to move their task back to inbox.
 
 ### Step 5 — QA Failure Routing
-Check `in_progress` QA task comments for `@lead`/`blocker`/`failing`:
+If Step 2 shows any `in_progress` task with a blocker or unchanged for 30+ min, **delegate to Claude Code** to classify and route:
 ```bash
-curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$QA_TASK_ID/comments?limit=5" \
-  -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
-import sys,json
-for c in json.load(sys.stdin).get('items',[]):
-    m=c.get('message','')
-    if any(k in m.lower() for k in ['@lead','blocker','failing']): print(m[:300])
-"
+claude -p "You are the board lead routing a blocker.
+
+Board API: BASE_URL=$BASE_URL, AUTH_TOKEN=$AUTH_TOKEN, BOARD_ID=$BOARD_ID
+
+Step 1 — Read in_progress task comments to find blockers:
+curl -fsS '$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks?status=in_progress&limit=20' -H 'X-Agent-Token: $AUTH_TOKEN'
+For each task, read comments:
+curl -fsS '$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/TASK_ID/comments?limit=10' -H 'X-Agent-Token: $AUTH_TOKEN'
+
+Step 2 — For each blocker found, classify:
+- PRODUCT BUG (app returns wrong data, API errors) → nudge the developer
+- QA TEST BUG (bad import, missing fixture, wrong selector, broken test code) → nudge QA to fix their OWN test
+- ENV/DEPLOYMENT (wrong URL, service down) → nudge DevOps
+Quick test: if the error is in a test file (*.spec.ts, *.test.py) → QA TEST BUG. If in app source → PRODUCT BUG.
+
+Step 3 — Nudge the responsible agent:
+curl -fsS -X POST '$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/AGENT_ID/nudge' -H 'X-Agent-Token: $AUTH_TOKEN' -H 'Content-Type: application/json' -d '{\"message\":\"CLASSIFICATION: DETAILS. Fix this yourself.\"}'"
 ```
-If found, classify:
-- **PRODUCT BUG** (app returns wrong data, API errors) → nudge the developer
-- **QA TEST BUG** (bad import, missing fixture, wrong selector) → nudge QA to fix their own test
-- **ENV/DEPLOYMENT** (wrong URL, service down) → nudge DevOps
-Note: tasks in `review` are reassigned to you (the lead). Check task comments for the original developer's agent_id, not the `agent=` field from Step 2.
-Skip if no QA failures found.
+**Do NOT classify or nudge yourself.** Claude Code handles classification, routing, and nudge execution.
+Skip if no in_progress tasks have blockers.
 
 ### Step 6 — Synthesis Report (when ALL tasks are `done`)
 If Step 2 shows **all tasks in `done` status** (no `inbox`, `in_progress`, or `review` remaining), and MEMORY.md does NOT contain `synthesis_done:$BOARD_ID`, produce a synthesis report. Delegate to Codex:
