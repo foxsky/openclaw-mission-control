@@ -335,13 +335,13 @@ CREATE TABLE tasks (
   recurrence TEXT,                -- recurring task config (JSON)
   created_at TEXT NOT NULL,       -- ISO 8601 datetime
   updated_at TEXT NOT NULL,       -- ISO 8601 datetime
-  PRIMARY KEY (board_id, id)      -- COMPOSITE KEY: task IDs are NOT globally unique
-);
   child_exec_enabled INTEGER DEFAULT 0, -- 1 if task is delegated to a child board
-  child_exec_board_id TEXT,             -- which child board has this task (53 tasks use this in prod)
+  child_exec_board_id TEXT,             -- which child board has this task (~51 tasks in prod)
   child_exec_person_id TEXT,            -- person on child board
   child_exec_rollup_status TEXT,        -- status from child board
--- Additional columns exist (linked_parent_*, blocked_by, reminders, etc.) but not used in v1
+  -- Additional columns exist (linked_parent_*, blocked_by, reminders, etc.) but not used in v1
+  PRIMARY KEY (board_id, id)      -- COMPOSITE KEY: task IDs are NOT globally unique
+);
 
 CREATE TABLE board_people (
   board_id TEXT REFERENCES boards(id),
@@ -376,17 +376,17 @@ The board hierarchy is **dynamic** — new boards are auto-provisioned when a ma
 
 | Short Code | Level | Parent | Tasks | WhatsApp Group |
 |---|---|---|---|---|
-| SEC | 1 | — | 82 | SEC-SECTI - TaskFlow |
+| SEC | 1 | — | 84 | SEC-SECTI - TaskFlow |
+| SEAF | 2 | SEC | 1 | laizys-taskflow |
+| SECI | 2 | SEC | 14 | SECI-SECTI - TaskFlow |
 | SECTI | 2 | SEC | 0 | SECTI - TaskFlow |
-| SECI | 2 | SEC | 13 | SECI-SECTI - TaskFlow |
-| TEC | 2 | SEC | 1 | Tec - TaskFlow |
-| SETEC | 2 | SEC | 7 | SETEC-SECTI - TaskFlow |
-| SEAF | 2 | SEC | 1 | SEAF-SECTI - TaskFlow |
 | SETD | 2 | SEC | 21 | SETD-SECTI - TaskFlow |
-| *(null)* | 3 | SECI | 0 | CI-SECI-SECTI - TaskFlow |
-| *(null)* | 3 | SETD | 0 | UX-SETD-SECTI - TaskFlow |
-| *(null)* | 3 | SETD | 0 | PO-SETD-SECTI - TaskFlow |
-| *(null)* | 3 | SETD | 0 | SETD-SECTI (Reginaldo) *(auto-created 2026-03-20)* |
+| SETEC | 2 | SEC | 7 | SETEC-SECTI - TaskFlow |
+| TEC | 2 | SEC | 1 | Tec - TaskFlow |
+| *(null)* | 3 | SECI | 0 | ci-seci-taskflow |
+| *(null)* | 3 | SETD | 0 | setd-secti-taskflow |
+| *(null)* | 3 | SETD | 0 | ux-setd-secti-taskflow |
+| *(null)* | 3 | SETEC | 0 | setd-secti-taskflow-2 |
 
 **Note:** Level-3 boards have `short_code = NULL`. The sidebar must fall back to `group_folder` as display name.
 
@@ -431,12 +431,12 @@ Understanding how TaskFlow is actually used helps build the right dashboard:
 3. **Board health dashboard** — combine: local task count + linked task count + mutation rate (history events/week) + runner freshness (last standup/digest time). Highest monitoring need: SEC (84 tasks, 86 events), SECI (15 tasks, 41 events), SETD (21 tasks, 24 events).
 4. **Runner status per board** — show last standup/digest/review time. Flag boards where runners haven't fired (e.g., newly provisioned boards).
 5. **Auto-refresh sidebar** — new boards appear dynamically (Reginaldo's was created mid-conversation today). Poll `/boards` or use WebSocket.
-6. **Cross-board task flow** — `child_exec_*` is the mechanism (53 tasks). `linked_parent_*` is unused. Show parent board reference on linked task cards.
+6. **Cross-board task flow** — `child_exec_*` is the mechanism (~51 tasks). `linked_parent_*` is unused. Show parent board reference on linked task cards.
 7. **Filter system noise** — SECI had 778 `⏳ Processando...` messages this week. Analytics/counts should exclude bot processing messages.
 8. **Support all task ID formats** — T, M, P, subtask P15.1 — mixed, not zero-padded.
 
 **Activity this week (production data):**
-- 1,860 messages across 10 boards (238 substantive user commands after noise filtering)
+- 1,860 messages across 11 boards (238 substantive user commands after noise filtering)
 - 38 tasks created, 50 movement events, 21 completions
 - Most active: SEC (20 created, 86 history events), SECI (10 created, 41 events)
 - Most common user actions: task updates (44), inbox capture (41), completion (25), delegation (14)
@@ -584,15 +584,15 @@ Returns runner health for all boards:
 ```json
 [{
   "board_id": "board-sec-taskflow",
-  "standup_last_run": "2026-03-20T11:02:29Z",
-  "digest_last_run": "2026-03-19T21:04:11Z",
-  "review_last_run": "2026-03-13T17:33:51Z",
+  "standup_last_run": null,
+  "digest_last_run": null,
+  "review_last_run": null,
   "standup_cron": "0 8 * * 1-5",
   "digest_cron": "0 18 * * 1-5",
   "review_cron": "0 11 * * 5"
 }]
 ```
-Query from `board_runtime_config` + `task_run_logs` (join on runner task IDs).
+Query from `board_runtime_config`. **Note:** `task_run_logs` table does not exist yet in production — all `*_last_run` values return `null` until TaskFlow core implements run logging. Cron schedules come from `board_runtime_config`.
 
 #### `WS /ws?token=<token>`
 
@@ -959,7 +959,7 @@ export interface Task {
   labels: string[];           // parsed array, NOT a string
   parent_task_id: string | null;  // non-null for subtasks (e.g., 'P15.1' → parent 'P15')
   scheduled_at: string | null;   // meetings only: ISO 8601 datetime
-  child_exec_board_id: string | null;  // if delegated to a child board (53 tasks in prod)
+  child_exec_board_id: string | null;  // if delegated to a child board (~51 tasks in prod)
   child_exec_person_id: string | null; // person on child board
   child_exec_rollup_status: string | null; // status from child board
   created_at: string;

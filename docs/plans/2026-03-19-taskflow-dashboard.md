@@ -65,7 +65,7 @@ Screenshots: `docs/pics/MC App Kanban.png` and `MC App Kanban 2.png`. Full Tailw
 | `due_date` | ISO 8601 **datetime** (`2026-03-16T02:59:00Z`), NOT date-only |
 | `parent_task_id` | Links subtask to parent (e.g., `P15.1` → `P15`) |
 | `scheduled_at` | Meeting datetime (ISO 8601) |
-| `child_exec_board_id` | Delegated to child board (53 tasks in prod). Key cross-board mechanism. |
+| `child_exec_board_id` | Delegated to child board (~51 tasks in prod). Key cross-board mechanism. |
 | `child_exec_person_id` | Person on the child board |
 | `child_exec_rollup_status` | Status from child board |
 | `waiting_for` | Who/what blocks — used for review sub-filter derivation |
@@ -75,7 +75,7 @@ Screenshots: `docs/pics/MC App Kanban.png` and `MC App Kanban 2.png`. Full Tailw
 
 **Runners:** Standup `0 8 * * 1-5`, Digest `0 18 * * 1-5`, Review `0 11 * * 5`. 159/159 successful this week.
 
-**Cross-board:** `child_exec_*` is the mechanism (53 tasks). `linked_parent_*` is unused (0 rows). TEC: 1 local task + 18 linked SEC tasks.
+**Cross-board:** `child_exec_*` is the mechanism (~51 tasks). `linked_parent_*` is unused (0 rows). TEC: 1 local task + 18 linked SEC tasks.
 
 Full schemas, board list, activity stats → full spec `### Key Schemas` + `### Current Boards` + `### Real-World Usage Patterns`.
 
