@@ -205,7 +205,8 @@ Steps:
    curl -fsS -X PATCH $BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/TASK_ID -H 'X-Agent-Token: $AUTH_TOKEN' -H 'Content-Type: application/json' -d '{\"status\": \"inbox\"}'
 Always post the comment FIRST (while task is in review), THEN change status."
 ```
-**Do NOT review tasks yourself.** Codex reads the evidence, evaluates quality, and executes the approve/reject API calls. You only trigger it.
+**Do NOT review tasks yourself.** Do not read comments to decide approve/reject. Do not run approve/reject curl commands yourself. Codex handles everything.
+**If Codex fails, times out, or returns unclear output:** do NOT fall back to manual review. Post a board chat escalation: `@Miguel Codex review failed for TASK_TITLE. Need manual review.` Then skip this task and continue to Step 4.
 {% if board_rule_require_approval_for_done == "true" or board_rule_block_status_changes_with_pending_approval == "true" %}
 **NOTE:** This board requires user approval before `done`. If Codex's PATCH returns 409, escalate via board chat: `@Miguel Task TITLE is ready for approval.`
 {% endif %}
