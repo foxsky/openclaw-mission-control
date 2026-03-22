@@ -145,10 +145,12 @@ else
     echo "  Skipped (no sync script found)"
 fi
 
-# Step 7: Enable heartbeats via RPC (must be AFTER Step 6 which restarts gateway)
+# Step 7: Enable heartbeats + check in all agents via direct API call
 echo ""
-echo "--- Step 7: Enabling heartbeats ---"
+echo "--- Step 7: Enabling heartbeats + initial check-in ---"
 sleep 10
+
+# Enable heartbeats via RPC
 ssh root@$MC_APP_HOST "cd /home/mcontrol/openclaw-mission-control/backend && .venv/bin/python3 -c '
 import asyncio
 from app.services.openclaw.gateway_rpc import openclaw_call, GatewayConfig
@@ -158,6 +160,20 @@ async def enable():
     print(\"  Heartbeats enabled:\", result.get(\"enabled\", False))
 asyncio.run(enable())
 ' 2>&1 | grep -E 'Heartbeats enabled|error' || echo '  Warning: could not enable heartbeats via RPC'"
+
+# Check in each agent directly via MC API (immediate, no wait for heartbeat tick)
+MC_API="http://$MC_APP_HOST:8000"
+TOKENS=$(ssh root@$GATEWAY_HOST "grep -rh 'AUTH_TOKEN=' /root/.openclaw/workspace/workspace-mc-*/TOOLS.md /root/.openclaw/workspace/workspace-lead-*/TOOLS.md 2>/dev/null | sed 's/.*AUTH_TOKEN=//' | sed 's/\`//' | sort -u")
+
+count=0
+for token in $TOKENS; do
+    [ -z "$token" ] && continue
+    name=$(curl -s -X POST "$MC_API/api/v1/agent/heartbeat" -H "X-Agent-Token: $token" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('name','?'))" 2>/dev/null || echo "?")
+    if [ -n "$name" ] && [ "$name" != "?" ]; then
+        count=$((count + 1))
+    fi
+done
+echo "  $count agents checked in"
 
 echo ""
 echo "=== Done. Board is live: heartbeats ON, sessions fresh, agents online. ==="
