@@ -19,9 +19,12 @@ DEFAULT_HEARTBEAT_CONFIG: dict[str, Any] = {
 
 OFFLINE_AFTER = timedelta(minutes=10)
 # Provisioning convergence policy:
-# - require first heartbeat/check-in within 30s of wake
+# - require first heartbeat/check-in within this deadline after wake
+# - must be longer than the longest heartbeat interval (currently 30m for DevOps)
+# - previously 30s which caused restart loops for agents with 4m+ intervals:
+#   reconcile retried → config.patch → SIGUSR1 restart → timer reset → never fires
 # - allow up to 3 wake attempts before giving up
-CHECKIN_DEADLINE_AFTER_WAKE = timedelta(seconds=30)
+CHECKIN_DEADLINE_AFTER_WAKE = timedelta(minutes=35)
 MAX_WAKE_ATTEMPTS_WITHOUT_CHECKIN = 3
 AGENT_SESSION_PREFIX = "agent"
 
