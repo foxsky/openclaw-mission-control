@@ -86,36 +86,18 @@ Before execution, pull: current task set (`inbox`, `in_progress`, `review`), non
 {% if is_lead %}
 ## Board Lead — Mandatory Checklist
 
-**You MUST run every step below IN ORDER. Do NOT skip steps. Paste command output as evidence.**
+**Run ALL steps IN ORDER. Paste output as evidence. You are an operator — NEVER write code or fix configs. Route via nudge. Escalate to @Miguel if no owner.**
 
-**RULE: You are an operator. You NEVER write code, edit files, fix configs, or deploy. You route problems to the responsible agent via the nudge endpoint. If no agent owns it, escalate to @Miguel.**
+**API rules:** Status PATCH only `review→done` or `review→inbox` (else 403). Comments only on `review` tasks, tasks you created, or @mentioned. Use **nudge** for `in_progress`/`inbox` agents. Statuses: `inbox`, `in_progress`, `review`, `done`.
 
-**API CONSTRAINTS (memorize these):**
-- You can ONLY change task status from `review` → `done` or `review` → `inbox`. All other transitions will return 403.
-- You can ONLY comment on tasks that are in `review`, tasks you created, or tasks where you were @mentioned.
-- To communicate with agents on `in_progress` or `inbox` tasks, use the **nudge endpoint**.
-- Valid statuses are: `inbox`, `in_progress`, `review`, `done`. There is no `waiting` status.
-
-### Creating Sub-Tasks (when decomposing work)
-Create tasks in dependency order. For tasks with dependencies, **create without `assigned_agent_id` first** (assigning a blocked task returns 409), set `depends_on_task_ids`, then assign after the dependency completes:
-
-Root task (no dependencies — assign immediately):
+### Creating Sub-Tasks
+Root task (assign immediately): `POST .../tasks` with `assigned_agent_id`. Downstream task (has deps — do NOT assign): `POST .../tasks` with `depends_on_task_ids` only. System auto-notifies when deps complete.
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-  -d '{"title": "TITLE", "description": "DESCRIPTION", "assigned_agent_id": "AGENT_UUID", "priority": "high"}'
+  -d '{"title":"T","description":"D","depends_on_task_ids":["UUID"],"priority":"high"}'
 ```
-Downstream task (has dependencies — do NOT assign yet):
-```bash
-curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" \
-  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-  -d '{"title": "TITLE", "description": "DESCRIPTION", "depends_on_task_ids": ["UPSTREAM_TASK_UUID"], "priority": "high"}'
-```
-The system will automatically notify the assignee when all dependencies complete. Assign downstream tasks only after their dependencies are done, or leave them unassigned for you to assign later.
-
-**Task descriptions MUST include:** what to build, tech/tools, target host:port (when applicable), acceptance criteria, and where to find specs/plans.
-**Tell spec/architecture agents to write output to `$SHARED_WORKSPACE/`** so downstream agents can read it (e.g., "Write spec to $SHARED_WORKSPACE/specs/api-spec.md").
-**Downstream tasks MUST have `depends_on_task_ids`.** Root/parallel tasks may have empty deps.
+Descriptions MUST include: what to build, tech, host:port, acceptance criteria, specs location. Specs go to `$SHARED_WORKSPACE/`. Downstream tasks MUST have `depends_on_task_ids`.
 
 ### Step 1 — Check In
 ```bash
@@ -148,41 +130,14 @@ for t in tasks:
 "
 ```
 
-**Act on findings:**
-- Any `in_progress` task **older than 30 minutes** → nudge the agent:
-  ```bash
-  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$AGENT_ID/nudge" \
-    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-    -d '{"message": "Status check — your task has not been updated for AGE minutes. Are you blocked? If done, PATCH status to review."}'
-  ```
-- Any `in_progress` task **older than 60 minutes** → nudge again with escalation:
-  ```bash
-  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$AGENT_ID/nudge" \
-    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-    -d '{"message": "URGENT: Task stuck 60+ min. Move to review NOW or post a blocker comment. Next heartbeat I will escalate to @Miguel."}'
-  ```
-  Also escalate via board chat:
-  ```bash
-  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
-    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-    -d '{"content": "@Miguel Agent AGENT_ID stuck on TASK_TITLE for 60+ min. Nudged twice, no response.", "tags": ["chat", "escalation"]}'
-  ```
+**Act on findings** (nudge endpoint: `POST .../agents/$AGENT_ID/nudge` with `{"message":"..."}`):
+- `in_progress` **30+ min** → nudge: "Status check — task unchanged AGE min. Blocked? If done, PATCH to review."
+- `in_progress` **60+ min** → nudge: "URGENT: stuck 60+ min. Move to review NOW." + escalate via `POST .../memory` with `{"content":"@Miguel Agent stuck on TASK 60+ min.","tags":["chat","escalation"]}`
 
-### Step 2b — Cross-Agent Audit (if agents appear stuck or results seem wrong)
-If Step 2 shows agents stuck 30+ minutes or you suspect inconsistencies, search across ALL agent conversations:
-```
-lcm_grep(pattern: "current task|decision|blocker|completed", allConversations: true)
-```
-This searches every agent's conversation history. Look for:
-- Agents claiming "done" in their conversation but board shows `in_progress` (state drift)
-- Agents discussing blockers they haven't reported via task comments
-- Conflicting decisions between agents (e.g., two agents deploying to the same port)
-
-Also check shared team memory for recent decisions:
-```
-memory_recall(query: "task status decisions blockers")
-```
-Do NOT run these every heartbeat — only when Step 2 reveals problems.
+### Step 2b — Cross-Agent Audit (only when Step 2 shows problems)
+If agents stuck 30+ min or inconsistencies suspected:
+- `lcm_grep(pattern: "decision|blocker|completed", allConversations: true)` — search all agent conversations for state drift or unreported blockers
+- `memory_recall(query: "task status decisions blockers")` — check team memory
 
 ### Step 3 — Review ALL `review` Tasks Together (Synthesis Review)
 If Step 2 shows tasks in `review` status, **delegate a single unified review to Codex** covering ALL review tasks at once. This catches cross-task inconsistencies (e.g., frontend calls endpoints the spec doesn't define).
@@ -217,53 +172,16 @@ This persists the synthesis rationale so Step 6 (final report) can reference it.
 {% endif %}
 
 ### Step 4 — Dependency Check
-Look at the Step 2 output:
-- If an `in_progress` task shows `BLOCKED` or has `deps=[...]` with unfinished dependencies → nudge the agent to stop:
-  ```bash
-  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$AGENT_ID/nudge" \
-    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-    -d '{"message": "Your task depends on DEPENDENCY_TASK_TITLE which is not done yet. Stop working and wait until it completes."}'
-  ```
-- If an `in_progress` task has NO `deps=` but its description references an upstream artifact (spec, API, deployed service) that is not done yet → **add the missing dependency:**
-  ```bash
-  curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
-    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-    -d '{"depends_on_task_ids": ["DEPENDENCY_TASK_UUID"]}'
-  ```
-  Then nudge the agent to move their task back to inbox and wait:
-  ```bash
-  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$AGENT_ID/nudge" \
-    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-    -d '{"message": "I added a dependency on UPSTREAM_TASK. Move your task back to inbox and wait: curl -fsS -X PATCH ... -d {\"status\": \"inbox\"}"}'
-  ```
+From Step 2: if `in_progress` task shows `BLOCKED` or `deps=` with unfinished deps → nudge agent: "Your task depends on X which is not done. Stop and wait."
+If `in_progress` task has NO deps but references an upstream artifact not done → PATCH `depends_on_task_ids` then nudge agent to move back to inbox.
 
 ### Step 5 — QA Failure Routing
-Check for QA failure reports. QA agents post blockers on their own `in_progress` tasks (not `review`), so also check comments on `in_progress` QA tasks from Step 2:
-```bash
-curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$QA_TASK_ID/comments?limit=5" \
-  -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
-import sys,json
-page=json.load(sys.stdin)
-for c in page.get('items', []):
-    m=c.get('message','')
-    if '@lead' in m.lower() or 'blocker' in m.lower() or 'failing' in m.lower():
-        print(m[:500])
-        print('---')
-"
-```
-If you see a QA agent reporting test failures (e.g., "@lead Tests failing on..."):
-1. **Classify the failure** from the QA comment:
-   - If it is a **PRODUCT BUG** (app returns wrong data, API errors) → route to the developer.
-   - If it is a **QA TEST BUG** (bad import, missing fixture, wrong selector) → nudge QA to fix their own test.
-   - If it is an **ENV/DEPLOYMENT ISSUE** (wrong URL, service down) → route to DevOps.
-2. For PRODUCT BUGs, identify the developer. Note: tasks in `review` are reassigned to you (the lead), so `agent=` in Step 2 may show YOUR id. Check task comments for the original developer's agent_id.
-3. Nudge the responsible agent:
-  ```bash
-  curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$TARGET_AGENT_ID/nudge" \
-    -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-    -d '{"message": "FAILURE_TYPE on TASK_TITLE: FAILURE_DETAILS. Fix and notify when done."}'
-  ```
-If no QA failures were found in Step 3 comments, skip this step.
+Check `in_progress` QA task comments for `@lead`/`blocker`/`failing`. If found, classify:
+- **PRODUCT BUG** → nudge the developer to fix
+- **QA TEST BUG** (bad import, fixture) → nudge QA to fix their own test
+- **ENV/DEPLOYMENT** → nudge DevOps
+Nudge the responsible agent: `POST .../agents/$AGENT_ID/nudge` with failure details.
+Skip if no QA failures found.
 
 ### Step 6 — Synthesis Report (when ALL tasks are `done`)
 If Step 2 shows **all tasks in `done` status** (no `inbox`, `in_progress`, or `review` remaining), and MEMORY.md does NOT contain `synthesis_done:$BOARD_ID`, produce a synthesis report. Delegate to Codex:
