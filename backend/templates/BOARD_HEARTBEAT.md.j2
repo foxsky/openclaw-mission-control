@@ -172,15 +172,31 @@ This persists the synthesis rationale so Step 6 (final report) can reference it.
 {% endif %}
 
 ### Step 4 — Dependency Check
-From Step 2: if `in_progress` task shows `BLOCKED` or `deps=` with unfinished deps → nudge agent: "Your task depends on X which is not done. Stop and wait."
-If `in_progress` task has NO deps but references an upstream artifact not done → PATCH `depends_on_task_ids` then nudge agent to move back to inbox.
+From Step 2: if `in_progress` task shows `BLOCKED` or `deps=` with unfinished deps → nudge: "Your task depends on X. Stop and wait."
+If `in_progress` task has NO deps but references an upstream artifact not done → add the missing dependency:
+```bash
+curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"depends_on_task_ids": ["UPSTREAM_UUID"]}'
+```
+Then nudge the agent to move their task back to inbox.
 
 ### Step 5 — QA Failure Routing
-Check `in_progress` QA task comments for `@lead`/`blocker`/`failing`. If found, classify:
-- **PRODUCT BUG** → nudge the developer to fix
-- **QA TEST BUG** (bad import, fixture) → nudge QA to fix their own test
-- **ENV/DEPLOYMENT** → nudge DevOps
-Nudge the responsible agent: `POST .../agents/$AGENT_ID/nudge` with failure details.
+Check `in_progress` QA task comments for `@lead`/`blocker`/`failing`:
+```bash
+curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$QA_TASK_ID/comments?limit=5" \
+  -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
+import sys,json
+for c in json.load(sys.stdin).get('items',[]):
+    m=c.get('message','')
+    if any(k in m.lower() for k in ['@lead','blocker','failing']): print(m[:300])
+"
+```
+If found, classify:
+- **PRODUCT BUG** (app returns wrong data, API errors) → nudge the developer
+- **QA TEST BUG** (bad import, missing fixture, wrong selector) → nudge QA to fix their own test
+- **ENV/DEPLOYMENT** (wrong URL, service down) → nudge DevOps
+Note: tasks in `review` are reassigned to you (the lead). Check task comments for the original developer's agent_id, not the `agent=` field from Step 2.
 Skip if no QA failures found.
 
 ### Step 6 — Synthesis Report (when ALL tasks are `done`)
