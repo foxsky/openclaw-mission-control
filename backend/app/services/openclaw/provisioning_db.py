@@ -12,7 +12,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 from uuid import UUID, uuid4
 
@@ -22,6 +22,7 @@ from sqlmodel import col, select
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.agent_tokens import verify_agent_token
+from app.core.durations import parse_every_to_seconds
 from app.core.logging import TRACE_LEVEL
 from app.core.time import utcnow
 from app.db import crud
@@ -49,6 +50,7 @@ from app.services.activity_log import record_activity
 from app.services.openclaw.constants import (
     _TOOLS_KV_RE,
     DEFAULT_HEARTBEAT_CONFIG,
+    HEARTBEAT_RECOVERY_GRACE_AFTER_INTERVAL,
     OFFLINE_AFTER,
 )
 from app.services.openclaw.db_agent_state import (
@@ -71,6 +73,10 @@ from app.services.openclaw.internal.retry import GatewayBackoff
 from app.services.openclaw.internal.session_keys import (
     board_agent_session_key,
     board_lead_session_key,
+)
+from app.services.openclaw.lifecycle_queue import (
+    QueuedAgentLifecycleReconcile,
+    enqueue_lifecycle_reconcile,
 )
 from app.services.openclaw.lifecycle_orchestrator import AgentLifecycleOrchestrator
 from app.services.openclaw.policies import OpenClawAuthorizationPolicy
@@ -754,6 +760,29 @@ class AgentLifecycleService(OpenClawDBService):
         super().__init__(session)
 
     @staticmethod
+    def _is_disabled_heartbeat_every(value: object) -> bool:
+        if not isinstance(value, str):
+            return False
+        normalized = value.strip().lower().replace(" ", "")
+        return normalized in {"0", "0m", "off", "none", "disabled"}
+
+    @classmethod
+    def _next_heartbeat_deadline(cls, agent: Agent, *, now: datetime) -> datetime | None:
+        config = DEFAULT_HEARTBEAT_CONFIG.copy()
+        if isinstance(agent.heartbeat_config, dict):
+            config.update(agent.heartbeat_config)
+        every = config.get("every")
+        if cls._is_disabled_heartbeat_every(every):
+            return None
+        if not isinstance(every, str):
+            return None
+        try:
+            interval_seconds = parse_every_to_seconds(every)
+        except ValueError:
+            return None
+        return now + timedelta(seconds=interval_seconds) + HEARTBEAT_RECOVERY_GRACE_AFTER_INTERVAL
+
+    @staticmethod
     def parse_since(value: str | None) -> datetime | None:
         if not value:
             return None
@@ -871,7 +900,7 @@ class AgentLifecycleService(OpenClawDBService):
             return agent
         if agent.last_seen_at is None:
             agent.status = "provisioning"
-        elif now - agent.last_seen_at > OFFLINE_AFTER:
+        elif now - agent.last_seen_at > OFFLINE_AFTER + HEARTBEAT_RECOVERY_GRACE_AFTER_INTERVAL:
             agent.status = "offline"
         return agent
 
@@ -1430,20 +1459,33 @@ class AgentLifecycleService(OpenClawDBService):
         agent: Agent,
         status_value: str | None,
     ) -> AgentRead:
+        seen_at = utcnow()
         if status_value:
             agent.status = status_value
         elif agent.status == "provisioning":
             agent.status = "online"
-        agent.last_seen_at = utcnow()
-        # Successful check-in ends the current wake escalation cycle.
+        agent.last_seen_at = seen_at
+        # Successful check-in ends the current wake escalation cycle and starts
+        # the next liveness window for backend-side recovery.
         agent.wake_attempts = 0
-        agent.checkin_deadline_at = None
+        agent.checkin_deadline_at = self._next_heartbeat_deadline(agent, now=seen_at)
         agent.last_provision_error = None
-        agent.updated_at = utcnow()
+        agent.updated_at = seen_at
         self.record_heartbeat(self.session, agent)
         self.session.add(agent)
         await self.session.commit()
         await self.session.refresh(agent)
+        if agent.checkin_deadline_at is not None:
+            enqueue_lifecycle_reconcile(
+                QueuedAgentLifecycleReconcile(
+                    agent_id=agent.id,
+                    gateway_id=agent.gateway_id,
+                    board_id=agent.board_id,
+                    generation=agent.lifecycle_generation,
+                    checkin_deadline_at=agent.checkin_deadline_at,
+                    expected_checkin_after=seen_at,
+                )
+            )
         return self.to_agent_read(self.with_computed_status(agent))
 
     async def list_agents(
