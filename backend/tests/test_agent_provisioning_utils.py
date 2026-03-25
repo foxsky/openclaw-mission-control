@@ -897,3 +897,17 @@ def test_offline_threshold_exceeds_max_heartbeat():
     assert OFFLINE_AFTER.total_seconds() > (
         configured_interval + HEARTBEAT_RECOVERY_GRACE_AFTER_INTERVAL.total_seconds()
     )
+
+
+def test_offline_threshold_covers_30m_heartbeat_agents():
+    """Regression: 30m-heartbeat agents must not be falsely marked offline."""
+    from app.services.openclaw.constants import (
+        HEARTBEAT_RECOVERY_GRACE_AFTER_INTERVAL,
+        OFFLINE_AFTER,
+    )
+    from app.core.durations import parse_every_to_seconds
+
+    max_worker_interval = parse_every_to_seconds("30m")
+    assert OFFLINE_AFTER.total_seconds() > (
+        max_worker_interval + HEARTBEAT_RECOVERY_GRACE_AFTER_INTERVAL.total_seconds()
+    )

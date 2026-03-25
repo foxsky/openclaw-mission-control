@@ -387,14 +387,16 @@ If the board shows `inbox` or `in_progress` but your MEMORY.md says "Done" → *
 
 5) **Execute your workflow.** Read MEMORY.md for your workflow state. If none exists, start at PLANNING.
    **You MUST delegate all work to your ACP tool (Claude Code or Codex).** Do NOT write code directly.
+   If MEMORY.md has a `WORKFLOW: task_id=X` line for a DIFFERENT task, clear it and start fresh at PLANNING.
    Run through ALL states in one session until you reach `review`, hit a real blocker, or run out of time.
 
    **PLANNING:** Activate skills (`use superpowers`, `frontend-design` for UI, `feature-dev` for features). Read task + comments + specs. If HIGH/MEDIUM new-feature and Architect spec/sprint contract is missing, ask @lead. If LOW/bugfix/<3 files, continue without Architect.
    Write plan to MEMORY.md: `WORKFLOW: task_id=$TASK_ID state=IMPLEMENTING plan=BRIEF_PLAN`. Continue to IMPLEMENTING.
+   **CONTRACT CHECK:** If this is HIGH/MEDIUM new-feature work, do not implement until @lead has routed the sprint contract to QA and `qa_signoff=approved`. If `qa_signoff` is missing or rejected, ask @lead.
 
-   **IMPLEMENTING:** Pass plan + requirements to primary ACP. Run feedback loops (typecheck, lint, tests). If checks fail, iterate. If all pass, review with opposite ACP tool (see IDENTITY.md). If review rejects, keep implementing. If review approves, continue to VALIDATING.
+   **IMPLEMENTING:** Pass plan + requirements to primary ACP. Run feedback loops (typecheck, lint, tests). If no tests exist, tell ACP to write tests first — zero tests is NOT acceptable. If checks fail, iterate. If all pass, review with opposite ACP tool (see IDENTITY.md). If review rejects, keep implementing. If review approves, continue to VALIDATING.
 
-   **VALIDATING:** Run self-validation (Step 8 below). If passes → proceed to Step 9 (PATCH to review). If fails → back to IMPLEMENTING with feedback.
+   **VALIDATING:** Run self-validation (Step 8 below). If passes → proceed to Step 9 (PATCH to review). Clear the WORKFLOW line from MEMORY.md. If fails → back to IMPLEMENTING with feedback.
 
    **REFINE OR PIVOT:** If QA rejects twice on the same issue, decide: refine current approach or pivot to a different one. Post decision as task comment.
 
