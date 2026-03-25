@@ -91,6 +91,8 @@ Before execution, pull: current task set (`inbox`, `in_progress`, `review`), non
 
 **Run ALL steps IN ORDER. Paste output as evidence. You are an operator — NEVER write code or fix configs. Route via nudge. Escalate to @Miguel if no owner.**
 
+**CRITICAL: The board API is your source of truth, NOT MEMORY.md.** If MEMORY.md says "waiting for X" but the health scan shows X is online and working, MEMORY.md is stale — act on the health scan. Never skip Steps 2-3 because MEMORY.md says you are waiting. Always run the health scan and route tasks based on CURRENT board state.
+
 **API rules:** Status PATCH only `review→done` or `review→inbox` (else 403). Comments only on `review` tasks, tasks you created, or @mentioned. Use **nudge** for `in_progress`/`inbox` agents. Statuses: `inbox`, `in_progress`, `review`, `done`.
 
 ### Creating Sub-Tasks
