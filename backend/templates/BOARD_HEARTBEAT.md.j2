@@ -61,8 +61,8 @@ Read `TOOLS.md` for `BASE_URL`, `AUTH_TOKEN`, `BOARD_ID`, and agent identity bef
 - No keepalive comments ("still working", "checking in").
 - If pre-flight fails (5xx/network), do not write memory or task updates.
 - Do not assume exec is blocked based on an earlier session.
-- Attempt the required command once in this session before saying you are blocked.
-- Only say exec is blocked after a fresh tool result in this session explicitly says approval is required, denied, or unavailable.
+- Attempt the required command once before saying blocked. Only blocked after a fresh tool result says so.
+- **Timezone:** Use `BOARD_TIMEZONE` from TOOLS.md for date displays, not UTC.
 
 ## Pre-Flight Checks (Every Heartbeat)
 1) Confirm `BASE_URL`, `AUTH_TOKEN`, and `BOARD_ID` from `TOOLS.md` match this workspace.
@@ -170,20 +170,23 @@ If Step 2 shows tasks in `review` status, follow this flow:
 
 **3a — Route to QA for validation FIRST.**
 For each `review` task that has NOT been validated by QA yet (no QA comment with "QA validation" in it):
-1. Identify the right QA agent: QA-E2E for frontend/deploy tasks, QA-Unit for API/backend tasks.
-2. Reassign the task to the QA agent:
+1. Route to BOTH QA agents for their speciality:
+   - **QA-Unit**: code quality — typecheck, lint, bundle size, unit tests. Applies to ALL tasks (frontend AND backend).
+   - **QA-E2E**: browser/integration — UI renders, console errors, E2E tests, visual check. Applies to frontend/deploy tasks.
+   - For backend-only tasks: QA-Unit only. For frontend tasks: BOTH.
+2. Nudge QA-Unit first (code quality is faster):
 ```bash
-curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$QA_UNIT_AGENT_ID/nudge" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-  -d '{"assigned_agent_id": "QA_AGENT_UUID"}'
+  -d '{"message": "QA-Unit validate task TITLE: run typecheck (tsc --noEmit), lint, unit tests, check bundle size. Post evidence as comment with prefix QA-Unit validation."}'
 ```
-3. Nudge the QA agent with validation instructions:
+3. Nudge QA-E2E for browser validation (frontend/deploy tasks):
 ```bash
-curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$QA_AGENT_ID/nudge" \
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$QA_E2E_AGENT_ID/nudge" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-  -d '{"message": "Validate task TITLE. Use Chrome MCP (navigate_page, take_screenshot, list_console_messages, evaluate_script) to verify: UI renders, zero console errors, matches spec. Also run Playwright tests if available. Post evidence as comment with prefix QA validation. If pass, leave in review. If fail, post blocker details."}'
+  -d '{"message": "QA-E2E validate task TITLE. Use Chrome MCP (navigate_page, take_screenshot, list_console_messages) to verify: UI renders, zero console errors, matches spec. Run Playwright tests if available. Post evidence as comment with prefix QA-E2E validation."}'
 ```
-4. **Stop here for this task.** Wait for QA to post their validation. Do NOT run Codex review until QA validates.
+4. **Wait for BOTH QA agents** to post validation. Do NOT run Codex review until all applicable QA validates.
 
 **3a-fail — Handle QA validation failures.**
 If a QA agent posted a FAILING validation (blocker, errors found), do NOT send to Codex. Instead:
@@ -389,15 +392,17 @@ If the board shows `inbox` or `in_progress` but your MEMORY.md says "Done" → *
    ```
    If the `task_id` does not match your current task, or no WORKFLOW line exists, start fresh at `PLANNING`.
 
-   **Then execute ONLY the matching state below. Do NOT continue to the next state.**
+   **Then execute the matching state below.**
+   **Small tasks (bug fix, CSS, config, < 3 files): you may continue through ALL states in one heartbeat.**
+   **Large tasks (new feature, 5+ files): execute ONE state, then STOP.**
 
    **If state = PLANNING:**
-   - Activate skills: `use superpowers` (Claude Code) or `codex exec` (Codex).
+   - Activate skills: `use superpowers`. Frontend/UI: also use `frontend-design` skill. Features: use `feature-dev`.
    - Pass task requirements from Step 4 and ask ACP for an implementation plan.
    - If ACP fails: post blocker `@lead ACP session failed.` → return HEARTBEAT_OK.
    - If ACP succeeds: write to MEMORY.md:
      `WORKFLOW: task_id=$TASK_ID state=IMPLEMENTING plan=BRIEF_PLAN_SUMMARY`
-   - **STOP. Return HEARTBEAT_OK now. Do NOT start implementing.**
+   - **Large task: STOP here. Small task: continue to IMPLEMENTING.**
 
    **If state = IMPLEMENTING:**
    - Read plan from MEMORY.md. Pass plan + requirements to primary ACP.
@@ -407,7 +412,7 @@ If the board shows `inbox` or `in_progress` but your MEMORY.md says "Done" → *
    - If all pass: review your code using the **opposite ACP tool** (see IDENTITY.md for which tool reviews).
    - If review **approves**: write `WORKFLOW: task_id=$TASK_ID state=VALIDATING summary=WHAT_WAS_BUILT`
    - If review **rejects**: feed rejection back to primary ACP and keep implementing.
-   - **STOP. Return HEARTBEAT_OK now. Do NOT start validating.**
+   - **Large task: STOP here. Small task: continue to VALIDATING.**
 
    **If state = VALIDATING:**
    - Run self-validation (Step 8 below).

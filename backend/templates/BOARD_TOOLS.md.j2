@@ -14,7 +14,8 @@
 - `WORKSPACE_PATH={{ workspace_path }}`
 {% endif %}
 - `SHARED_WORKSPACE={{ workspace_root }}/shared`
-- Required tools: `curl`, `jq`
+{% if user_timezone is defined and user_timezone %}- `BOARD_TIMEZONE={{ user_timezone }}`
+{% endif %}- Required tools: `curl`, `jq`
 
 {% if is_main %}
 {% set role_tag = "agent-main" %}
