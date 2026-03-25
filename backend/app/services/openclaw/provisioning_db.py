@@ -21,7 +21,7 @@ from sqlalchemy import asc, func, or_
 from sqlmodel import col, select
 from sse_starlette.sse import EventSourceResponse
 
-from app.core.agent_tokens import verify_agent_token
+from app.core.agent_tokens import hash_agent_token, verify_agent_token
 from app.core.durations import parse_every_to_seconds
 from app.core.logging import TRACE_LEVEL
 from app.core.time import utcnow
@@ -558,15 +558,36 @@ async def _resolve_agent_auth_token(
         if ctx.options.rotate_tokens:
             auth_token = await _rotate_agent_token(ctx.session, agent)
         else:
-            _append_sync_error(
-                result,
-                agent=agent,
-                board=board,
-                message=(
-                    "Warning: AUTH_TOKEN in TOOLS.md does not match backend "
-                    "token hash (agent auth may be broken)."
-                ),
-            )
+            # The gateway may have rotated the token (e.g., after SIGUSR1 restart).
+            # TOOLS.md has the real token the agent will use — update the DB hash
+            # to match instead of leaving auth broken.
+            # Safety: only resync if the agent already had a token hash (not a new
+            # agent) and the token was read from the gateway workspace (trusted path).
+            if agent.agent_token_hash and auth_token:
+                agent.agent_token_hash = hash_agent_token(auth_token)
+                agent.updated_at = utcnow()
+                ctx.session.add(agent)
+                await ctx.session.commit()
+                await ctx.session.refresh(agent)
+                _append_sync_error(
+                    result,
+                    agent=agent,
+                    board=board,
+                    message=(
+                        "AUTH_TOKEN hash resynced from TOOLS.md "
+                        "(gateway may have rotated token after restart)."
+                    ),
+                )
+            else:
+                _append_sync_error(
+                    result,
+                    agent=agent,
+                    board=board,
+                    message=(
+                        "Warning: AUTH_TOKEN in TOOLS.md does not match backend "
+                        "token hash (agent auth may be broken)."
+                    ),
+                )
     return auth_token, False
 
 

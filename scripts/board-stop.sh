@@ -101,6 +101,13 @@ with open('$GATEWAY_CONFIG.heartbeat-backup', 'w') as f:
 print(f'  {len(saved)} agents set to 0m in gateway config')
 \""
 
+# Step 2b: Disable heartbeats at gateway runtime level
+echo ""
+echo "--- Step 2b: Disabling heartbeats in gateway runtime ---"
+ssh root@$GATEWAY_HOST "openclaw gateway call set-heartbeats --params '{\"enabled\":false}' 2>&1 | grep -E '(ok|enabled|error|failed)'" && \
+  echo "  heartbeatsEnabled = false" || \
+  echo "  WARNING: could not disable heartbeats via RPC (gateway may not be running)"
+
 # Step 3: Clear sessions
 echo ""
 echo "--- Step 3: Clearing sessions ---"
@@ -137,11 +144,11 @@ echo \"  \$count session transcripts backed up and cleared\"
 # Step 4: Send /pause to board memory (syncs UI state)
 echo ""
 echo "--- Step 4: Pausing board in UI ---"
-ssh root@$MC_DB_HOST "PGPASSWORD=$MC_DB_PASS psql -U $MC_DB_USER -h 127.0.0.1 -d $MC_DB -c \"
+ssh root@$MC_DB_HOST "$PSQL" << 'SQLEOF'
   INSERT INTO board_memory (id, board_id, content, tags, source, is_chat, created_at)
-  SELECT gen_random_uuid(), id, '/pause', '[\"chat\"]'::json, 'user', true, NOW()
+  SELECT gen_random_uuid(), id, '/pause', '["chat"]'::json, 'user', true, NOW()
   FROM boards WHERE name ILIKE '%dev%' LIMIT 1;
-\"" 2>/dev/null
+SQLEOF
 echo "  Board paused in UI"
 
 echo ""

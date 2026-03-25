@@ -2715,7 +2715,6 @@ async def _notify_task_update_assignment_changes(
     entered_in_progress = (
         update.task.status == "in_progress" and update.previous_status != "in_progress"
     )
-
     if entered_in_progress and not assignment_changed:
         current_board = await _board()
         if current_board:

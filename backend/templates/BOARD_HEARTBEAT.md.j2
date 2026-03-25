@@ -103,7 +103,7 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" \
 Descriptions MUST include: what to build, tech, host:port, acceptance criteria, specs location. Specs go to `$SHARED_WORKSPACE/`. Downstream tasks MUST have `depends_on_task_ids`.
 
 ### Reassigning Rejected Tasks
-When a task is rejected back to `inbox` (by Codex review or by you), it becomes **unassigned**. Workers only pick up tasks assigned to them. You MUST reassign rejected tasks to the original agent:
+When you reject a task back to `inbox`, the system auto-reassigns it to the previous worker. If auto-reassignment fails or the task ends up unassigned, reassign manually:
 ```bash
 curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
@@ -152,7 +152,7 @@ for t in tasks:
 
 **Act on findings** (nudge endpoint: `POST .../agents/$AGENT_ID/nudge` with `{"message":"..."}`):
 - `in_progress` **30+ min** → nudge: "Status check — task unchanged AGE min. Blocked? If done, PATCH to review."
-- `in_progress` **60+ min** → nudge: "URGENT: stuck 60+ min. Move to review NOW." + escalate via `POST .../memory` with `{"content":"@Miguel Agent stuck on TASK 60+ min.","tags":["chat","escalation"]}`
+- `in_progress` **60+ min** → nudge: "URGENT: stuck 60+ min. Post a status update NOW — are you blocked?" + escalate via `POST .../memory` with `{"content":"@Miguel Agent stuck on TASK 60+ min.","tags":["chat","escalation"]}`
 - If an assigned agent is offline or has stopped checking in on a live task, recover first, then nudge.
 - Use the literal agent_id from Step 2 output in the recover call.
 ```bash
@@ -165,42 +165,66 @@ If agents stuck 30+ min or inconsistencies suspected:
 - `lcm_grep(pattern: "decision|blocker|completed", allConversations: true)` — search all agent conversations for state drift or unreported blockers
 - `memory_recall(query: "task status decisions blockers")` — check team memory
 
-### Step 3 — Review ALL `review` Tasks Together (Synthesis Review)
-If Step 2 shows tasks in `review` status, **delegate a single unified review to Codex** covering ALL review tasks at once. This catches cross-task inconsistencies (e.g., frontend calls endpoints the spec doesn't define).
+### Step 3 — Route `review` Tasks to QA, Then Coherence Review
+If Step 2 shows tasks in `review` status, follow this flow:
+
+**3a — Route to QA for validation FIRST.**
+For each `review` task that has NOT been validated by QA yet (no QA comment with "QA validation" in it):
+1. Identify the right QA agent: QA-E2E for frontend/deploy tasks, QA-Unit for API/backend tasks.
+2. Reassign the task to the QA agent:
 ```bash
-codex exec -m gpt-5.4 --sandbox danger-full-access "You are reviewing ALL tasks in review for a board. Evaluate them individually AND as a coherent whole.
+curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"assigned_agent_id": "QA_AGENT_UUID"}'
+```
+3. Nudge the QA agent with validation instructions:
+```bash
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$QA_AGENT_ID/nudge" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"message": "Validate task TITLE. Use Chrome MCP (navigate_page, take_screenshot, list_console_messages, evaluate_script) to verify: UI renders, zero console errors, matches spec. Also run Playwright tests if available. Post evidence as comment with prefix QA validation. If pass, leave in review. If fail, post blocker details."}'
+```
+4. **Stop here for this task.** Wait for QA to post their validation. Do NOT run Codex review until QA validates.
+
+**3a-fail — Handle QA validation failures.**
+If a QA agent posted a FAILING validation (blocker, errors found), do NOT send to Codex. Instead:
+1. PATCH the task back to `inbox`: `curl -fsS -X PATCH ".../tasks/$TASK_ID" -d '{"status": "inbox"}'`
+2. Reassign to the original developer (from task comments — find who moved it to review).
+3. Post a comment with the QA failure details so the developer knows what to fix.
+4. The developer fixes, re-validates, and moves back to `review` — the cycle repeats.
+
+**3b — Codex coherence review AFTER QA validates.**
+For `review` tasks that HAVE a QA validation comment (QA posted evidence), delegate a unified review to Codex covering all QA-validated review tasks:
+```bash
+codex exec -m gpt-5.4 --sandbox danger-full-access "You are reviewing QA-validated tasks for a board. Evaluate cross-task coherence.
 
 Board API: BASE_URL=$BASE_URL, AUTH_TOKEN=$AUTH_TOKEN, BOARD_ID=$BOARD_ID
 Specs: $SHARED_WORKSPACE/specs/
 
-Step 1 — Collect all review tasks and their comments:
+Step 1 — Collect all review tasks and their QA validation comments:
 curl -fsS '$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks?status=review&limit=50' -H 'X-Agent-Token: $AUTH_TOKEN'
 For each task, read comments:
 curl -fsS '$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/TASK_ID/comments?limit=20' -H 'X-Agent-Token: $AUTH_TOKEN'
 
-Step 2 — Evaluate EACH task: real evidence? Provenance (pwd, command, URL)? Consistent results? Matches spec?
-Step 3 — Evaluate CROSS-TASK coherence: do the deliverables work together? Does the frontend match the API spec? Does the deployment serve the right build? Do test targets match deployed URLs?
-Step 4 — For API/deploy tasks: verify services are running (curl health endpoints).
-
-Step 5 — For each task, APPROVE or REJECT. Post comment FIRST, then PATCH status:
-APPROVE: curl -fsS -X POST .../tasks/TASK_ID/comments -d '{\"message\":\"Approved: EVIDENCE\"}' then PATCH status=done
+Step 2 — Check QA evidence: did QA validate? What did they find?
+Step 3 — Evaluate CROSS-TASK coherence: do the deliverables work together? Does the frontend match the API spec? Does the deployment serve the right build?
+Step 4 — For each task, APPROVE or REJECT based on QA evidence + coherence.
+APPROVE: curl -fsS -X POST .../tasks/TASK_ID/comments -d '{\"message\":\"Approved: QA_EVIDENCE + COHERENCE_CHECK\"}'
 REJECT: curl -fsS -X POST .../tasks/TASK_ID/comments -d '{\"message\":\"Rejected: ISSUES\"}' then PATCH status=inbox
-Always post the comment BEFORE the PATCH.
 
-Step 6 — Post a COHERENCE SUMMARY as board memory:
+Step 5 — Post a COHERENCE SUMMARY as board memory:
 curl -fsS -X POST '$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory' -H 'X-Agent-Token: $AUTH_TOKEN' -H 'Content-Type: application/json' -d '{\"content\":\"REVIEW COHERENCE: N approved, M rejected. Cross-task: COHERENCE_ASSESSMENT\",\"tags\":[\"review\",\"coherence\"]}'
 This persists the synthesis rationale so Step 6 (final report) can reference it."
 ```
-**Do NOT review tasks yourself.** Codex handles everything — individual evaluation AND coherence check.
+**Do NOT review tasks yourself.** Route to QA first, then Codex reviews QA evidence.
 **If Codex fails or times out:** escalate `@Miguel Codex review failed. Need manual review.` Skip to Step 4.
 {% if board_rule_require_approval_for_done == "true" or board_rule_block_status_changes_with_pending_approval == "true" %}
-**This board requires human approval before `done`.** When Codex approves a task, do NOT PATCH to done. Instead create an approval request for the human to review:
+**This board requires human approval before `done`.** When Codex approves a task (after QA validation), do NOT PATCH to done. Instead create an approval request:
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/approvals" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-  -d '{"task_id": "TASK_UUID", "action_type": "move_to_done", "confidence": CODEX_CONFIDENCE_0_TO_100, "lead_reasoning": "CODEX_EVIDENCE_SUMMARY", "payload": {"codex_verdict": "approved", "evidence": "BRIEF_EVIDENCE"}}'
+  -d '{"task_id": "TASK_UUID", "action_type": "move_to_done", "confidence": CODEX_CONFIDENCE_0_TO_100, "lead_reasoning": "QA validated + Codex coherence approved", "payload": {"qa_evidence": "QA_SUMMARY", "codex_verdict": "approved", "evidence": "BRIEF_EVIDENCE"}}'
 ```
-Then notify: `@Miguel Task TITLE ready for your approval. Codex confidence: X%. Evidence: SUMMARY.`
+Then notify: `@Miguel Task TITLE ready for your approval. QA validated + Codex confidence: X%.`
 The task stays in `review` until the human approves in the UI.
 {% endif %}
 
@@ -300,7 +324,7 @@ If the board shows `inbox` or `in_progress` but your MEMORY.md says "Done" → *
 
 ### Execution Steps
 1) Check in via heartbeat endpoint (pre-flight above).
-2) Continue one `in_progress` task; else pick one assigned `inbox` task; else run assist mode.
+2) Continue one `in_progress` task; else handle an assigned `review` task (if you are QA, validate it); else pick one assigned `inbox` task; else run assist mode.
 3) When picking an `inbox` task, move it to `in_progress` IMMEDIATELY:
    ```bash
    curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
@@ -321,7 +345,7 @@ If the board shows `inbox` or `in_progress` but your MEMORY.md says "Done" → *
    import sys,json
    page=json.load(sys.stdin)
    for t in page.get('items', []):
-       if t.get('status') in ('inbox','in_progress'):
+       if t.get('status') in ('inbox','in_progress','review'):
            print('TASK_ID:', t['id'])
            print('Title:', t.get('title',''))
            print('Description:', (t.get('description','') or '')[:2000])
@@ -380,17 +404,10 @@ If the board shows `inbox` or `in_progress` but your MEMORY.md says "Done" → *
    - ACP produces code. Run ALL feedback loops: typecheck, lint, tests.
    - If no tests exist: tell ACP to write tests first. Zero tests is NOT acceptable.
    - If any check fails: feed errors back to ACP. Keep iterating within this heartbeat until checks pass or time runs out.
-   - If all pass: write to MEMORY.md:
-     `WORKFLOW: task_id=$TASK_ID state=REVIEWING summary=WHAT_WAS_BUILT`
-   - **STOP. Return HEARTBEAT_OK now. Do NOT start reviewing.**
-
-   **If state = REVIEWING:**
-   - Request review using the **opposite** ACP tool:
-     - Claude Code primary → `codex exec --sandbox read-only "Review: DESCRIPTION"`
-     - Codex primary → `claude -p "Review: DESCRIPTION"`
-   - If review **APPROVES**: write `WORKFLOW: task_id=$TASK_ID state=VALIDATING`
-   - If review **REJECTS**: write `WORKFLOW: task_id=$TASK_ID state=IMPLEMENTING feedback=REJECTION_DETAILS`
-   - **STOP. Return HEARTBEAT_OK now.**
+   - If all pass: review your code using the **opposite ACP tool** (see IDENTITY.md for which tool reviews).
+   - If review **approves**: write `WORKFLOW: task_id=$TASK_ID state=VALIDATING summary=WHAT_WAS_BUILT`
+   - If review **rejects**: feed rejection back to primary ACP and keep implementing.
+   - **STOP. Return HEARTBEAT_OK now. Do NOT start validating.**
 
    **If state = VALIDATING:**
    - Run self-validation (Step 8 below).
@@ -404,6 +421,12 @@ If the board shows `inbox` or `in_progress` but your MEMORY.md says "Done" → *
      - Build passes: `npm run build` exits 0
      - Deployed app returns HTML on root AND on a sub-route (SPA check): `curl -s http://TARGET_HOST:PORT/ | grep -c '<div id'` and `curl -s http://TARGET_HOST:PORT/test-route | grep -c '<div id'` — both must return HTML, not 404
      - App fetches real data: `curl -s http://TARGET_HOST:PORT/ | grep -c 'Failed to fetch'` must be 0
+     - **Browser validation (Chrome MCP):** If you have Chrome MCP available (check `.mcp.json`), use it to validate visually:
+       1. Navigate: `mcp__chrome-devtools__navigate_page` to the deployed URL
+       2. Screenshot: `mcp__chrome-devtools__take_screenshot` — verify the UI renders correctly
+       3. Console: `mcp__chrome-devtools__list_console_messages` with types `["error"]` — must be ZERO errors
+       4. Evaluate: `mcp__chrome-devtools__evaluate_script` to check DOM elements exist
+       This catches rendering bugs that curl cannot detect (broken CSS, missing components, JS errors).
    - For API: `curl http://TARGET_HOST:PORT/health` responds? Endpoints return **real data from the database**, not hardcoded test data?
    - For tests: do they pass against real functionality, not mock data? Also verify:
      - **All imports resolve:** run the test runner once and check for `Cannot find module` or `ModuleNotFoundError`. If any import fails, create the missing module before claiming tests pass.
@@ -434,6 +457,16 @@ If the board shows `inbox` or `in_progress` but your MEMORY.md says "Done" → *
    memory_store(text: "Agent: AGENT_NAME, Task: TASK_TITLE, Status: review, Deliverable: WHAT_WAS_BUILT, Key decisions: DECISIONS_MADE")
    ```
    Only call this once when you first move to `review`. Do NOT call `memory_store` on every heartbeat — only on status transitions or key decisions that other agents need to know about.
+
+### Role Boundaries
+
+- **Stay in your role.** If your task needs work outside your expertise (e.g., frontend needs API changes), post: `@lead Task requires ROLE work: DESCRIPTION.` Do NOT do another role's work yourself.
+
+### Progress Updates
+
+- **Post a task comment every 30 minutes** while working. Include: what you did, what's next, blockers.
+- Post immediately on: major milestone, blocker, deployment, or architecture change.
+- No comments = no visibility = Supervisor assumes you are stuck.
 
 ### Workspace Isolation
 
@@ -518,8 +551,8 @@ If your ACP session (Claude Code or Codex) was interrupted mid-work:
 2) **If output is partial:** restart the ACP session with the remaining work. Do NOT treat partial output as complete.
 3) **If you see the problem but cannot fix it in this heartbeat cycle:**
    - Update MEMORY.md with the exact state: "Components empty, ACP session interrupted, need to restart."
-   - Do NOT return HEARTBEAT_OK — post a blocker: `@lead ACP session interrupted, deliverable incomplete. Need another cycle to finish.`
-4) **NEVER return HEARTBEAT_OK when you know the work is incomplete.** That signals "nothing needs attention" when something clearly does.
+   - Post a blocker: `@lead ACP session interrupted, deliverable incomplete. Need another cycle to finish.`
+   - Return HEARTBEAT_OK — you reported the issue. The lead will follow up.
 
 ### Test Failures and Blockers
 

@@ -163,16 +163,10 @@ echo ""
 echo "--- Step 7: Enabling heartbeats + initial check-in ---"
 sleep 10
 
-# Enable heartbeats via RPC
-ssh root@$MC_APP_HOST "cd /home/mcontrol/openclaw-mission-control/backend && .venv/bin/python3 -c '
-import asyncio
-from app.services.openclaw.gateway_rpc import openclaw_call, GatewayConfig
-async def enable():
-    config = GatewayConfig(url=\"ws://$GATEWAY_HOST:18789\",token=\"b288272c65a05af9b0eb88344d87a18c1491109008ff3de0\",allow_insecure_tls=True,disable_device_pairing=True)
-    result = await openclaw_call(\"set-heartbeats\", {\"enabled\": True}, config=config)
-    print(\"  Heartbeats enabled:\", result.get(\"enabled\", False))
-asyncio.run(enable())
-' 2>&1 | grep -E 'Heartbeats enabled|error' || echo '  Warning: could not enable heartbeats via RPC'"
+# Enable heartbeats via gateway CLI (no hardcoded token needed)
+ssh root@$GATEWAY_HOST "openclaw gateway call set-heartbeats --params '{\"enabled\":true}' 2>&1 | grep -E '(ok|enabled|error|failed)'" && \
+  echo "  heartbeatsEnabled = true" || \
+  echo "  WARNING: could not enable heartbeats via RPC (gateway may not be running)"
 
 # Check in each agent directly via MC API (immediate, no wait for heartbeat tick)
 MC_API="http://$MC_APP_HOST:8000"
