@@ -194,7 +194,7 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$QA_E2E_AGENT_
 If any QA agent posts a FAILING validation:
 1. If the task has a pending approval, reject it first:
 ```bash
-curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/approvals/$APPROVAL_ID" \
+curl -fsS -X PATCH "$BASE_URL/api/v1/boards/$BOARD_ID/approvals/$APPROVAL_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"status": "rejected"}'
 ```
