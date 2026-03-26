@@ -157,7 +157,7 @@ for t in tasks:
 **Act on findings** (nudge endpoint: `POST .../agents/$AGENT_ID/nudge` with `{"message":"..."}`):
 - `in_progress` **30+ min** → nudge: "Status check — task unchanged AGE min. Blocked? If done, PATCH to review."
 - `in_progress` **60+ min** → nudge: "URGENT: stuck 60+ min. Post a status update NOW — are you blocked?" + escalate via `POST .../memory` with `{"content":"@Miguel Agent stuck on TASK 60+ min.","tags":["chat","escalation"]}`
-- If an assigned agent is offline or has stopped checking in on a live task, recover first, then nudge.
+- If an assigned agent is offline or has stopped checking in, recover first (`POST .../agents/$AGENT_ID/recover`), then nudge. Recovery triggers a new session; the nudge delivers the work instruction into it.
 - Use the literal agent_id from Step 2 output in the recover call.
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$AGENT_ID/recover" -H "X-Agent-Token: $AUTH_TOKEN"
