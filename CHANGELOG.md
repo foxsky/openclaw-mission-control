@@ -7,7 +7,9 @@ All notable changes to the OpenClaw Mission Control fork.
 ### Added
 - **Agent harness improvements plan** (`docs/plans/2026-03-25-agent-harness-improvements.md`): 11-task plan based on Anthropic's "Harness Design for Long-Running Apps" article, Codex-reviewed to 100% compliance. Covers: liveness fixes, continuous workflow, template shrink (19KB→8-10KB), structured handoff files, high-level specs, design-quality anchoring, QA grading rubric with originality/craft dimensions, few-shot calibration, trace review loop, and agent consolidation analysis.
 - **Architect-as-planner role**: Architect expands Supervisor's short task seeds into full specs with sprint contracts. Supervisor remains the sole hub for all assignment, QA routing, and escalation. Bypass rule: LOW/bugfix/<3 files skip Architect.
-- **QA dual routing**: Both QA-Unit (code quality: typecheck, lint, tests) and QA-E2E (browser: rendering, console errors, visual) validate frontend tasks. QA-Unit runs first. Backend tasks use QA-Unit only.
+- **QA-E2E as sole Evaluator** (article-aligned): QA-E2E now owns the full evaluation — code quality, design quality, originality, craft, AND functionality with scored rubric. QA-Unit handles mechanical checks (typecheck, lint, tests). Supervisor no longer runs Codex review — reads QA evidence and approves/rejects. Three-role pattern: Planner (Supervisor+Architect), Generator (Programmers), Evaluator (QA-E2E+QA-Unit).
+- **Skepticism rule for QA-E2E**: "Be SKEPTICAL by default. LLMs tend toward leniency — fight that instinct." Evaluator must cite specific evidence, score each rubric dimension, challenge weak evidence. Supervisor also challenges thin QA evidence.
+- **Supervisor sandbox locked to read-only**: All Supervisor codex exec calls use `--sandbox read-only`. Supervisor can review code but NEVER implement. If task needs code changes, reject to inbox and assign Programmer.
 - **QA grading rubric** with scored dimensions: Originality (20%), Craft (15%), Visual Quality (15%), Spec Fidelity (15%), Interaction (15%), Console/Network (10%), Responsiveness (5%), Code Quality (5%). Hard fail thresholds. 3-round reject/fix/retest loop before Supervisor escalation.
 - **Refine-or-pivot rule**: If QA rejects twice on same issue, developer must decide to refine or pivot approach.
 - **Contract negotiation**: QA signs off on sprint contract before implementation starts (HIGH/MEDIUM tasks).
@@ -18,8 +20,10 @@ All notable changes to the OpenClaw Mission Control fork.
 - **Model changes**: Supervisor, Architect, QA-Unit primary model changed to `openai-codex/gpt-5.4` with MiniMax M2.7 as first fallback. Heartbeat model remains `minimax-m2.5` for all agents.
 
 ### Changed
-- **Continuous workflow**: Workers run through PLAN → IMPLEMENT → VALIDATE in one session. No forced stops between states. Small and large tasks both run continuously.
-- **Small task fast-path**: Bug fixes and < 3 file changes can complete all workflow states in a single heartbeat.
+- **Continuous workflow** (Plan Task 1 — implemented): Workers run through PLAN → CONTRACT CHECK → IMPLEMENT → VALIDATE in one session. No forced stops. Stale WORKFLOW line cleanup. Zero-test guard restored.
+- **OFFLINE_AFTER=35m** (Plan Task 0 — implemented): 30m-heartbeat agents no longer falsely marked offline. DEFAULT_HEARTBEAT_CONFIG now includes isolatedSession + lightContext.
+- **Supervisor Codex review removed**: Entire Step 3b codex exec block deleted. Supervisor reads QA evidence only. Lead template: 16.9KB → 14.6KB.
+- **Board API is source of truth**: Supervisor must always run health scan, never skip because MEMORY.md says "waiting".
 - **Worker heartbeat interval**: 30m for all workers (deliver=True is the work driver, heartbeat is safety net only).
 - **QA routing via Supervisor**: All QA work routed through Supervisor. QA-Unit for code quality, QA-E2E for browser validation. Supervisor sends sprint contracts to QA for pre-build signoff.
 - **Role boundaries**: Workers must ask @lead for cross-role work. Progress updates every 30 min.
