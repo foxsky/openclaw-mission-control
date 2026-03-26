@@ -173,7 +173,7 @@ If agents stuck 30+ min or inconsistencies suspected:
 If Step 2 shows tasks in `review` status, follow this flow:
 
 **3a — Route to QA for evaluation.**
-For each `review` task not yet validated (no comment with "QA-Unit validation" or "QA-E2E validation"):
+For each `review` task not yet validated (no comment containing "QA-Unit validation", "QA-E2E validation", "QA validation", "PASS", or "Approved"):
 1. **QA-Unit** (ALL tasks): mechanical checks — typecheck, lint, unit tests, bundle size.
 2. **QA-E2E** (frontend/deploy tasks ONLY): full evaluation — code review, design quality, browser testing, scored rubric.
 3. Backend-only tasks: QA-Unit only. Frontend tasks: BOTH.
