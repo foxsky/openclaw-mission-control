@@ -190,15 +190,31 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$QA_E2E_AGENT_
 ```
 4. Wait for all applicable QA agents to post. Backend: QA-Unit only. Frontend: both.
 
-**3a-fail — Handle QA failures.**
+**3a-fail — Handle QA failures. EXECUTE these commands, do not just discuss.**
 If any QA agent posts a FAILING validation:
-1. PATCH the task back to `inbox`.
-2. Reassign to the original developer with QA failure details.
+1. If the task has a pending approval, reject it first:
+```bash
+curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/approvals/$APPROVAL_ID" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"status": "rejected"}'
+```
+2. PATCH the task back to `inbox` and reassign to the developer:
+```bash
+curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"status": "inbox", "assigned_agent_id": "DEVELOPER_AGENT_ID"}'
+```
+3. Nudge the developer with the specific QA failure:
+```bash
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$DEVELOPER_AGENT_ID/nudge" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"message": "QA FAILED on TASK_TITLE: FAILURE_DETAILS. Fix and tag @lead when moving back to review."}'
+```
 
-**3b — Approve or reject based on QA evidence.**
-Read QA evidence. If all applicable QA passed: approve. If any failed: reject.
-- Do NOT run your own review. Review chain: workers self-review with `/simplify`, Architect reviews code (via Codex, read-only), QA-E2E evaluates quality + browser.
-- Challenge if QA evidence is thin (no scores, no screenshots, vague "looks good"). Send back to QA with: "Insufficient evidence. Score each rubric dimension."
+**3b — Approve passing tasks. EXECUTE these commands, do not just discuss.**
+For each task where all applicable QA posted PASS:
+- Challenge thin evidence first (no scores, no screenshots → send back to QA).
+- If evidence is solid, create the approval:
 {% if board_rule_require_approval_for_done == "true" or board_rule_block_status_changes_with_pending_approval == "true" %}
 **This board requires human approval before `done`.** When QA approves, create an approval request:
 ```bash
