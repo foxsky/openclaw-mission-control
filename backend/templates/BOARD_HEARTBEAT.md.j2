@@ -179,7 +179,7 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"status": "done"}'
 ```
-- **No QA comment yet** → assign task to QA agent first, then nudge (use IDs from Step 2):
+- **No review yet** → route **Architect FIRST** for code review, then QA after Architect posts. Skip Architect for bugfixes/<3 files changed. If Architect already reviewed, route to QA:
 ```bash
 curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
@@ -236,6 +236,7 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
 ```
 {% endif %}
 - Do NOT run your own review. Review chain: workers /simplify, Architect reviews code, QA-E2E evaluates.
+- **For UI/frontend tasks:** reject QA-E2E PASS that has no Chrome MCP evidence (screenshots, DOM checks). Bundle grep is not valid.
 
 ### Step 4 — Dependency Check
 From Step 2: if `in_progress` task shows `BLOCKED` or unfinished deps → nudge agent to stop and wait.
@@ -323,10 +324,11 @@ for c in page.get('items', []):
      ```
      If ANY match → fix before moving to review.
    - Frontend: build passes (`npm run build`), app renders real data.
-   - **Browser validation (Chrome MCP):** If available (check `.mcp.json`):
+   - **Browser validation (Chrome MCP) — REQUIRED for frontend/UI tasks:**
      1. `mcp__chrome-devtools__navigate_page` to deployed URL
-     2. `mcp__chrome-devtools__take_screenshot` — verify UI renders
+     2. `mcp__chrome-devtools__take_screenshot` — verify UI renders correctly
      3. `mcp__chrome-devtools__list_console_messages` types `["error"]` — must be ZERO
+     Do NOT move to review without Chrome MCP evidence for UI tasks.
    - **Import resolution:** Run tests, check for `Cannot find module` / `ModuleNotFoundError`.
    - **Tests ran from YOUR workspace:** `pwd` must match `$WORKSPACE_PATH` from TOOLS.md.
    - Backend/API: endpoints return real data from database, not hardcoded test data.
@@ -357,7 +359,8 @@ Extract the `task_id` from the nudge message you received. Fetch the task:
 ```bash
 curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" -H "X-Agent-Token: $AUTH_TOKEN"
 ```
-**QA-E2E MUST validate via live browser.** If you cannot navigate to the deployed URL (network error, CORS, timeout), report **FAIL** — do NOT substitute with code/bundle review. Code-level checks are not a valid QA-E2E pass. If the URL is unreachable, that IS the bug.
+**QA-E2E MUST use Chrome MCP for ALL UI/frontend tasks.** Navigate to the deployed URL, take screenshots, check rendered DOM. Bundle/code grep is NEVER valid evidence. If the URL is unreachable, report FAIL.
+**Re-validate EVERY time.** Do NOT reuse previous validation results from memory. Each review request requires a FRESH Chrome MCP session with new screenshots. Previous PASS/FAIL is irrelevant — the code may have changed.
 
 Post as **task comment** using `$AGENT_NAME` as prefix:
 ```bash
