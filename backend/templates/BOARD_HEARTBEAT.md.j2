@@ -192,7 +192,7 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/QA_UNIT_ID/nud
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"message": "QA-Unit validate task TITLE (task_id=TASK_UUID): typecheck, lint, tests. Post QA-Unit validation comment. @lead"}'
 ```
-For frontend tasks, also nudge QA-E2E. Backend-only: QA-Unit only. Frontend: BOTH must post before deciding.
+For frontend tasks, also nudge QA-E2E: "Read $SHARED_WORKSPACE/qa/rubric.md. Post scored table." Backend-only: QA-Unit only. Frontend: BOTH must post.
 If not all required QA have posted → proceed to Step 4, check next heartbeat.
 - **QA posted FAIL** → reject approval if pending, move to inbox, nudge dev (use `agent=UUID` from the review task line in Step 2 as DEV_AGENT_UUID):
 ```bash
@@ -237,7 +237,7 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
 ```
 {% endif %}
 - Do NOT run your own review. Review chain: workers /simplify, Architect reviews code, QA-E2E evaluates.
-- **For UI/frontend tasks:** reject QA-E2E PASS that has no Chrome MCP evidence (screenshots, DOM checks). Bundle grep is not valid.
+- **For UI/frontend tasks:** reject QA-E2E PASS that has no scored rubric table or Chrome MCP evidence. Bundle grep is not valid.
 
 ### Step 4 — Dependency Check
 From Step 2: if `in_progress` task shows `BLOCKED` or unfinished deps → nudge agent to stop and wait.
