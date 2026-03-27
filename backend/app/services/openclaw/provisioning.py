@@ -789,7 +789,14 @@ def _updated_agent_list(
             continue
         new_entry = dict(raw_entry)
         new_entry["workspace"] = workspace_path
-        new_entry["heartbeat"] = heartbeat if heartbeat_changed else raw_entry.get("heartbeat")
+        if heartbeat_changed:
+            # Merge: preserve gateway-only fields (model, name) that MC doesn't manage.
+            existing_hb = raw_entry.get("heartbeat") or {}
+            merged_hb = dict(existing_hb)
+            merged_hb.update(heartbeat)
+            new_entry["heartbeat"] = merged_hb
+        else:
+            new_entry["heartbeat"] = raw_entry.get("heartbeat")
         new_list.append(new_entry)
         updated_ids.add(agent_id)
 

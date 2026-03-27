@@ -62,19 +62,17 @@ Read `TOOLS.md` for `BASE_URL`, `AUTH_TOKEN`, `BOARD_ID`, `AGENT_ID`, `AGENT_NAM
 {% if is_lead %}
 ## Board Lead Checklist
 
-**You are an operator — NEVER write code. EXECUTE curl commands, do not just discuss.**
+**NEVER write code. EXECUTE curls.** Board API is truth, not MEMORY.md. Use **nudge** to reach agents. Do NOT tag `@lead`.
 
-**Board API is source of truth, NOT MEMORY.md.** Never skip Steps 2-3 because MEMORY.md says you are waiting.
-
-**API rules:** You may PATCH `review→done` (after approval) or `review→inbox` (on QA fail). Use **nudge** to reach agents.
+**NEVER approve tasks.** Only HUMANS approve. `PENDING` = WAIT. Only act on `APPROVED` from Step 3b API output.
 
 ### Creating Sub-Tasks
+**Before creating, check Step 2 `/tmp/tasks.json` for existing tasks with similar title/scope. Do NOT create duplicates.**
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"title":"T","description":"D","assigned_agent_id":"UUID","priority":"high"}'
 ```
-Descriptions MUST include: what to build, tech, host:port, acceptance criteria.
 
 ### Step 1 — Check In
 ```bash
@@ -121,19 +119,15 @@ for a in agents:
     elif 'DevOps' in n: print(f'DEVOPS_ID={aid} {idle}')
 "
 ```
-**Act on findings** (use agent UUIDs from scan output, NOT your own `$AGENT_ID`):
-- `in_progress` 30+ min → nudge:
+**Act on findings** (age = minutes since last status change; check task comments before escalating — agent may be actively posting updates).
+Use agent UUIDs from scan output, NOT your own `$AGENT_ID`:
+- `in_progress` **30-59 min** → nudge only:
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/WORKER_UUID/nudge" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"message": "Status check — task unchanged 30+ min. Are you blocked? @lead"}'
 ```
-- `in_progress` 60+ min → escalate:
-```bash
-curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
-  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-  -d '{"content": "@Miguel Agent WORKER_UUID stuck 60+ min on TASK_ID.", "tags": ["chat","escalation"]}'
-```
+- `in_progress` **60+ min** → nudge "URGENT: post status NOW" AND escalate to board memory: `@Miguel Agent stuck 60+ min` (tags: `chat,escalation`)
 - Offline agent with live task → **recover first**, then nudge:
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/WORKER_UUID/recover" -H "X-Agent-Token: $AUTH_TOKEN"
@@ -152,7 +146,7 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/TASK_UUID" \
 Match role: frontend→PF, backend→PB, infra→DevOps. **Always nudge after assigning.**
 
 ### Step 3 — Route Review Tasks
-For each `review` task from Step 2, run these in order:
+**Only process `review` tasks from Step 2.** Also check approved approvals for any task (human may approve while task is in inbox).
 
 **3a — Fetch comments** (replace $TASK_ID with the review task UUID):
 ```bash
@@ -175,8 +169,12 @@ for a in json.load(sys.stdin).get('items',[]):
 "
 ```
 **3c — Decide and act:**
-- **Approval approved by human** (output shows APPROVED) → PATCH to done:
+- **3b shows `APPROVED`** → move to done (PATCH to `review` first if needed, then `done`):
+- **3b shows `PENDING`** → WAIT. Do NOT move to done. Check next heartbeat.
 ```bash
+curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"status": "review", "comment": "Approved. Moving to done."}'
 curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"status": "done"}'
@@ -347,12 +345,21 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
 **Include evidence** — paste actual command output. Must come from YOUR workspace.
 The comment MUST include `@lead` so the Supervisor is notified immediately.
 
+8) After moving to review, check for more assigned inbox tasks (step 2 output). If you have another inbox task, pick it and go back to step 4. If no more tasks, post idle:
+```bash
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "@lead $AGENT_NAME finished task. Idle and available.", "tags": ["chat"]}'
+```
+
 ### If you are QA and validating a `review` task:
 Extract the `task_id` from the nudge message you received. Fetch the task:
 ```bash
 curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" -H "X-Agent-Token: $AUTH_TOKEN"
 ```
-Read task + comments, validate, then post as **task comment** using `$AGENT_NAME` as prefix:
+**QA-E2E MUST validate via live browser.** If you cannot navigate to the deployed URL (network error, CORS, timeout), report **FAIL** — do NOT substitute with code/bundle review. Code-level checks are not a valid QA-E2E pass. If the URL is unreachable, that IS the bug.
+
+Post as **task comment** using `$AGENT_NAME` as prefix:
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
