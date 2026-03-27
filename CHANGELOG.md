@@ -6,6 +6,11 @@ All notable changes to the OpenClaw Mission Control fork.
 
 ### Fixed
 - **Supervisor fake approval guardrail**: Supervisor was posting "Miguel approved. Moving to done." while approval was still PENDING. Added "NEVER approve tasks. Only HUMANS approve. PENDING = WAIT." to lead template.
+- **Board API is truth for ALL agents**: Architect posted "waiting for approval" on tasks done hours ago — relied on stale memory. Added "Board API is source of truth. Check API before posting idle/waiting/blocked" to shared Rules section (all agents).
+- **QA-E2E false PASS from memory**: QA-E2E recycled old validation results instead of re-running Chrome MCP. Added "re-validate EVERY time with fresh session, previous PASS/FAIL is irrelevant."
+- **Chrome MCP enforcement at all levels**: PF must use Chrome MCP before review (was optional). QA-E2E must use Chrome MCP for ALL UI tasks (bundle grep NEVER valid). Supervisor must reject QA PASS without Chrome MCP evidence.
+- **Review chain: Architect before QA**: Supervisor was skipping Architect and routing directly to QA-E2E. Added "route Architect FIRST for code review, then QA" (skip for bugfixes/<3 files).
+- **Supervisor @lead self-tag**: Supervisor was tagging @lead in its own messages. Added "You ARE the lead. Do NOT tag @lead."
 - **Duplicate task creation guard**: Supervisor created 3 identical MIME-fix tasks in 30 seconds. Added "check /tmp/tasks.json before creating" guard.
 - **Orphaned approval flow**: Tasks rejected back to inbox couldn't move to done because API requires `review→done`. Template now PATCHes to `review` first when approval is approved on non-review task.
 - **config.patch overwriting gateway settings** (`provisioning.py`): `_updated_agent_list()` now MERGES heartbeat dict instead of replacing — preserves gateway-only fields (model, name). `DEFAULT_HEARTBEAT_CONFIG.lightContext` changed to `False`.
