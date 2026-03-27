@@ -5,6 +5,7 @@ All notable changes to the OpenClaw Mission Control fork.
 ## 2026-03-27
 
 ### Fixed
+- **Build freeze protocol**: PF kept deploying new builds while QA-E2E was mid-validation, causing double validation on different hashes. Added: worker must not deploy after moving to review (move back to in_progress first); QA must STOP if build hash changes mid-validation.
 - **Supervisor fake approval guardrail**: Supervisor was posting "Miguel approved. Moving to done." while approval was still PENDING. Added "NEVER approve tasks. Only HUMANS approve. PENDING = WAIT." to lead template.
 - **Board API is truth for ALL agents**: Architect posted "waiting for approval" on tasks done hours ago — relied on stale memory. Added "Board API is source of truth. Check API before posting idle/waiting/blocked" to shared Rules section (all agents).
 - **QA-E2E false PASS from memory**: QA-E2E recycled old validation results instead of re-running Chrome MCP. Added "re-validate EVERY time with fresh session, previous PASS/FAIL is irrelevant."
