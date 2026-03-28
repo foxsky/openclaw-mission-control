@@ -951,6 +951,10 @@ class BaseAgentLifecycleManager(ABC):
         agent_id = self._agent_id(agent)
         workspace_path = _workspace_path(agent, self._gateway.workspace_root)
         heartbeat = _heartbeat_config(agent)
+        # Don't send disabled heartbeat values to gateway — it rejects
+        # non-duration strings. Remove "every" so gateway keeps its own value.
+        if _is_disabled_heartbeat_every(heartbeat.get("every")):
+            heartbeat = {k: v for k, v in heartbeat.items() if k != "every"}
         await self._control_plane.upsert_agent(
             GatewayAgentRegistration(
                 agent_id=agent_id,
