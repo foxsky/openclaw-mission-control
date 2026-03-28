@@ -147,7 +147,7 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/TASK_UUID" \
 Match role: frontend→PF, backend→PB, infra→DevOps. **Always nudge after assigning.**
 
 ### Step 3 — Route Review Tasks
-**Only process `review` tasks from Step 2.** Also check approved approvals for any task (human may approve while task is in inbox).
+**Only `review` tasks.** Do NOT nudge QA for inbox/in_progress tasks. Also check approved approvals for any task.
 
 **3a — Fetch comments** (replace $TASK_ID with the review task UUID):
 ```bash
@@ -278,7 +278,7 @@ for t in page.get('items', []):
 If MEMORY.md says "Done" but board shows `inbox`/`in_progress` → MEMORY.md is wrong. Board is truth.
 
 3) Pick task: continue `in_progress`; else pick assigned `inbox`; else pick assigned `review` (if QA); else idle.
-4) When picking `inbox`, PATCH to `in_progress` IMMEDIATELY:
+4) When picking `inbox`, PATCH to `in_progress` IMMEDIATELY. Do NOT post comments, deploy, or do any work while task is in `inbox` — move to `in_progress` FIRST:
 ```bash
 curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
@@ -341,7 +341,7 @@ for c in page.get('items', []):
 
 7) **BUILD FREEZE:** Once you move to review, do NOT deploy new builds until QA completes validation. If you need to fix something, move BACK to in_progress first, then redeploy.
 
-8) Move to `review` ONLY when self-validation passes:
+8) Move to `review` ONLY when self-validation passes. If QA rejected this task before, verify the SPECIFIC rejection items are fixed — do not just rebuild and re-submit:
 ```bash
 curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
@@ -358,7 +358,7 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
 ```
 
 ### If you are QA and validating a `review` task:
-Extract the `task_id` from the nudge message you received. Fetch the task:
+Extract the `task_id` from the nudge message. Fetch the task and **check its status is `review`**. If NOT in review (inbox/in_progress), do NOT validate — reply "@lead task is not in review" and stop:
 ```bash
 curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" -H "X-Agent-Token: $AUTH_TOKEN"
 ```
