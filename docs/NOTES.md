@@ -1,48 +1,45 @@
+- Add reminders to an task, and can see it on the task board, like comments
+- Attach files/docs to tasks
+
+
+ Collapsible toggle: Collapse button works, thin strip with expand button appears, localStorage per board/Kaban Column
 
 
 
-    Based on what I've seen in the investigation, here are the risks:
+  ┌──────┬────────────────────────────────────────────────────────────────────────────┬                                                                          
+  │ Task │                                    File                                    │
+  ├──────┼────────────────────────────────────────────────────────────────────────────┼                                                                          
+  │ T1   │ src/taskflow-db.ts (schema)                                                │          │                                                                           
+  ├──────┼────────────────────────────────────────────────────────────────────────────┼                                                                                                            
+  │ T3   │ src/index.ts (trigger bypass + output routing)                             │  │                                                                             
+  ├──────┼────────────────────────────────────────────────────────────────────────────┼                                                                             
+  │ T4   │ container/agent-runner/src/ipc-mcp-stdio.ts (send_board_chat tool)         │         │                                                                           
+  ├──────┼────────────────────────────────────────────────────────────────────────────                                                                         
+  │ T4   │ container/agent-runner/src/runtime-config.ts (NANOCLAW_ASSISTANT_NAME env) │ 
+                                                                         
+                                 
 
-    Low risk (heartbeats are simple tasks):                                                                                                                                                                                   
-    - Heartbeats just read HEARTBEAT.md, check board status, and report back — this is well within a 27B model's capability
-    - The current fallback to qwen2.5:7b was already handling heartbeats (poorly, but running)                                                                                                                                
-    - qwen3.5:27b is significantly stronger than the 7b that's been running
+  ┌────────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐                            
+  │                File                │                                                      Content                                                       │
+  ├────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤                            
+  │ taskflow-product-roadmap.md        │ 6 phases from auth to SaaS product, priority matrix                                                                │                          
+  ├────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ taskflow-phase1-spec.md            │ Detailed Phase 1 spec: WhatsApp OTP, orgs, board CRUD, member management, API endpoints, DB schema, file structure │                            
+  ├────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤                            
+  │ taskflow-product-pages.md          │ Landing page, login flow, onboarding wizard, settings pages                                                        │                            
+  ├────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤                            
+  │ taskflow-technical-architecture.md │ Current vs target architecture, DB migration path, auth flow diagram, deployment, security                         │                          
+  └────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘                            
+                                                                                                                                                                                       
+  Phase 1 is the foundation — everything else builds on auth + multi-tenancy. The WhatsApp OTP login is the key differentiator: no passwords, users sign in with the same WhatsApp number
+   they already use to talk to the AI assistant.                                                                                                                                       
+                                                                                                                                                                                         
+  Want me to have the Architect review these specs, or start breaking Phase 1 into tasks for the agents?                                                                                 
+  
 
-    Actual risks to watch:
+Review the task: Phase 1A: Schema review — PATCH/DELETE/comments API contract; use Chome MCP if necessary, expected behavior is fully compliance with the task spect  
 
-    1. Instruction following quality — The agents' system prompts and HEARTBEAT.md contain specific instructions. A weaker model might misinterpret them, produce malformed responses, or hallucinate actions. The 27B should
-    handle this well though.
-    2. Token context window — Your agents have contextTokens: 128000 configured, but qwen3.5:27b likely has a 32K-128K context window. The current sessions are running at ~32K input tokens each. Should fit, but worth
-    confirming.
-    3. Concurrent load on the Mac Studio — 9+ sessions hitting Ollama every 60 seconds. The M1 Ultra with 128GB can handle it, but if multiple sessions queue up simultaneously, heartbeat cycles could take longer than 60s
-    and pile up.
-    4. The real risk is zero — Right now 100% of runs are failing anyway (gpt-5.4 rate limited, qwen2.5:7b too weak). A better local model is strictly an improvement over the current state.
-
-    Bottom line: Very low risk. The heartbeat task is simple, qwen3.5:27b is more than capable, and the current situation (everything failing) is worse than any realistic downside.
-
-
-
-      2. When reassignment is impossible, fall back to the waiting reason. Rafael said "atribuir ao Miguel" but Miguel
-   isn't on the board. Instead of asking to register Miguel, use the name in the waiting reason: "Aguardando
-  assinatura do Miguel."
-
-    1. qwen3.5:27b is timing out (status 408, "LLM request timed out") — this is because the model has thinking mode enabled by default, generating 1000+ tokens before responding. The gateway has a request timeout and
-  qwen3.5:27b exceeds it.
-  2. After timeout, it falls back to gpt-5.4 → rate limited → falls back to qwen2.5:32b → and at 22:43 one succeeded.
-
-● They're the same files — stored in tests/ but the manifest expects them in add/. So the real missing files that need to be populated:                                                             
-                                                                                                                                                                                                    
-  ┌───────────────────────┬───────────────────────────────────────────────────────────┬────────────────────────┐                                                                                    
-  │         Skill         │                      What's missing                       │ Source exists in repo? │                                                                               
-  ├───────────────────────┼───────────────────────────────────────────────────────────┼────────────────────────┤                                                                                    
-  │ add-image-vision      │ 4 files in add/plugins/image-vision/                      │ Yes                    │                                                                                  
-  ├───────────────────────┼───────────────────────────────────────────────────────────┼────────────────────────┤                                                                                    
-  │ add-embeddings        │ modify/ directory (3 files)                               │ Yes                    │                                                                                    
-  ├───────────────────────┼───────────────────────────────────────────────────────────┼────────────────────────┤                                                                                    
-  │ add-long-term-context │ 3 test files in add/ (they're in tests/ instead)          │ Yes                    │                                                                                    
-  ├───────────────────────┼───────────────────────────────────────────────────────────┼────────────────────────┤                                                                                    
-  │ add-taskflow          │ 2 files in modify/ (container-runtime.ts, group-queue.ts) │ Yes                    │                                                                                    
-  └───────────────────────┴───────────────────────────────────────────────────────────┴────────────────────────┘                                                                                    
-                                                                                                                                                                                                    
-  The long-term-context one is debatable — the tests are already in the skill, just under tests/ not add/. The others are genuinely missing. Want me to fix the real gaps (image-vision, embeddings,
-   taskflow), or also reorganize the long-term-context tests?
+  │ 18      │ EST-SECTI │ "P15.5 aguardando validação" │ Dropped message — never processed, P15.5 still in next_action                                              │                    
+  ├─────────┼───────────┼──────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────┤                    
+  │ 19      │ EST-SECTI │ "SECI-P15.5"                 │ Dropped message — follow-up never processed                                                                │
+  └─────────┴───────────┴──────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ 

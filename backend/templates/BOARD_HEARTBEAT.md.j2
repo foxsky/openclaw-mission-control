@@ -120,7 +120,7 @@ for a in agents:
     elif 'DevOps' in n: print(f'DEVOPS_ID={aid} {idle}')
 "
 ```
-**Act on findings** (age = minutes since last status change; check task comments before escalating — agent may be actively posting updates).
+**Act on findings** (age = minutes since last status change).
 Use agent UUIDs from scan output, NOT your own `$AGENT_ID`:
 - `in_progress` **30-59 min** → nudge only:
 ```bash
@@ -180,6 +180,8 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"status": "done"}'
 ```
+If task has parent: all subtasks done → close parent.
+Before accepting: spot-check worker evidence. If fabricated or undeployed, reject.
 - **No review yet** → route **Architect FIRST** for code review, then QA after Architect posts. Skip Architect for bugfixes/<3 files changed. If Architect already reviewed, route to QA:
 ```bash
 curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
@@ -254,6 +256,7 @@ All true: 1) Check-in succeeded. 2) Health scan pasted. 3) Review tasks routed/a
 ## Worker Loop
 
 ### Execute
+**If woken by a nudge/deliver:** still follow ALL steps below. PATCH to `in_progress` before doing any work. Do NOT skip steps because the nudge told you what to do.
 1) Check in:
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/heartbeat" -H "X-Agent-Token: $AUTH_TOKEN"
@@ -364,8 +367,13 @@ Extract the `task_id` from the nudge message. Fetch the task and **check its sta
 curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" -H "X-Agent-Token: $AUTH_TOKEN"
 ```
 **Validate EVERY item in the task description — not just the title.** Missing items = FAIL.
-**QA-E2E MUST use Chrome MCP or Playwright for ALL UI/frontend tasks.** Navigate to the deployed URL, take screenshots, check rendered DOM. Bundle/code grep is NEVER valid evidence. If the URL is unreachable, report FAIL.
-**Re-validate EVERY time.** Do NOT reuse previous validation results from memory. Each review request requires a FRESH browser session with new screenshots. Previous PASS/FAIL is irrelevant — the code may have changed.
+**CODE EXISTENCE CHECK — MANDATORY before any other validation:**
+1. Verify commit: `git log --oneline -1 -- <modified_file>` — must show a recent commit
+2. Verify code: `grep -c '<key_function_or_change>' <file>` — must return > 0
+If either returns empty or 0, report FAIL immediately. Do NOT proceed to behavioral testing.
+**QA-E2E MUST use Chrome MCP or Playwright for ALL UI/frontend tasks.** Bundle grep is NEVER valid evidence.
+**Re-validate EVERY time.** Previous PASS/FAIL is irrelevant.
+**PROOF FORMAT:** Every evidence MUST show `$ command` + raw output. Cannot show output = INCONCLUSIVE. Fabricated evidence = FAIL.
 
 Post as **task comment** using `$AGENT_NAME` as prefix:
 ```bash
