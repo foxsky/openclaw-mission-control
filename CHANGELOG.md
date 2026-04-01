@@ -2,6 +2,40 @@
 
 All notable changes to the OpenClaw Mission Control fork.
 
+## 2026-03-31 / 2026-04-01
+
+### Added
+- **Board Chat (T1-T7)**: send/receive messages from board UI. API endpoints, messages.db injection, NanoClaw trigger bypass for `web:` sender, `send_board_chat` MCP tool, React BoardChat (Radix Dialog overlay), WebSocket `chat:new`. E2E verified on production.
+- **Collapsible kanban columns**: per-column toggle with localStorage per board. Empty columns default collapsed.
+- **Team panel improvements**: owner always first, default collapsed, collapsible toggle, per-board localStorage fix.
+- **Hover lift effect**: People panel rows match kanban card hover (translate-y, shadow, border, 150ms transition).
+- **Assignee dedup**: dropdown resolves person IDs to display names, hides test-user.
+- **Scrollbar + background color**: scrollbar at viewport bottom (gap=0), bg-slate-200 tint, gap reduced to 36px.
+- **Inbox + button / People + button**: quick task creation and add person placeholders.
+- **Tailscale proxy CT** (`thales-tailscale`, VMID 111): remote access to 192.168.2.13 via Tailscale.
+- **TaskFlow product roadmap**: 6-phase plan, Phase 1 final spec (reviewed by Codex + Claude Code agent), current capabilities inventory, technical architecture.
+- **Phase 1A API contract**: Architect-reviewed spec for PATCH/DELETE/comments with production-verified schemas (task_history `by`/`at`/`details`, archive `task_snapshot`/`archive_reason`).
+
+### Fixed
+- **Lifecycle orchestrator stuck "updating"**: skip `mark_provision_requested` for disabled-heartbeat agents while allowing file sync.
+- **Config.patch "invalid duration"**: send `0m` (per OpenClaw docs) instead of stripping `every` key for disabled agents. Previous approach left gateway on cached `1h`.
+- **Heartbeat disable**: `0m` is the correct value per docs. Updated MC database, provisioning code, and gateway config. Workers no longer burn tokens hourly.
+- **Task description truncation**: removed `[:500]`/`[:300]` limits. PF never saw item #2 of 1112-char task.
+- **QA evidence fabrication**: QA-Unit reported PASS for T3 with fabricated code — added mandatory code existence check (`git log` + `grep`) and proof format to HEARTBEAT template.
+- **Compaction model**: changed from failing `gpt-5.4` to `ollama/qwen3.5:cloud` (local). Fixed in MC database to survive lifecycle syncs.
+- **Supervisor heartbeat model**: `minimax-m2.5` → `ollama/qwen3.5:cloud` in MC database.
+- **Browser tools**: configured native browser (Chromium 145) + gateway-level Chrome DevTools MCP.
+- **Board Config placement**: investigated original layout (commit 9bc6c6f) — restored `overflow-y-auto` on main content, Board Config below kanban in vertical flow.
+
+### Changed
+- **HEARTBEAT guardrails**: QA code existence check, proof format, Supervisor evidence spot-check, nudge-woken agents must follow all steps, parent task closure.
+- **PF model trial**: Opus 4.6 delivered 3-item feature in 13 min vs Sonnet's 9 failures. Switched back after template fixes.
+- **NanoClaw skill branch rule**: all changes on `skill/taskflow`, never `main`. Documented in Phase 1 plan.
+
+### Investigated
+- **NanoClaw TaskFlow architecture**: engine (7,816 lines, 10 MCP tools), 14 tables, scheduled reports, hierarchy, WhatsApp routing, IPC plugins. Gap is API + frontend, not engine.
+- **Board chat plan**: 4 review rounds. Found: cross-DB write, prompt type mismatch, IPC outbound-only, schema mismatches.
+
 ## 2026-03-29
 
 ### Fixed
