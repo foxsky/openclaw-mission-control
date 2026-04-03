@@ -2,6 +2,27 @@
 
 All notable changes to the OpenClaw Mission Control fork.
 
+## 2026-04-02 (cont.)
+
+### Changed
+- **BOARD_SOUL.md.j2**: Merged Ralph Loop + sessions_spawn ACP delegation into worker template. `soul_template` DB field cleared for workers so template default renders. Supervisor soul_template updated with new Squad Matrix (sessions_spawn workflow).
+- **BOARD_IDENTITY.md.j2**: Added ACP Delegation section. `identity_template` DB field set for all agents with role-specific content + sessions_spawn references.
+- **Supervisor model**: claude-opus-4-6 → claude-sonnet-4-6 (orchestration doesn't need Opus). QA-E2E also switched from Opus to Sonnet.
+- **Agent session resets**: All 7 agents reset to pick up new SOUL.md + IDENTITY.md content.
+
+### Fixed
+- **IDENTITY.md not syncing**: `PRESERVE_AGENT_EDITABLE_FILES` includes IDENTITY.md — template sync never overwrites existing files. Fix: set `identity_template` DB field (override path) and write directly to gateway.
+- **Supervisor SOUL.md stale**: Lead branch of BOARD_SOUL.md.j2 didn't check `directory_role_soul_markdown`. Fixed template to render DB content for leads.
+- **Phase 1C: org_id migration bug**: QA-Unit flagged `boards.org_id` skipped on fresh DB. PB fixed (commit 472314c), 24/24 tests. Approved.
+
+### Security
+- **TEST_OTP env var reverted**: Deployed as QA testing aid but flagged as security backdoor on production. PB reverting through normal pipeline. QA-E2E will read real OTP from IPC files via SSH instead.
+
+### Investigated
+- **Agent ACP usage**: Confirmed agents never used sessions_spawn — coded directly via Bash/Edit. Root cause: SOUL.md had vague "delegate via ACP" with no concrete tool call. Fixed with exact sessions_spawn JSON in templates.
+- **Template sync mechanics**: `identity_template` and `soul_template` DB fields override Jinja templates entirely. IDENTITY.md is in PRESERVE_AGENT_EDITABLE_FILES — sync won't overwrite. Must delete file first or use DB override field.
+- **Ollama heartbeat model**: E2E tested ollama/qwen3.5:cloud — makes correct tool calls. The "read without path" error was transient during gateway restart, not a chronic model issue.
+
 ## 2026-04-02
 
 ### Added
