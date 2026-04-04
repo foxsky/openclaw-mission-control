@@ -85,39 +85,27 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/heartbeat" -H "X-Agent-Token: $AUTH_TO
 curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" -H "X-Agent-Token: $AUTH_TOKEN" -o /tmp/tasks.json
 curl -fsS "$BASE_URL/api/v1/agent/agents?board_id=$BOARD_ID&limit=100" -H "X-Agent-Token: $AUTH_TOKEN" -o /tmp/agents.json
 python3 -c "
-import sys,json
+import json
 from datetime import datetime,timezone
-tasks=json.load(open('/tmp/tasks.json')).get('items',[])
-agents=json.load(open('/tmp/agents.json')).get('items',[])
-agents_by_id={a['id']:a for a in agents if isinstance(a,dict)}
+T=json.load(open('/tmp/tasks.json')).get('items',[])
+A={a['id']:a for a in json.load(open('/tmp/agents.json')).get('items',[]) if isinstance(a,dict)}
 now=datetime.now(timezone.utc)
-for t in tasks:
+for t in T:
     s=t.get('status','')
-    if s not in ('in_progress','review','inbox','done'): continue
-    aid=t.get('assigned_agent_id','unassigned') or 'unassigned'
-    a=agents_by_id.get(aid,{})
-    if s=='done':
-        print(f\"{'done':12}        agent={aid}  {t['title'][:50]}  task_id={t['id']}\")
-        continue
+    if s not in ('in_progress','review','inbox'): continue
+    aid=t.get('assigned_agent_id','') or 'unassigned'
+    a=A.get(aid,{})
     ua=t.get('updated_at') or t.get('created_at','')
-    updated=datetime.fromisoformat(ua.replace('Z','+00:00')) if ua else now
-    age=int((now-updated).total_seconds()/60)
-    blocked='BLOCKED' if t.get('is_blocked') else ''
-    deps=t.get('depends_on_task_ids',[]) or []
-    dep_str=f'deps={deps}' if deps else ''
-    last_seen=a.get('last_seen_at','never')
-    print(f\"{s:12} {age:4}m  agent={aid}  agent_status={a.get('status','?')}  last_seen={last_seen}  {blocked} {dep_str}  {t['title'][:50]}  task_id={t['id']}\")
-# Extract agent IDs by role for Steps 2b/3
-busy={t.get('assigned_agent_id') for t in tasks if t.get('status') in ('in_progress','review')}
-for a in agents:
-    n=a.get('name','')
-    aid=a['id']
-    idle='IDLE' if aid not in busy else 'BUSY'
-    if 'QA-Unit' in n: print(f'QA_UNIT_ID={aid} {idle}')
-    elif 'QA-E2E' in n: print(f'QA_E2E_ID={aid} {idle}')
-    elif 'Frontend' in n: print(f'PF_ID={aid} {idle}')
-    elif 'Backend' in n: print(f'PB_ID={aid} {idle}')
-    elif 'DevOps' in n: print(f'DEVOPS_ID={aid} {idle}')
+    dt=datetime.fromisoformat(ua.replace('Z','+00:00')) if ua else now
+    age=int((now-dt).total_seconds()/60)
+    blk='BLOCKED' if t.get('is_blocked') else ''
+    print(f\"{s:12} {age:4}m  agent={aid}  agent_status={a.get('status','?')}  {blk}  {t['title'][:50]}  id={t['id']}\")
+busy={t.get('assigned_agent_id') for t in T if t.get('status') in ('in_progress','review')}
+for a in json.load(open('/tmp/agents.json')).get('items',[]):
+    n,i=a.get('name',''),a['id']
+    tag='IDLE' if i not in busy else 'BUSY'
+    for k,p in [('QA-Unit','QA_UNIT'),('QA-E2E','QA_E2E'),('Frontend','PF'),('Backend','PB'),('DevOps','DEVOPS')]:
+        if k in n: print(f'{p}_ID={i} {tag}')
 "
 ```
 **Act on findings** (age = minutes since last status change).
@@ -273,16 +261,11 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/heartbeat" -H "X-Agent-Token: $AUTH_TO
 curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks?assigned_agent_id=$AGENT_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
 import sys,json
-page=json.load(sys.stdin)
-for t in page.get('items', []):
-    if t.get('status') in ('inbox','in_progress','review'):
-        print(f\"TASK_ID: {t['id']}\")
-        print(f\"Title: {t.get('title','')}\")
-        print(f\"Status: {t.get('status','')}\")
-        print(f\"Blocked: {t.get('is_blocked',False)}\")
-        print(f\"Deps: {t.get('depends_on_task_ids',[])}\")
-        print(f\"Description: {(t.get('description','') or '')}\")
-        print('---')
+for t in json.load(sys.stdin).get('items',[]):
+    s=t.get('status','')
+    if s in ('inbox','in_progress','review'):
+        print(f\"{t['id']} {s} blocked={t.get('is_blocked',False)} {t.get('title','')}\")
+        if t.get('description'): print(f\"  desc: {t['description'][:200]}\")
 "
 ```
 If MEMORY.md says "Done" but board shows `inbox`/`in_progress` → MEMORY.md is wrong. Board is truth.
@@ -305,19 +288,9 @@ for c in page.get('items', []):
     print('---')
 "
 ```
-   - If `is_blocked=True` in task JSON → dependencies not done. Post blocker and wait:
-   ```bash
-   curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" \
-     -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-     -d '{"message": "Blocked — waiting on dependency. @lead"}'
-   ```
-   - If no spec or requirements in description/comments → ask before coding:
-   ```bash
-   curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" \
-     -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-     -d '{"message": "@lead No spec found. What should I implement?"}'
-   ```
-   Do NOT guess or improvise without requirements.
+   - If `is_blocked=True` → post comment `"Blocked — waiting on dependency. @lead"` and wait.
+   - If no spec in description/comments → post `"@lead No spec found. What should I implement?"` and stop. Do NOT guess.
+   Post comments via: `curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" -d '{"message": "TEXT"}'`
 
 6) **Execute your workflow.** Run through ALL states in one session:
    **PLANNING:** Activate skills (see IDENTITY.md). Read task + specs + Architect comments if present. Write plan to MEMORY.md. If HIGH/MEDIUM new-feature and Architect spec is missing, ask `@lead`.

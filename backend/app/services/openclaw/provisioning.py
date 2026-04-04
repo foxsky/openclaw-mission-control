@@ -790,7 +790,9 @@ def _updated_agent_list(
         new_entry = dict(raw_entry)
         new_entry["workspace"] = workspace_path
         if heartbeat_changed:
-            # Merge: preserve gateway-only fields (model, name) that MC doesn't manage.
+            # Merge: start from existing gateway config, then apply MC values.
+            # Gateway-only fields (model, ackMaxChars, prompt) are preserved
+            # because _heartbeat_config() only returns MC-managed fields.
             existing_hb = raw_entry.get("heartbeat") or {}
             merged_hb = dict(existing_hb)
             merged_hb.update(heartbeat)

@@ -15,9 +15,12 @@ DEFAULT_HEARTBEAT_CONFIG: dict[str, Any] = {
     "every": "10m",
     "target": "last",
     "includeReasoning": False,
-    "lightContext": False,
+    "lightContext": True,
     "isolatedSession": True,
 }
+# Note: gateway-only fields (model, ackMaxChars, prompt) are not included
+# here. They are preserved during config.patch merges because the merge
+# starts from the existing gateway config and only overwrites MC-managed keys.
 
 # Worker heartbeats disabled (0m) — workers wake via deliver=True only.
 # Supervisor heartbeat is 10m. OFFLINE_AFTER must exceed Supervisor interval + grace.
