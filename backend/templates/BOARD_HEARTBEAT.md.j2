@@ -146,6 +146,13 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/TASK_UUID" \
 ```
 Match role: frontend→PF, backend→PB, infra→DevOps. **Always nudge after assigning.**
 
+**Also check ASSIGNED inbox tasks:** If a task is `inbox` AND has an `assigned_agent_id` but has been in inbox for 10+ min, the agent didn't pick it up. **Nudge the agent** with the specific task ID:
+```bash
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/AGENT_UUID/nudge" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"message": "You have inbox task TASK_TITLE (TASK_UUID). Move to in_progress and start working."}'
+```
+
 ### Step 3 — Route Review Tasks
 **Only `review` tasks.** Do NOT nudge QA for inbox/in_progress tasks. Also check approved approvals for any task.
 
@@ -350,6 +357,7 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
 ```
 **Include evidence** — paste actual command output. Must come from YOUR workspace.
 **Include the build hash** (e.g. `index-ABC123.js`) so QA can verify the exact build.
+**If this task was previously REJECTED:** You MUST show a NEW commit with actual code changes that address the rejection. You CANNOT re-submit with "PASS by design" or "no changes needed". Fabricating evidence or claiming completion without real changes is a critical violation.
 The comment MUST include `@lead` so the Supervisor is notified immediately.
 **THEN nudge the Supervisor** so it routes to Architect/QA without waiting for the next heartbeat:
 ```bash
