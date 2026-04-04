@@ -35,6 +35,8 @@ Review the tasks waiting for approval, use Chome MCP if necessary, the expected 
  ❯ Run an E2E live test using .13 ollama model qwen3.5:35b-a3b-coding-nvfp4 and compare against the qwen3-coder:latest 
 
 
+List the heartbeat times
+
 QA-E2E
 ·
 E2E QA - Playwright Browser Testing
@@ -58,3 +60,14 @@ QA-E2E
 ·
 Apr 4, 01:21 PM
 @lead QA validation posted for task 49d03d2f-4e6d-4675-978c-d545634aed63.
+
+
+                                                                                                                                                                              
+  ❯ Are there any bug in the Supervisor heartbeat? 
+
+   Work on Phase 1D: Profile page + Board CRUD UI (frontend) task                                                                                                                                                                   
+ Why some simple tasks are going and back all the time?
+
+ ⏺ The auth calls authApi.getMe() which hits GET /auth/me. The JWT cookie approach should work — the issue might be that getMe is using Authorization: Bearer from localStorage, not the cookie. Let me check:
+
+ This is frontend-only work — the backend APIs are ready. Want me to implement the API wiring, or should PF handle it since the task is assigned to them?
