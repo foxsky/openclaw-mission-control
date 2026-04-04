@@ -33,3 +33,28 @@ Review the tasks waiting for approval, use Chome MCP if necessary, the expected 
   Investigate why the agents aren't nudging each other as instructed 
 
  ❯ Run an E2E live test using .13 ollama model qwen3.5:35b-a3b-coding-nvfp4 and compare against the qwen3-coder:latest 
+
+
+QA-E2E
+·
+E2E QA - Playwright Browser Testing
+·
+Apr 4, 01:20 PM
+QA-E2E validation
+
+FAIL — fresh live browser validation on current deployment
+
+Rubric
+Dimension	Score	Notes
+Spec Fidelity	4/10	Header OrgSwitcher not visible; create-org entrypoint absent; settings page still missing required rendered controls ...
+
+QA-E2E
+·
+Apr 4, 01:20 PM
+@lead QA validation posted for task 49d03d2f-4e6d-4675-978c-d545634aed63.
+
+
+QA-E2E
+·
+Apr 4, 01:21 PM
+@lead QA validation posted for task 49d03d2f-4e6d-4675-978c-d545634aed63.
