@@ -254,10 +254,11 @@ All true: 1) Check-in succeeded. 2) Health scan pasted. 3) Review tasks routed/a
 ## Worker Loop
 
 ### Execute
-**If woken by a nudge/deliver:** still follow ALL steps below. PATCH to `in_progress` before doing any work. Do NOT skip steps because the nudge told you what to do.
-1) Check in:
+**If woken by nudge:** still follow ALL steps. PATCH to `in_progress` before any work.
+1) Check in + resolve Supervisor ID:
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/heartbeat" -H "X-Agent-Token: $AUTH_TOKEN"
+LEAD_ID=$(curl -fsS "$BASE_URL/api/v1/agent/agents?board_id=$BOARD_ID" -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "import sys,json;[print(a['id']) for a in json.load(sys.stdin).get('items',[]) if 'Supervisor' in a.get('name','')]")
 ```
 2) Fetch your tasks:
 ```bash
@@ -337,11 +338,11 @@ curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
 The comment MUST include `@lead` so the Supervisor is notified immediately.
 **THEN nudge the Supervisor** so it routes to Architect/QA without waiting for the next heartbeat:
 ```bash
-curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/LEAD_AGENT_UUID/nudge" \
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$LEAD_ID/nudge" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"message": "Task $TASK_ID moved to review. Route to Architect then QA. @lead"}'
 ```
-Replace `LEAD_AGENT_UUID` with the Supervisor agent UUID from Step 2 health scan output.
+`$LEAD_ID` from Step 1.
 
 8) After moving to review, check for more assigned inbox tasks (step 2 output). If you have another inbox task, pick it and go back to step 4. If no more tasks, post idle:
 ```bash
@@ -372,7 +373,7 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/commen
 ```
 **THEN nudge the Supervisor** so it processes the result immediately:
 ```bash
-curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/LEAD_AGENT_UUID/nudge" \
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/$LEAD_ID/nudge" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"message": "QA validation posted for task $TASK_ID. @lead"}'
 ```
