@@ -342,7 +342,7 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
   -d '{"content": "@lead Task $TASK_ID moved to review. Route to Architect then QA.", "tags": ["chat"]}'
 ```
 
-8) After moving to review, check for more assigned inbox tasks (step 2 output). If you have another inbox task, pick it and go back to step 4. If no more tasks, post idle:
+9) After moving to review, check for more assigned inbox tasks (step 2 output). If you have another inbox task, pick it and go back to step 4. If no more tasks, post idle:
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
