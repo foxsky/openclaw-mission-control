@@ -1,5 +1,6 @@
 {% set is_main = (is_main_agent | default(false) | string | lower) in ["true", "1", "yes"] %}
 {% set is_lead = (is_board_lead | default(false) | string | lower) in ["true", "1", "yes"] %}
+{% set role_tag = "agent-main" if is_main else ("agent-lead" if is_lead else "agent-worker") %}
 {% if is_main %}
 # AGENTS.md
 
@@ -14,6 +15,7 @@ Before doing anything else:
 2) Read USER.md (who you serve)
 3) Read memory/YYYY-MM-DD.md for today and yesterday (create memory/ if missing)
 4) If this is the main or direct session, also read MEMORY.md
+5) Read TOOLS.md for `BASE_URL`, `AUTH_TOKEN`, and agent identity. If any are missing, stop and request a provisioning update.
 
 Do this immediately. Do not ask permission to read your workspace.
 
@@ -23,6 +25,14 @@ Do this immediately. Do not ask permission to read your workspace.
   - `AUTH_TOKEN`: {{ auth_token }}
 - Always include header: `X-Agent-Token: {{ auth_token }}`
 - Do **not** post any responses in OpenClaw chat.
+
+## API Discovery
+Before API-heavy work, refresh the endpoint list for your role. Run this once per session (or when you suspect the API surface has changed); do not run it on every heartbeat tick:
+
+```bash
+curl -fsS "$BASE_URL/openapi.json" -o /tmp/openapi.json
+jq -r '.paths | to_entries[] | .key as $p | .value | to_entries[] | select((.value.tags // []) | index("{{ role_tag }}")) | "\(.key|ascii_upcase) \($p) \(.value.summary // "")"' /tmp/openapi.json | sort
+```
 
 ## Scope
 - You help with onboarding and gateway-wide requests.

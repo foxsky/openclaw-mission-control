@@ -4,43 +4,27 @@
 {% if is_main %}
 # HEARTBEAT.md
 
-## Purpose
-Main agent heartbeat. You are not tied to any board.
+Main agent heartbeat. Scope, communication rules, mission-control API,
+outreach protocol, API discovery, and memory consolidation playbook all
+live in `AGENTS.md` — this file is only the per-tick checklist.
 
-## Setup
-Read `TOOLS.md` for `BASE_URL`, `AUTH_TOKEN`, and agent identity before proceeding. If any are missing, stop and request a provisioning update.
+## This Heartbeat
+1. **Check in.** `POST $BASE_URL/api/v1/agent/heartbeat` with header `X-Agent-Token: $AUTH_TOKEN`. If this fails (5xx or network), stop — do not write memory updates until the next successful check-in.
+2. **Handle pending `LEAD REQUEST: ASK USER`** per `AGENTS.md § User outreach requests` if any arrived since the last tick.
+3. **Return `HEARTBEAT_OK`** only when all three are true:
+   - Check-in succeeded (step 1 returned 2xx).
+   - Any pending high-priority gateway-main duty was handled.
+   - No outage rule was violated.
+   Do **not** return `HEARTBEAT_OK` if check-in failed.
 
-## API Discovery
-Before API-heavy work, refresh endpoints:
+On the first cycle after wake/bootstrap, run the check-in immediately. Do
+not claim or move board tasks unless explicitly instructed (see
+`AGENTS.md § Scope`).
 
-```bash
-curl -fsS "$BASE_URL/openapi.json" -o /tmp/openapi.json
-jq -r '.paths | to_entries[] | .key as $p | .value | to_entries[] | select((.value.tags // []) | index("{{ role_tag }}")) | "\(.key|ascii_upcase) \($p) \(.value.summary // "")"' /tmp/openapi.json | sort
-```
-
-## Protocol
-- All outputs go to Mission Control via HTTP.
-- Always include: `X-Agent-Token: $AUTH_TOKEN`
-
-## Schedule
-- On first cycle after wake/bootstrap, check in immediately.
-- Do not claim or move board tasks unless explicitly instructed.
-- Handle any pending `LEAD REQUEST: ASK USER` messages promptly (see AGENTS.md).
-
-## Heartbeat Checklist
-1) Check in: `POST $BASE_URL/api/v1/agent/heartbeat` with header `X-Agent-Token: $AUTH_TOKEN`.
-2) If check-in fails (5xx/network), stop. Do **not** write memory updates until next successful check-in.
-
-## Memory Maintenance
-Do not perform memory maintenance every heartbeat. Only do it when explicitly instructed, idle for more than 1 hour, or when there is clear net-new durable information to preserve.
-
-## When to Say HEARTBEAT_OK
-Say `HEARTBEAT_OK` only when:
-1) Heartbeat check-in succeeded.
-2) Any pending high-priority gateway-main duty was handled.
-3) No outage rule was violated.
-
-Do **not** say `HEARTBEAT_OK` if check-in failed.
+Do not perform memory maintenance every heartbeat — only when explicitly
+instructed, idle for more than 1 hour, or when there is clear net-new
+durable information to preserve. The full consolidation playbook is in
+`AGENTS.md § Consolidation`.
 {% else %}
 # HEARTBEAT.md
 
