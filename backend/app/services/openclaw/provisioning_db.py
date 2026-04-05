@@ -1944,6 +1944,21 @@ class AgentLifecycleService(OpenClawDBService):
                 raise ValueError("skip main agent cleanup notification")
             main_session = GatewayAgentIdentity.session_key(gateway)
             if main_session and workspace_path:
+                # Use a cleanup-specific acknowledgement token
+                # (``CLEANUP_DONE``) rather than the generic ``NO_REPLY``
+                # shortcut. Reasoning: ``NO_REPLY`` is also used by LCM
+                # memory-flush compaction (see
+                # ``docs/openclaw_baseline_config.md``) and by the
+                # previous wake-text implementation. Storing
+                # ``NO_REPLY`` in this session's history risks
+                # contaminating LCM relevant-memory retrieval for
+                # heartbeat/wake paths on other agents, where the wake
+                # text now explicitly forbids ``NO_REPLY`` as a valid
+                # response. ``CLEANUP_DONE`` is unambiguous and will
+                # never be pattern-matched with a heartbeat shortcut.
+                # The reply itself is ignored (``deliver=False``); the
+                # token only exists so the model has a concise way to
+                # signal completion without narrating the cleanup.
                 cleanup_message = (
                     "Cleanup request for deleted agent.\n\n"
                     f"Agent name: {agent.name}\n"
@@ -1951,7 +1966,10 @@ class AgentLifecycleService(OpenClawDBService):
                     f"Workspace path: {workspace_path}\n\n"
                     "Actions:\n"
                     "1) Remove the workspace directory.\n"
-                    "2) Reply NO_REPLY.\n"
+                    "2) When removal is complete, reply with the single "
+                    "token CLEANUP_DONE. Do not use NO_REPLY — that "
+                    "token is reserved for other flows in Mission "
+                    "Control and must not appear in this session.\n"
                 )
                 await ensure_session(main_session, config=client_config, label="Gateway Agent")
                 await send_message(

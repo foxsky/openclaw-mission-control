@@ -6,6 +6,7 @@ duplicate provisioning/wake/state logic.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -39,6 +40,42 @@ if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
     from app.models.users import User
+
+
+def should_consume_wake_strike(
+    *,
+    prev_wake_attempts: int,
+    prev_checkin_deadline_at: datetime | None,
+    now: datetime,
+) -> bool:
+    """Return True when the next wake should consume a strike against the
+    ``wake_attempts`` retry budget.
+
+    A strike is consumed when either:
+
+    1. This is the first wake in a fresh escalation cycle
+       (``prev_wake_attempts == 0``). The first wake has to count —
+       otherwise the first sweep retry would never progress the counter.
+    2. The previous wake's check-in deadline has already elapsed
+       (``now >= prev_checkin_deadline_at``) without a successful
+       ``commit_heartbeat()`` call having reset the counter back to 0.
+
+    A strike is *not* consumed when the previous wake is still within its
+    grace window, because that wake has not yet had the chance to be
+    answered. This protects explicit admin/coordination recovery wakes
+    from double-charging the retry budget against an idle agent that was
+    on track to check in anyway.
+
+    Defensively: if ``prev_wake_attempts > 0`` but the deadline is
+    ``None`` we charge the strike, because we cannot prove the previous
+    wake is still live and the safer failure mode is to count it.
+    """
+
+    if prev_wake_attempts == 0:
+        return True
+    if prev_checkin_deadline_at is None:
+        return True
+    return now >= prev_checkin_deadline_at
 
 
 class AgentLifecycleOrchestrator(OpenClawDBService):
@@ -154,10 +191,13 @@ class AgentLifecycleOrchestrator(OpenClawDBService):
             )
         locked.lifecycle_generation += 1
         locked.last_provision_error = None
-        locked.checkin_deadline_at = utcnow() + CHECKIN_DEADLINE_AFTER_WAKE if wake else None
-        if wake:
-            locked.wake_attempts += 1
-            locked.last_wake_sent_at = utcnow()
+        # Note: we deliberately do NOT touch wake_attempts,
+        # last_wake_sent_at, or checkin_deadline_at before the gateway
+        # call. Those fields describe the *outcome* of a wake and must
+        # only be mutated after apply_agent_lifecycle confirms the wake
+        # was actually delivered — otherwise a skipped wake (e.g.
+        # credentials not visible) would record as if it had happened
+        # and drift the agent toward the permanent-offline dead state.
         self.session.add(locked)
         await self.session.flush()
 
@@ -167,7 +207,7 @@ class AgentLifecycleOrchestrator(OpenClawDBService):
             return locked
 
         try:
-            await OpenClawGatewayProvisioner().apply_agent_lifecycle(
+            lifecycle_result = await OpenClawGatewayProvisioner().apply_agent_lifecycle(
                 agent=locked,
                 gateway=gateway,
                 board=board,
@@ -205,17 +245,62 @@ class AgentLifecycleOrchestrator(OpenClawDBService):
                 ) from exc
             return locked
 
-        mark_provision_complete(
-            locked,
-            status="online",
-            clear_confirm_token=clear_confirm_token,
-        )
-        locked.last_provision_error = None
-        locked.checkin_deadline_at = utcnow() + CHECKIN_DEADLINE_AFTER_WAKE if wake else None
+        # Branch on the wake-delivery outcome. Only a genuinely-delivered
+        # wake should consume a strike, set a check-in deadline, flip the
+        # agent online, and enqueue the reconcile task. A skipped wake
+        # (credentials not visible) must leave wake-state fields alone
+        # and surface the skip via last_provision_error so the next
+        # externally-triggered lifecycle invocation (admin recover, task
+        # assignment, manual sync) retries from a clean slate.
+        now = utcnow()
+        wake_was_delivered = wake and lifecycle_result.wake_delivered
+
+        if wake_was_delivered:
+            if should_consume_wake_strike(
+                prev_wake_attempts=locked.wake_attempts,
+                prev_checkin_deadline_at=locked.checkin_deadline_at,
+                now=now,
+            ):
+                locked.wake_attempts += 1
+            locked.last_wake_sent_at = now
+            locked.checkin_deadline_at = now + CHECKIN_DEADLINE_AFTER_WAKE
+            mark_provision_complete(
+                locked,
+                status="online",
+                clear_confirm_token=clear_confirm_token,
+            )
+            locked.last_provision_error = None
+        elif wake and not lifecycle_result.wake_delivered:
+            # Wake was requested but skipped. Do not mutate wake_attempts
+            # or last_wake_sent_at — no wake happened. Do not mark the
+            # agent online — the gateway could not answer the wake. Do
+            # not set a check-in deadline — we do not want the sweep to
+            # re-enter a dead-end retry cycle for a condition that will
+            # not resolve without external action. Surface the reason on
+            # last_provision_error so operators can see why the wake was
+            # skipped. The agent's provision_requested_at/status left by
+            # mark_provision_requested will be cleared by the next
+            # successful lifecycle invocation.
+            locked.checkin_deadline_at = None
+            locked.last_provision_error = (
+                "Wake skipped: "
+                f"{lifecycle_result.wake_skip_reason or 'unknown reason'}"
+            )
+            locked.updated_at = now
+        else:
+            # wake=False path — non-wake lifecycle finished cleanly.
+            mark_provision_complete(
+                locked,
+                status="online",
+                clear_confirm_token=clear_confirm_token,
+            )
+            locked.last_provision_error = None
+            locked.checkin_deadline_at = None
+
         self.session.add(locked)
         await self.session.commit()
         await self.session.refresh(locked)
-        if wake and locked.checkin_deadline_at is not None:
+        if wake_was_delivered and locked.checkin_deadline_at is not None:
             enqueue_lifecycle_reconcile(
                 QueuedAgentLifecycleReconcile(
                     agent_id=locked.id,

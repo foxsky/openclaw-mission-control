@@ -12,9 +12,12 @@ import pytest
 from fastapi import HTTPException, status
 
 import app.services.openclaw.coordination_service as coordination_lifecycle
+import app.services.openclaw.lifecycle_orchestrator as lifecycle_orchestrator_module
 import app.services.openclaw.onboarding_service as onboarding_lifecycle
+import app.services.openclaw.provisioning as provisioning_module
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
+from app.services.openclaw.provisioning import LifecycleResult
 from app.services.openclaw.shared import GatewayAgentIdentity
 
 
@@ -270,3 +273,320 @@ async def test_board_onboarding_dispatch_answer_maps_timeout_error(
 
     assert exc_info.value.status_code == status.HTTP_502_BAD_GATEWAY
     assert "Gateway onboarding answer dispatch failed:" in str(exc_info.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# run_lifecycle wake-skipped contract
+# ---------------------------------------------------------------------------
+
+
+def _make_orchestrator_stub_agent() -> SimpleNamespace:
+    """Build an in-memory Agent stub with every field ``run_lifecycle``
+    touches on the happy path plus the skipped-wake branch.
+    """
+
+    return SimpleNamespace(
+        id=uuid4(),
+        name="Programmer-Backend",
+        openclaw_session_id="agent:mc-pb:main",
+        board_id=uuid4(),
+        gateway_id=uuid4(),
+        is_board_lead=False,
+        status="online",
+        wake_attempts=0,
+        last_wake_sent_at=None,
+        checkin_deadline_at=None,
+        last_provision_error=None,
+        lifecycle_generation=5,
+        agent_token_hash=None,  # forces mint_agent_token — simpler than the TOOLS.md read path
+        provision_requested_at=None,
+        provision_action=None,
+        provision_confirm_token_hash=None,
+        heartbeat_config={"every": "15m"},
+        updated_at=None,
+    )
+
+
+class _OrchestratorFakeSession:
+    """Fake AsyncSession sufficient for AgentLifecycleOrchestrator.run_lifecycle."""
+
+    def __init__(self) -> None:
+        self.committed = 0
+        self.flushed = 0
+        self.refreshed: list[object] = []
+        self.added: list[object] = []
+
+    def add(self, obj: object) -> None:
+        self.added.append(obj)
+
+    async def commit(self) -> None:
+        self.committed += 1
+
+    async def flush(self) -> None:
+        self.flushed += 1
+
+    async def refresh(self, obj: object) -> None:
+        self.refreshed.append(obj)
+
+
+@pytest.mark.asyncio
+async def test_run_lifecycle_skipped_wake_does_not_mark_online_or_strike_or_enqueue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HIGH-PRIORITY regression: when the provisioner returns
+    ``LifecycleResult(wake_delivered=False)`` because credentials are
+    not visible on the gateway, the orchestrator MUST NOT mark the
+    agent online, MUST NOT increment ``wake_attempts``, MUST NOT arm a
+    ``checkin_deadline_at``, and MUST NOT enqueue a follow-up reconcile.
+    It must record the skip reason on ``last_provision_error``.
+
+    Previously the orchestrator incremented ``wake_attempts`` BEFORE the
+    gateway call and then unconditionally finalized as online on the
+    success path — so a skipped wake was recorded exactly like a real
+    wake and the agent drifted into the permanent-offline dead state
+    after three skips. The fix is that wake-state mutations only happen
+    when ``LifecycleResult.wake_delivered`` is True.
+    """
+
+    agent = _make_orchestrator_stub_agent()
+    agent.agent_token_hash = "existing"  # avoid the mint path on update
+
+    board = SimpleNamespace(
+        id=agent.board_id,
+        gateway_id=agent.gateway_id,
+        name="Dev Squad",
+    )
+    gateway = SimpleNamespace(
+        id=agent.gateway_id,
+        url="ws://gw.example/ws",
+        token=None,
+        workspace_root="/tmp/openclaw",
+        organization_id=uuid4(),
+        allow_insecure_tls=False,
+        disable_device_pairing=False,
+    )
+
+    # Bypass the DB SELECT ... FOR UPDATE by returning our stub directly.
+    async def _fake_lock_agent(self, *, agent_id):
+        return agent
+
+    monkeypatch.setattr(
+        lifecycle_orchestrator_module.AgentLifecycleOrchestrator,
+        "_lock_agent",
+        _fake_lock_agent,
+    )
+
+    # Agent already has agent_token_hash set, so run_lifecycle takes the
+    # TOOLS.md re-read path. Stub that helper to return a valid token so
+    # we reach apply_agent_lifecycle.
+    async def _fake_get_existing_auth_token(*, agent_gateway_id, control_plane):
+        return "existing-raw-token"
+
+    import app.services.openclaw.provisioning_db as provisioning_db_module
+
+    monkeypatch.setattr(
+        provisioning_db_module,
+        "_get_existing_auth_token",
+        _fake_get_existing_auth_token,
+    )
+
+    # The token verification step calls hash_agent_token / verify_agent_token.
+    # Make verify_agent_token always return True so we don't rehash the DB.
+    import app.core.agent_tokens as agent_tokens_module
+
+    monkeypatch.setattr(agent_tokens_module, "verify_agent_token", lambda raw, hashed: True)
+
+    # Optional gateway client config must return a truthy value so the
+    # orchestrator actually invokes _get_existing_auth_token.
+    import app.services.openclaw.gateway_resolver as gateway_resolver_module
+
+    monkeypatch.setattr(
+        gateway_resolver_module,
+        "optional_gateway_client_config",
+        lambda gw: GatewayClientConfig(url="ws://gw.example/ws", token=None),
+    )
+
+    # The critical mock: apply_agent_lifecycle returns wake_delivered=False.
+    async def _fake_apply_agent_lifecycle(self, **kwargs):
+        return LifecycleResult(
+            wake_delivered=False,
+            wake_skip_reason="credentials_not_visible",
+        )
+
+    monkeypatch.setattr(
+        provisioning_module.OpenClawGatewayProvisioner,
+        "apply_agent_lifecycle",
+        _fake_apply_agent_lifecycle,
+    )
+
+    # Record any reconcile enqueue calls so we can assert there are none.
+    enqueued: list[object] = []
+
+    def _fake_enqueue(task):
+        enqueued.append(task)
+
+    monkeypatch.setattr(
+        lifecycle_orchestrator_module,
+        "enqueue_lifecycle_reconcile",
+        _fake_enqueue,
+    )
+
+    orchestrator = lifecycle_orchestrator_module.AgentLifecycleOrchestrator(
+        _OrchestratorFakeSession(),  # type: ignore[arg-type]
+    )
+
+    initial_wake_attempts = agent.wake_attempts
+    initial_last_wake_sent_at = agent.last_wake_sent_at
+
+    result_agent = await orchestrator.run_lifecycle(
+        gateway=gateway,  # type: ignore[arg-type]
+        agent_id=agent.id,
+        board=board,  # type: ignore[arg-type]
+        user=None,
+        action="update",
+        wake=True,
+        wakeup_verb="updated",
+    )
+
+    # --- CRITICAL ASSERTIONS ON THE SKIPPED-WAKE CONTRACT ---
+
+    assert result_agent is agent
+    assert agent.wake_attempts == initial_wake_attempts, (
+        "wake_attempts MUST NOT be incremented when the wake was skipped; "
+        f"was {initial_wake_attempts}, became {agent.wake_attempts}"
+    )
+    assert agent.last_wake_sent_at == initial_last_wake_sent_at, (
+        "last_wake_sent_at MUST NOT be set when no wake was sent"
+    )
+    assert agent.checkin_deadline_at is None, (
+        "checkin_deadline_at MUST be None on skip — otherwise the sweep "
+        "would schedule a missed-checkin reconcile for a wake that "
+        "never happened"
+    )
+    assert agent.status != "online", (
+        f"agent MUST NOT be marked online when the wake was skipped; "
+        f"status is {agent.status!r}"
+    )
+    assert agent.last_provision_error is not None, (
+        "last_provision_error must describe why the wake was skipped"
+    )
+    assert "skip" in agent.last_provision_error.lower() or (
+        "credential" in agent.last_provision_error.lower()
+    ), f"skip reason should mention credentials/skip; got {agent.last_provision_error!r}"
+    assert enqueued == [], (
+        "no reconcile task should be enqueued for a skipped wake; got "
+        f"{enqueued!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_lifecycle_delivered_wake_consumes_strike_and_enqueues_reconcile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Positive-path mirror: when the provisioner confirms the wake was
+    actually delivered, the orchestrator MUST consume a strike (first
+    wake in cycle → 0→1), arm a check-in deadline, mark the agent
+    online, and enqueue a reconcile for the new deadline. This test
+    guards against a regression where the skip-path fix accidentally
+    suppresses the normal wake state transitions.
+    """
+
+    agent = _make_orchestrator_stub_agent()
+    agent.agent_token_hash = "existing"
+    agent.status = "online"
+    agent.wake_attempts = 0
+    agent.checkin_deadline_at = None
+
+    board = SimpleNamespace(
+        id=agent.board_id,
+        gateway_id=agent.gateway_id,
+        name="Dev Squad",
+    )
+    gateway = SimpleNamespace(
+        id=agent.gateway_id,
+        url="ws://gw.example/ws",
+        token=None,
+        workspace_root="/tmp/openclaw",
+        organization_id=uuid4(),
+        allow_insecure_tls=False,
+        disable_device_pairing=False,
+    )
+
+    async def _fake_lock_agent(self, *, agent_id):
+        return agent
+
+    monkeypatch.setattr(
+        lifecycle_orchestrator_module.AgentLifecycleOrchestrator,
+        "_lock_agent",
+        _fake_lock_agent,
+    )
+
+    async def _fake_get_existing_auth_token(*, agent_gateway_id, control_plane):
+        return "existing-raw-token"
+
+    import app.services.openclaw.provisioning_db as provisioning_db_module
+
+    monkeypatch.setattr(
+        provisioning_db_module,
+        "_get_existing_auth_token",
+        _fake_get_existing_auth_token,
+    )
+
+    import app.core.agent_tokens as agent_tokens_module
+
+    monkeypatch.setattr(agent_tokens_module, "verify_agent_token", lambda raw, hashed: True)
+
+    import app.services.openclaw.gateway_resolver as gateway_resolver_module
+
+    monkeypatch.setattr(
+        gateway_resolver_module,
+        "optional_gateway_client_config",
+        lambda gw: GatewayClientConfig(url="ws://gw.example/ws", token=None),
+    )
+
+    async def _fake_apply_agent_lifecycle(self, **kwargs):
+        return LifecycleResult(wake_delivered=True, wake_skip_reason=None)
+
+    monkeypatch.setattr(
+        provisioning_module.OpenClawGatewayProvisioner,
+        "apply_agent_lifecycle",
+        _fake_apply_agent_lifecycle,
+    )
+
+    enqueued: list[object] = []
+
+    def _fake_enqueue(task):
+        enqueued.append(task)
+
+    monkeypatch.setattr(
+        lifecycle_orchestrator_module,
+        "enqueue_lifecycle_reconcile",
+        _fake_enqueue,
+    )
+
+    orchestrator = lifecycle_orchestrator_module.AgentLifecycleOrchestrator(
+        _OrchestratorFakeSession(),  # type: ignore[arg-type]
+    )
+
+    await orchestrator.run_lifecycle(
+        gateway=gateway,  # type: ignore[arg-type]
+        agent_id=agent.id,
+        board=board,  # type: ignore[arg-type]
+        user=None,
+        action="update",
+        wake=True,
+        wakeup_verb="updated",
+    )
+
+    assert agent.wake_attempts == 1, (
+        "first wake in a fresh cycle must consume a strike"
+    )
+    assert agent.last_wake_sent_at is not None, "last_wake_sent_at must be set"
+    assert agent.checkin_deadline_at is not None, (
+        "a delivered wake must arm a check-in deadline"
+    )
+    assert agent.status == "online"
+    assert agent.last_provision_error is None
+    assert len(enqueued) == 1, (
+        f"exactly one reconcile task should be enqueued; got {len(enqueued)}"
+    )

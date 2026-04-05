@@ -68,6 +68,31 @@ class ProvisionOptions:
     overwrite: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class LifecycleResult:
+    """Outcome of ``OpenClawGatewayProvisioner.apply_agent_lifecycle``.
+
+    ``wake_delivered`` is True only when a wake message was actually sent
+    to the agent's gateway session. It is False when either:
+
+    - The caller passed ``wake=False`` (no wake was requested).
+    - The wake was requested but was deliberately skipped because the
+      agent's credential files (``BOOTSTRAP.md`` / ``TOOLS.md``) were not
+      visible on the gateway side, so the wake could not be answered.
+
+    Callers such as
+    :class:`app.services.openclaw.lifecycle_orchestrator.AgentLifecycleOrchestrator`
+    use this value to decide whether to consume a ``wake_attempts``
+    strike, set ``checkin_deadline_at``, mark the agent online, and
+    enqueue a follow-up reconcile task. Skipped wakes MUST NOT do any of
+    those things — otherwise MC records a wake that never happened and
+    the agent drifts into the permanent-offline dead state.
+    """
+
+    wake_delivered: bool
+    wake_skip_reason: str | None = None
+
+
 _ROLE_SOUL_MAX_CHARS = 24_000
 _ROLE_SOUL_WORD_RE = re.compile(r"[a-z0-9]+")
 
@@ -934,6 +959,63 @@ class BaseAgentLifecycleManager(ABC):
                     continue
                 raise
 
+    async def verify_credentials_visible(
+        self,
+        *,
+        agent: Agent,
+        max_attempts: int = 3,
+        backoff_seconds: float = 0.5,
+    ) -> tuple[bool, set[str]]:
+        """Confirm the gateway can see at least one credential file for the
+        agent before a wake is delivered.
+
+        The wake text tells the agent to read ``$BASE_URL`` and
+        ``$AUTH_TOKEN`` from ``BOOTSTRAP.md`` or ``TOOLS.md`` so it can
+        POST to ``/api/v1/agent/heartbeat``. If neither file is visible on
+        the gateway side, the wake cannot be answered with a real
+        check-in and the wake should be skipped rather than burning a
+        retry against an agent that has no way to resolve its
+        credentials.
+
+        File visibility is checked with bounded retries because the
+        gateway's ``agents.files.list`` RPC can briefly return a stale
+        view right after a write. A file entry is only treated as
+        visible when ``missing`` is falsy AND ``size`` (if reported) is
+        greater than zero — a zero-byte credential file is not usable
+        for the check-in curl even though it technically exists.
+
+        Returns a tuple ``(visible, present_files)`` where ``visible`` is
+        True when either ``BOOTSTRAP.md`` or ``TOOLS.md`` is present and
+        non-empty on any attempt, and ``present_files`` is the subset of
+        credential files that were actually visible on the last attempt
+        that saw at least one of them.
+        """
+
+        agent_id = self._agent_id(agent)
+        present: set[str] = set()
+        for attempt in range(max_attempts):
+            files = await self._control_plane.list_agent_files(agent_id)
+            present = set()
+            for name in ("BOOTSTRAP.md", "TOOLS.md"):
+                entry = files.get(name)
+                if not entry:
+                    continue
+                if bool(entry.get("missing")):
+                    continue
+                # If the control plane reports size, require it to be
+                # strictly positive. Absent size is treated as unknown
+                # (don't block on it) because not every control plane
+                # implementation populates this field.
+                size = entry.get("size")
+                if size is not None and size == 0:
+                    continue
+                present.add(name)
+            if present:
+                return (True, present)
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(backoff_seconds)
+        return (False, present)
+
     async def provision(
         self,
         *,
@@ -1147,6 +1229,18 @@ def _wakeup_text(agent: Agent, *, verb: str) -> str:
         f"Hello {agent.name}. Your workspace has been {verb}.\n\n"
         "Start the agent. If BOOTSTRAP.md exists, read it first, then read AGENTS.md. "
         "Begin heartbeats after startup.\n\n"
+        "REQUIRED CHECK-IN BEFORE ANY REPLY: read $BASE_URL and $AUTH_TOKEN from "
+        "BOOTSTRAP.md or TOOLS.md, then run the check-in curl in this session:\n"
+        '  curl -fsS -X POST "$BASE_URL/api/v1/agent/heartbeat" '
+        '-H "X-Agent-Token: $AUTH_TOKEN"\n'
+        "This curl is the only thing that clears your wake-attempt counter in "
+        "Mission Control. Do not send any chat response — not NO_REPLY, "
+        "HEARTBEAT, HEARTBEAT_OK, OK, ACK, a greeting, or a status summary — "
+        "until that curl has returned a 2xx in this session. A text "
+        "acknowledgement alone does not count as a check-in. If the curl "
+        "fails after one fresh attempt, send one short error report naming "
+        "the failure (e.g. exec blocked, 4xx/5xx body, missing "
+        "BOOTSTRAP.md/TOOLS.md); otherwise stay silent until it succeeds.\n\n"
         "Do not assume exec is blocked based on an earlier session. "
         "Attempt the required command once in this session before saying you are blocked."
     )
@@ -1188,13 +1282,21 @@ class OpenClawGatewayProvisioner:
         wake: bool = True,
         deliver_wakeup: bool = True,
         wakeup_verb: str | None = None,
-    ) -> None:
+    ) -> LifecycleResult:
         """Create/update an agent, sync all template files, and optionally wake the agent.
 
         Lifecycle steps (same for all agent types):
         1) create agent (idempotent)
         2) set/update all template files
         3) wake the agent session (chat.send)
+
+        Returns a :class:`LifecycleResult`. Callers that care about the
+        wake-delivery outcome (e.g.
+        :class:`AgentLifecycleOrchestrator.run_lifecycle`) must inspect
+        ``wake_delivered`` before mutating ``wake_attempts``,
+        ``checkin_deadline_at``, or marking the agent online. A skipped
+        wake returns ``wake_delivered=False`` with a ``wake_skip_reason``
+        and must NOT be treated as a successful wake by the caller.
         """
 
         if not gateway.url:
@@ -1243,7 +1345,31 @@ class OpenClawGatewayProvisioner:
                     raise
 
         if not wake:
-            return
+            return LifecycleResult(wake_delivered=False, wake_skip_reason=None)
+
+        # Read-back check: the wake text instructs the agent to read
+        # $BASE_URL/$AUTH_TOKEN from BOOTSTRAP.md or TOOLS.md and curl the
+        # heartbeat endpoint. If neither file is visible on the gateway
+        # side — e.g., because a prior file write failed or the agent
+        # workspace was cleared — the wake cannot be answered with a real
+        # check-in. Log and skip the wake rather than burning a wake
+        # attempt against an agent that has no way to resolve its
+        # credentials. (BOOTSTRAP.md alone is sufficient because the
+        # wake text accepts it as a fallback credential source.)
+        credentials_visible, present = await manager.verify_credentials_visible(agent=agent)
+        if not credentials_visible:
+            logger.warning(
+                "gateway.wake.skipped_no_credentials agent_id=%s session_key=%s "
+                "present_files=%s — neither BOOTSTRAP.md nor TOOLS.md visible "
+                "on gateway; skipping wake to avoid a guaranteed NO_REPLY",
+                getattr(agent, "id", "?"),
+                session_key,
+                sorted(present),
+            )
+            return LifecycleResult(
+                wake_delivered=False,
+                wake_skip_reason="credentials_not_visible",
+            )
 
         client_config = GatewayClientConfig(
             url=gateway.url,
@@ -1259,6 +1385,7 @@ class OpenClawGatewayProvisioner:
             config=client_config,
             deliver=deliver_wakeup,
         )
+        return LifecycleResult(wake_delivered=True, wake_skip_reason=None)
 
     async def delete_agent_lifecycle(
         self,

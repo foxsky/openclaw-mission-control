@@ -66,6 +66,184 @@ def test_wakeup_text_includes_bootstrap_before_agents():
     assert "Attempt the required command once in this session before saying you are blocked." in text
 
 
+def test_wakeup_text_requires_explicit_heartbeat_checkin():
+    """Regression: idle agents must be told to POST /api/v1/agent/heartbeat
+    explicitly, otherwise gpt-5.4 and similar models short-circuit with
+    ``NO_REPLY`` and never trigger ``commit_heartbeat`` — which is the only
+    code path that resets ``wake_attempts`` to 0. Without this instruction,
+    an idle agent can age into the permanent-offline state after three
+    deadline-spaced wakes.
+    """
+    agent = _AgentStub(name="Alice")
+
+    text = agent_provisioning._wakeup_text(agent, verb="updated")
+
+    assert "POST" in text and "/api/v1/agent/heartbeat" in text, (
+        "wake text must name the heartbeat endpoint so the agent runs the "
+        "check-in curl via tool use"
+    )
+    # Both BOOTSTRAP.md and TOOLS.md render the credentials on fresh
+    # provision; either must be an acceptable source so a late TOOLS.md
+    # visibility lag does not break the wake path.
+    assert "BOOTSTRAP.md" in text and "TOOLS.md" in text, (
+        "wake text must point the agent at both BOOTSTRAP.md and TOOLS.md "
+        "for $BASE_URL and $AUTH_TOKEN — either is a valid credential source"
+    )
+
+
+def test_wakeup_text_forbids_text_shortcut_before_checkin():
+    """Regression: the wake text must forbid ANY chat reply before the curl
+    has returned a 2xx, not just the specific ``NO_REPLY`` / ``HEARTBEAT``
+    strings we have seen so far. Enumerating specific shortcut strings
+    leaves adversarial loopholes (``OK``, ``ACK``, greetings, status
+    summaries) that models can still take.
+    """
+    agent = _AgentStub(name="Alice")
+
+    text = agent_provisioning._wakeup_text(agent, verb="updated")
+
+    # All the known text shortcuts must be explicitly enumerated as
+    # forbidden so the model has no ambiguity about the default behavior.
+    for shortcut in ("NO_REPLY", "HEARTBEAT", "HEARTBEAT_OK", "OK", "ACK"):
+        assert shortcut in text, (
+            f"wake text must explicitly name {shortcut!r} in its "
+            "forbidden-reply list — models shortcut on any acknowledgement "
+            "that is not ruled out"
+        )
+    lowered = text.lower()
+    assert "do not send any chat response" in lowered, (
+        "wake text must frame the rule as 'no chat reply at all until 2xx' "
+        "rather than enumerating forbidden strings, so future shortcut "
+        "variants are also caught by default"
+    )
+    assert "2xx" in text, (
+        "wake text must state the 2xx gate so the agent knows what "
+        "'successful check-in' means in transport terms"
+    )
+
+
+def test_should_consume_wake_strike_charges_first_wake_in_fresh_cycle():
+    """The very first wake in a fresh escalation cycle (wake_attempts == 0)
+    must consume a strike — otherwise reconcile would never advance the
+    counter toward the 3-strike offline threshold.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.openclaw.lifecycle_orchestrator import (
+        should_consume_wake_strike,
+    )
+
+    now = datetime(2026, 4, 5, 16, 0, tzinfo=timezone.utc)
+    assert should_consume_wake_strike(
+        prev_wake_attempts=0,
+        prev_checkin_deadline_at=None,
+        now=now,
+    )
+    assert should_consume_wake_strike(
+        prev_wake_attempts=0,
+        prev_checkin_deadline_at=now - timedelta(minutes=1),
+        now=now,
+    )
+    assert should_consume_wake_strike(
+        prev_wake_attempts=0,
+        prev_checkin_deadline_at=now + timedelta(minutes=30),
+        now=now,
+    )
+
+
+def test_should_consume_wake_strike_charges_when_previous_deadline_expired():
+    """A subsequent wake whose previous grace window has already elapsed
+    without a successful check-in represents a real retry — it must
+    consume a strike so the counter advances toward offline.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.openclaw.lifecycle_orchestrator import (
+        should_consume_wake_strike,
+    )
+
+    now = datetime(2026, 4, 5, 16, 0, tzinfo=timezone.utc)
+    assert should_consume_wake_strike(
+        prev_wake_attempts=1,
+        prev_checkin_deadline_at=now - timedelta(seconds=1),
+        now=now,
+    )
+    assert should_consume_wake_strike(
+        prev_wake_attempts=2,
+        prev_checkin_deadline_at=now - timedelta(hours=1),
+        now=now,
+    )
+
+
+def test_should_consume_wake_strike_skips_wake_inside_grace_window():
+    """Regression: explicit admin and coordination recovery wakes that
+    land inside the current grace window must NOT double-charge an agent
+    that was already on track to check in. Without this, a user pressing
+    "recover" burns a strike even though the sweep had not yet decided
+    the previous wake failed.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.openclaw.lifecycle_orchestrator import (
+        should_consume_wake_strike,
+    )
+
+    now = datetime(2026, 4, 5, 16, 0, tzinfo=timezone.utc)
+    assert not should_consume_wake_strike(
+        prev_wake_attempts=1,
+        prev_checkin_deadline_at=now + timedelta(minutes=30),
+        now=now,
+    )
+    assert not should_consume_wake_strike(
+        prev_wake_attempts=2,
+        prev_checkin_deadline_at=now + timedelta(seconds=1),
+        now=now,
+    )
+
+
+def test_should_consume_wake_strike_charges_when_deadline_missing():
+    """Defensive: if wake_attempts > 0 but the deadline is None, we cannot
+    prove the previous wake is still mid-grace. Charge the strike because
+    the safer failure mode is to count it — missing a legitimate retry is
+    worse than under-counting the retry budget.
+    """
+    from datetime import datetime, timezone
+
+    from app.services.openclaw.lifecycle_orchestrator import (
+        should_consume_wake_strike,
+    )
+
+    now = datetime(2026, 4, 5, 16, 0, tzinfo=timezone.utc)
+    assert should_consume_wake_strike(
+        prev_wake_attempts=1,
+        prev_checkin_deadline_at=None,
+        now=now,
+    )
+    assert should_consume_wake_strike(
+        prev_wake_attempts=2,
+        prev_checkin_deadline_at=None,
+        now=now,
+    )
+
+
+def test_wakeup_text_allows_error_report_on_curl_failure():
+    """Regression: if the curl genuinely fails (exec blocked, auth 4xx,
+    network 5xx, missing credentials), the agent must be allowed to send a
+    short error report — otherwise we trade the NO_REPLY trap for a
+    silent-failure trap where legitimate failures never surface.
+    """
+    agent = _AgentStub(name="Alice")
+
+    text = agent_provisioning._wakeup_text(agent, verb="updated")
+
+    lowered = text.lower()
+    assert "fails" in lowered and "error report" in lowered, (
+        "wake text must describe what the agent should do if the curl "
+        "fails after a fresh attempt — silence-on-failure is worse than "
+        "the original NO_REPLY bug for debuggability"
+    )
+
+
 def test_agent_lifecycle_workspace_path_preserves_tilde_in_workspace_root():
     assert (
         AgentLifecycleService.workspace_path("Alice", "~/.openclaw")
@@ -179,6 +357,470 @@ class _GatewayStub:
     workspace_root: str
     allow_insecure_tls: bool = False
     disable_device_pairing: bool = False
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_lifecycle_writes_files_before_wake(monkeypatch):
+    """Regression: apply_agent_lifecycle must complete all credential file
+    writes BEFORE sending the wake message, AND it must verify credentials
+    are visible to the gateway before delivering the wake.
+
+    Otherwise the agent can receive the wake text (which instructs it to
+    read ``$BASE_URL`` and ``$AUTH_TOKEN`` from ``BOOTSTRAP.md`` or
+    ``TOOLS.md``) before those files are visible on the gateway side,
+    which produces a guaranteed NO_REPLY and burns a wake attempt.
+    """
+    gateway_id = uuid4()
+    session_key = GatewayAgentIdentity.session_key_for_id(gateway_id)
+    gateway = _GatewayStub(
+        id=gateway_id,
+        name="Acme",
+        url="ws://gateway.example/ws",
+        token=None,
+        workspace_root="/tmp/openclaw",
+    )
+    agent = _AgentStub(name="Acme Gateway Agent", openclaw_session_id=session_key)
+
+    call_log: list[str] = []
+
+    async def _fake_ensure_agent_session(self, session_key, *, label=None):
+        call_log.append("ensure_agent_session")
+
+    async def _fake_upsert_agent(self, registration):
+        call_log.append("upsert_agent")
+
+    async def _fake_list_agent_files(self, agent_id):
+        call_log.append("list_agent_files")
+        # Return credentials visible so verify_credentials_visible passes
+        return {
+            "BOOTSTRAP.md": {"name": "BOOTSTRAP.md", "missing": False},
+            "TOOLS.md": {"name": "TOOLS.md", "missing": False},
+        }
+
+    def _fake_render_agent_files(*args, **kwargs):
+        return {"TOOLS.md": "contents", "BOOTSTRAP.md": "contents"}
+
+    async def _fake_set_agent_files(self, **kwargs):
+        call_log.append("set_agent_files")
+
+    async def _fake_ensure_session(session_key, *, config, label=None):
+        call_log.append("ensure_session")
+
+    async def _fake_send_message(text, *, session_key, config, deliver):
+        call_log.append("send_message")
+
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "ensure_agent_session",
+        _fake_ensure_agent_session,
+    )
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "upsert_agent",
+        _fake_upsert_agent,
+    )
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "list_agent_files",
+        _fake_list_agent_files,
+    )
+    monkeypatch.setattr(agent_provisioning, "_render_agent_files", _fake_render_agent_files)
+    monkeypatch.setattr(
+        agent_provisioning.BaseAgentLifecycleManager,
+        "_set_agent_files",
+        _fake_set_agent_files,
+    )
+    monkeypatch.setattr(agent_provisioning, "ensure_session", _fake_ensure_session)
+    monkeypatch.setattr(agent_provisioning, "send_message", _fake_send_message)
+
+    await agent_provisioning.OpenClawGatewayProvisioner().apply_agent_lifecycle(
+        agent=agent,  # type: ignore[arg-type]
+        gateway=gateway,  # type: ignore[arg-type]
+        board=None,
+        auth_token="secret-token",
+        user=None,
+        action="provision",
+        wake=True,
+    )
+
+    assert "set_agent_files" in call_log, f"file sync must run; got {call_log}"
+    assert "send_message" in call_log, f"wake must be delivered; got {call_log}"
+    set_idx = call_log.index("set_agent_files")
+    send_idx = call_log.index("send_message")
+    assert set_idx < send_idx, (
+        f"set_agent_files must run before send_message, but got {call_log}"
+    )
+    # verify_credentials_visible runs list_agent_files AFTER file sync
+    # and BEFORE send_message — this is the read-back check that
+    # guarantees the wake text has a valid credential source to quote.
+    post_write_list = [
+        i
+        for i, name in enumerate(call_log)
+        if name == "list_agent_files" and set_idx < i < send_idx
+    ]
+    assert post_write_list, (
+        "verify_credentials_visible must call list_agent_files between "
+        f"set_agent_files and send_message; got {call_log}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_lifecycle_skips_wake_when_credentials_missing(monkeypatch):
+    """Regression: if the gateway cannot see BOOTSTRAP.md or TOOLS.md after
+    the file sync step, the wake must be skipped entirely. Sending the
+    wake anyway would instruct the agent to read credentials from files
+    that aren't there, guaranteeing a NO_REPLY and burning a retry.
+    """
+    gateway_id = uuid4()
+    session_key = GatewayAgentIdentity.session_key_for_id(gateway_id)
+    gateway = _GatewayStub(
+        id=gateway_id,
+        name="Acme",
+        url="ws://gateway.example/ws",
+        token=None,
+        workspace_root="/tmp/openclaw",
+    )
+    agent = _AgentStub(name="Acme Gateway Agent", openclaw_session_id=session_key)
+
+    call_log: list[str] = []
+
+    async def _fake_ensure_agent_session(self, session_key, *, label=None):
+        call_log.append("ensure_agent_session")
+
+    async def _fake_upsert_agent(self, registration):
+        call_log.append("upsert_agent")
+
+    async def _fake_list_agent_files(self, agent_id):
+        call_log.append("list_agent_files")
+        # Simulate a broken file sync: credentials NOT visible on gateway.
+        return {"USER.md": {"name": "USER.md", "missing": False}}
+
+    def _fake_render_agent_files(*args, **kwargs):
+        return {"TOOLS.md": "contents", "BOOTSTRAP.md": "contents"}
+
+    async def _fake_set_agent_files(self, **kwargs):
+        call_log.append("set_agent_files")
+
+    async def _fake_ensure_session(session_key, *, config, label=None):
+        call_log.append("ensure_session")
+
+    async def _fake_send_message(text, *, session_key, config, deliver):
+        call_log.append("send_message")
+
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "ensure_agent_session",
+        _fake_ensure_agent_session,
+    )
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "upsert_agent",
+        _fake_upsert_agent,
+    )
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "list_agent_files",
+        _fake_list_agent_files,
+    )
+    monkeypatch.setattr(agent_provisioning, "_render_agent_files", _fake_render_agent_files)
+    monkeypatch.setattr(
+        agent_provisioning.BaseAgentLifecycleManager,
+        "_set_agent_files",
+        _fake_set_agent_files,
+    )
+    monkeypatch.setattr(agent_provisioning, "ensure_session", _fake_ensure_session)
+    monkeypatch.setattr(agent_provisioning, "send_message", _fake_send_message)
+
+    result = await agent_provisioning.OpenClawGatewayProvisioner().apply_agent_lifecycle(
+        agent=agent,  # type: ignore[arg-type]
+        gateway=gateway,  # type: ignore[arg-type]
+        board=None,
+        auth_token="secret-token",
+        user=None,
+        action="provision",
+        wake=True,
+    )
+
+    assert "set_agent_files" in call_log, f"file sync must still run; got {call_log}"
+    assert "send_message" not in call_log, (
+        "wake must be skipped when neither BOOTSTRAP.md nor TOOLS.md is "
+        f"visible on the gateway; got {call_log}"
+    )
+    assert result.wake_delivered is False, (
+        "LifecycleResult.wake_delivered must be False when the wake was "
+        "skipped due to missing credentials — the orchestrator uses this "
+        "flag to decide whether to consume a wake_attempts strike"
+    )
+    assert result.wake_skip_reason == "credentials_not_visible", (
+        "skip reason must be set so last_provision_error can describe "
+        f"the skip; got {result.wake_skip_reason!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_lifecycle_returns_wake_delivered_true_on_success(monkeypatch):
+    """Positive-path regression for the LifecycleResult contract. When the
+    wake is actually delivered, the result must report
+    ``wake_delivered=True`` with no skip reason, so the orchestrator
+    knows it is safe to consume a wake_attempts strike, arm a check-in
+    deadline, mark the agent online, and enqueue the reconcile task.
+    """
+    gateway_id = uuid4()
+    session_key = GatewayAgentIdentity.session_key_for_id(gateway_id)
+    gateway = _GatewayStub(
+        id=gateway_id,
+        name="Acme",
+        url="ws://gateway.example/ws",
+        token=None,
+        workspace_root="/tmp/openclaw",
+    )
+    agent = _AgentStub(name="Acme Gateway Agent", openclaw_session_id=session_key)
+
+    async def _fake_ensure_agent_session(self, session_key, *, label=None):
+        return None
+
+    async def _fake_upsert_agent(self, registration):
+        return None
+
+    async def _fake_list_agent_files(self, agent_id):
+        return {
+            "BOOTSTRAP.md": {"name": "BOOTSTRAP.md", "missing": False, "size": 42},
+            "TOOLS.md": {"name": "TOOLS.md", "missing": False, "size": 128},
+        }
+
+    def _fake_render_agent_files(*args, **kwargs):
+        return {"TOOLS.md": "contents", "BOOTSTRAP.md": "contents"}
+
+    async def _fake_set_agent_files(self, **kwargs):
+        return None
+
+    async def _fake_ensure_session(session_key, *, config, label=None):
+        return None
+
+    async def _fake_send_message(text, *, session_key, config, deliver):
+        return None
+
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "ensure_agent_session",
+        _fake_ensure_agent_session,
+    )
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "upsert_agent",
+        _fake_upsert_agent,
+    )
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "list_agent_files",
+        _fake_list_agent_files,
+    )
+    monkeypatch.setattr(agent_provisioning, "_render_agent_files", _fake_render_agent_files)
+    monkeypatch.setattr(
+        agent_provisioning.BaseAgentLifecycleManager,
+        "_set_agent_files",
+        _fake_set_agent_files,
+    )
+    monkeypatch.setattr(agent_provisioning, "ensure_session", _fake_ensure_session)
+    monkeypatch.setattr(agent_provisioning, "send_message", _fake_send_message)
+
+    result = await agent_provisioning.OpenClawGatewayProvisioner().apply_agent_lifecycle(
+        agent=agent,  # type: ignore[arg-type]
+        gateway=gateway,  # type: ignore[arg-type]
+        board=None,
+        auth_token="secret-token",
+        user=None,
+        action="provision",
+        wake=True,
+    )
+
+    assert result.wake_delivered is True
+    assert result.wake_skip_reason is None
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_lifecycle_returns_wake_delivered_false_when_wake_not_requested(
+    monkeypatch,
+):
+    """``wake=False`` must also yield ``wake_delivered=False`` (a wake
+    that was never requested is indistinguishable from one that was
+    skipped, from the caller's perspective — neither should cause
+    wake-state mutations)."""
+    gateway_id = uuid4()
+    session_key = GatewayAgentIdentity.session_key_for_id(gateway_id)
+    gateway = _GatewayStub(
+        id=gateway_id,
+        name="Acme",
+        url="ws://gateway.example/ws",
+        token=None,
+        workspace_root="/tmp/openclaw",
+    )
+    agent = _AgentStub(name="Acme Gateway Agent", openclaw_session_id=session_key)
+
+    async def _fake_ensure_agent_session(self, session_key, *, label=None):
+        return None
+
+    async def _fake_upsert_agent(self, registration):
+        return None
+
+    async def _fake_list_agent_files(self, agent_id):
+        return {}
+
+    def _fake_render_agent_files(*args, **kwargs):
+        return {}
+
+    async def _fake_set_agent_files(self, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "ensure_agent_session",
+        _fake_ensure_agent_session,
+    )
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "upsert_agent",
+        _fake_upsert_agent,
+    )
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "list_agent_files",
+        _fake_list_agent_files,
+    )
+    monkeypatch.setattr(agent_provisioning, "_render_agent_files", _fake_render_agent_files)
+    monkeypatch.setattr(
+        agent_provisioning.BaseAgentLifecycleManager,
+        "_set_agent_files",
+        _fake_set_agent_files,
+    )
+
+    result = await agent_provisioning.OpenClawGatewayProvisioner().apply_agent_lifecycle(
+        agent=agent,  # type: ignore[arg-type]
+        gateway=gateway,  # type: ignore[arg-type]
+        board=None,
+        auth_token="secret-token",
+        user=None,
+        action="provision",
+        wake=False,
+    )
+
+    assert result.wake_delivered is False
+    assert result.wake_skip_reason is None, (
+        "wake=False is not a 'skip', it is a 'not requested' — skip "
+        "reason should be None to distinguish the two cases"
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_credentials_visible_retries_on_transient_empty_list(monkeypatch):
+    """Regression: ``verify_credentials_visible`` must retry a few times
+    before concluding credentials are not visible, because the gateway's
+    ``agents.files.list`` RPC can briefly return a stale view right
+    after a write. Without retries, a transient propagation lag would
+    falsely skip a wake.
+    """
+    agent = _AgentStub(name="Worker", openclaw_session_id="agent:worker:main")
+    attempts: list[int] = []
+
+    async def _fake_list_agent_files(self, agent_id):
+        attempts.append(len(attempts))
+        # First two attempts return nothing; third attempt sees TOOLS.md.
+        if len(attempts) < 3:
+            return {}
+        return {"TOOLS.md": {"name": "TOOLS.md", "missing": False, "size": 64}}
+
+    async def _fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "list_agent_files",
+        _fake_list_agent_files,
+    )
+    monkeypatch.setattr(agent_provisioning.asyncio, "sleep", _fake_sleep)
+
+    class _ConcreteManager(agent_provisioning.BaseAgentLifecycleManager):
+        def _agent_id(self, agent):
+            return "worker-agent-id"
+
+        def _build_context(self, *, agent, auth_token, user, board):
+            return {}
+
+    gateway = _GatewayStub(
+        id=uuid4(),
+        name="G",
+        url="ws://gw",
+        token=None,
+        workspace_root="/tmp",
+    )
+    cp = agent_provisioning.OpenClawGatewayControlPlane(
+        agent_provisioning.GatewayClientConfig(url="ws://gw", token=None),
+    )
+    manager = _ConcreteManager(gateway, cp)  # type: ignore[arg-type]
+
+    visible, present = await manager.verify_credentials_visible(
+        agent=agent,  # type: ignore[arg-type]
+        backoff_seconds=0.0,  # no real sleep in tests
+    )
+
+    assert visible is True
+    assert "TOOLS.md" in present
+    assert len(attempts) == 3, f"expected 3 retries, got {len(attempts)}"
+
+
+@pytest.mark.asyncio
+async def test_verify_credentials_visible_rejects_zero_byte_files(monkeypatch):
+    """Regression: a zero-byte credential file must not count as visible.
+    The curl in the wake text reads ``$AUTH_TOKEN`` from the file; an
+    empty file gives the agent no token and causes a silent auth 4xx.
+    """
+    agent = _AgentStub(name="Worker", openclaw_session_id="agent:worker:main")
+
+    async def _fake_list_agent_files(self, agent_id):
+        return {
+            "BOOTSTRAP.md": {"name": "BOOTSTRAP.md", "missing": False, "size": 0},
+            "TOOLS.md": {"name": "TOOLS.md", "missing": False, "size": 0},
+        }
+
+    async def _fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(
+        agent_provisioning.OpenClawGatewayControlPlane,
+        "list_agent_files",
+        _fake_list_agent_files,
+    )
+    monkeypatch.setattr(agent_provisioning.asyncio, "sleep", _fake_sleep)
+
+    class _ConcreteManager(agent_provisioning.BaseAgentLifecycleManager):
+        def _agent_id(self, agent):
+            return "worker-agent-id"
+
+        def _build_context(self, *, agent, auth_token, user, board):
+            return {}
+
+    gateway = _GatewayStub(
+        id=uuid4(),
+        name="G",
+        url="ws://gw",
+        token=None,
+        workspace_root="/tmp",
+    )
+    cp = agent_provisioning.OpenClawGatewayControlPlane(
+        agent_provisioning.GatewayClientConfig(url="ws://gw", token=None),
+    )
+    manager = _ConcreteManager(gateway, cp)  # type: ignore[arg-type]
+
+    visible, present = await manager.verify_credentials_visible(
+        agent=agent,  # type: ignore[arg-type]
+        backoff_seconds=0.0,
+    )
+
+    assert visible is False, (
+        "zero-byte credential files must not count as visible — the curl "
+        "needs a real token to work"
+    )
+    assert present == set()
 
 
 @pytest.mark.asyncio
