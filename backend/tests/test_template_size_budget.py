@@ -472,6 +472,42 @@ def test_agents_md_code_delegation_review_only_flow_for_architect() -> None:
     )
 
 
+def test_agents_md_code_delegation_claude_with_skills_for_pf() -> None:
+    """PF agents with ``identity_profile.dev_acp_flow =
+    'claude_with_skills'`` must render the Claude Code ACP flow with
+    frontend design skill references (/simplify, /codex,
+    /frontend-review, /frontend-architecture, /frontend-aesthetics).
+    """
+    pf_agents = _render_template(
+        "BOARD_AGENTS.md.j2",
+        is_main_agent=False,
+        is_board_lead=False,
+        agent_name="Programmer-Frontend",
+        agent_id="pf-id",
+        identity_dev_acp_flow="claude_with_skills",
+    )
+    assert "## Code Delegation (ACP)" in pf_agents
+    assert "Claude Code ACP with design skills" in pf_agents, (
+        "claude_with_skills flow must state it uses design skills"
+    )
+    assert "sessions_spawn" in pf_agents, (
+        "claude_with_skills flow must use sessions_spawn for ACP delegation"
+    )
+    # Must have all 5 skill references
+    for skill in ["/simplify", "/codex", "/frontend-review", "/frontend-architecture", "/frontend-aesthetics"]:
+        assert skill in pf_agents, (
+            f"claude_with_skills flow must reference {skill}"
+        )
+    # Must have the ACP session timeout rule
+    assert "ACP Session Timeout" in pf_agents, (
+        "claude_with_skills flow must include the ACP Session Timeout rule"
+    )
+    # Must NOT have direct-flow instructions
+    assert "Do NOT spawn ACP sessions" not in pf_agents, (
+        "claude_with_skills flow must NOT contain direct-flow instructions"
+    )
+
+
 def test_agents_md_code_delegation_review_only_does_not_render_for_default_workers() -> None:
     """Workers without the review_only flag must NOT get the review-only
     section — they should get the default implementation flow.
