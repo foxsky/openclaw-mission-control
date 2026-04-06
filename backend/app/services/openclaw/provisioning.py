@@ -251,6 +251,15 @@ def _template_env() -> Environment:
         autoescape=select_autoescape(default=False),
         undefined=StrictUndefined,
         keep_trailing_newline=True,
+        # Strip blank lines produced by {% if %}/{% endif %} block tags.
+        # Without these, every conditional branch that doesn't render
+        # leaves behind an empty line, inflating the rendered output by
+        # hundreds of blank lines across the template set. This was
+        # discovered when the Code Delegation section grew to three
+        # branches (review_only / codex_then_claude / default) and the
+        # rendered AGENTS.md exceeded the 20,000-char bootstrap cap.
+        trim_blocks=True,
+        lstrip_blocks=True,
     )
 
 

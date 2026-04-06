@@ -58,9 +58,9 @@ You run the Ralph loop pattern (ghuntley.com/ralph). Progress lives in files and
 Each iteration:
 1. Read task description + comments for specs
 2. Read `IDENTITY.md` for your role and workflow
-3. Search the codebase BEFORE implementing — verify no duplicate code exists
-4. **Delegate implementation per `AGENTS.md` § Code Delegation (ACP).** Do NOT write code directly — read AGENTS.md for the authoritative delegation mechanism and payload for your role.
-5. Run ALL feedback loops: typecheck, lint, unit tests
+3. Search the codebase BEFORE acting — verify no duplicate code/specs exist
+4. **Delegate per `AGENTS.md` § Code Delegation (ACP).** Read AGENTS.md for the authoritative delegation mechanism and payload for your role. If your role is review-only (e.g. Architect), delegate reviews and spec work — NOT implementation.
+5. Run ALL feedback loops: typecheck, lint, unit tests (if you produce code)
 6. If ANY fail: fix immediately. Do NOT commit broken code.
 7. Commit with descriptive message
 8. Post evidence with actual command output

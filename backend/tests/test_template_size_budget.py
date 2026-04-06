@@ -64,7 +64,12 @@ _REALISTIC_RENDER_CONTEXT = {
 
 
 def _render_template(name: str, **context: object) -> str:
-    env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
+    env = Environment(
+        loader=FileSystemLoader(str(TEMPLATES_DIR)),
+        # Match production renderer settings from provisioning.py _template_env()
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
     return env.get_template(name).render(**context)
 
 
@@ -420,6 +425,74 @@ def test_agents_md_code_delegation_default_workers_keep_single_claude_spawn() ->
     )
     assert '"agentId": "codex"' not in pb_name_no_flag, (
         "template MUST NOT key on agent_name — absent flag means default flow"
+    )
+
+
+def test_agents_md_code_delegation_review_only_flow_for_architect() -> None:
+    """Architect agents with ``identity_profile.dev_acp_flow =
+    'review_only'`` must render a review/spec-writing delegation
+    section — NOT the implementation-oriented default. The Architect's
+    IDENTITY says "NEVER write implementation code", so the Code
+    Delegation section must not contain "Implement:" task prompts.
+    """
+    arch_agents = _render_template(
+        "BOARD_AGENTS.md.j2",
+        is_main_agent=False,
+        is_board_lead=False,
+        agent_name="Architect",
+        agent_id="arch-id",
+        identity_dev_acp_flow="review_only",
+    )
+    assert "## Code Delegation (ACP)" in arch_agents
+    assert "Review-only workflow" in arch_agents, (
+        "review_only flow must clearly state this is review-only"
+    )
+    assert "adversarial-review" in arch_agents.lower() or "adversarial review" in arch_agents.lower(), (
+        "review_only flow must include the /codex adversarial review pattern"
+    )
+    # Must NOT have implementation-oriented prompts
+    assert '"task": "Implement:' not in arch_agents, (
+        "review_only flow MUST NOT contain 'Implement:' task prompts — "
+        "the Architect's IDENTITY says NEVER write implementation code"
+    )
+    assert "Do NOT use the implementation delegation pattern" in arch_agents, (
+        "review_only flow must explicitly forbid the implementation pattern"
+    )
+
+
+def test_agents_md_code_delegation_review_only_does_not_render_for_default_workers() -> None:
+    """Workers without the review_only flag must NOT get the review-only
+    section — they should get the default implementation flow.
+    """
+    default_agents = _render_template(
+        "BOARD_AGENTS.md.j2",
+        is_main_agent=False,
+        is_board_lead=False,
+        agent_name="QA-Unit",
+        agent_id="qa-id",
+    )
+    assert "Review-only workflow" not in default_agents
+    assert "Spec Writing" not in default_agents
+
+
+def test_soul_ralph_loop_step4_is_role_aware() -> None:
+    """SOUL.md Ralph Loop step 4 must not unconditionally say 'Delegate
+    implementation' — review-only roles (like Architect) must not be
+    told to implement. The step should use role-neutral language like
+    'Delegate per AGENTS.md' and note the review-only exception.
+    """
+    worker_soul = _render_template(
+        "BOARD_SOUL.md.j2",
+        agent_name="Architect",
+        is_board_lead=False,
+    )
+    assert "review-only" in worker_soul.lower() or "review only" in worker_soul.lower(), (
+        "SOUL.md step 4 must mention the review-only exception so "
+        "Architect knows not to follow the implementation path"
+    )
+    assert "Delegate implementation per" not in worker_soul, (
+        "SOUL.md must not unconditionally say 'Delegate implementation' — "
+        "that contradicts Architect IDENTITY's 'NEVER write implementation code'"
     )
 
 

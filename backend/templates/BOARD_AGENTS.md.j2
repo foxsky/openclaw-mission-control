@@ -628,45 +628,37 @@ identity, persona, or heartbeat files. Do NOT write code directly in
 your own session; delegate to ACP and let the harness produce the
 commit.
 
-{% if identity_dev_acp_flow == "codex_then_claude_review" %}
-**Two-stage workflow: Codex implements, Claude Code reviews.**
+{%- if identity_dev_acp_flow == "review_only" %}
+**Review-only workflow.** You do NOT implement production code. Use ACP for spec assistance and code review only.
 
-### Stage 1 — Implementation (Codex)
-
-Spawn a Codex ACP session to author the backend code:
-
+### Code Review
+When assigned a review task, spawn a Claude Code session for adversarial review:
 ```json
 {
-  "task": "Implement: <description>. Write the code directly — no placeholders, no review passes. When done, print the list of files changed and the commit SHA.",
-  "runtime": "acp",
-  "agentId": "codex",
-  "thread": true
-}
-```
-
-### Stage 2 — Review (Claude Code)
-
-**After** the Codex session finishes and the commit exists, spawn a
-Claude Code ACP session to review it:
-
-```json
-{
-  "task": "Review commit <sha> authored by the Codex ACP session. Run /simplify first (quality/reuse/efficiency), then /codex adversarial-review (bugs/patterns). Post findings as comments — do not commit fixes; return them to Programmer-Backend so the next Codex stage can apply them.",
+  "task": "Review the implementation for task <task_id>. Run /codex adversarial-review. Post findings — do not commit fixes.",
   "runtime": "acp",
   "agentId": "claude",
   "thread": true
 }
 ```
+For spec drafting: same pattern but task = "Help draft the technical spec for \<description\>. Output as markdown. Do NOT write implementation code."
 
-The Claude Code ACP session has these review skills:
-- `/simplify` — quality/reuse/efficiency review
-- `/codex` — Codex-powered adversarial review for bugs/patterns
+**Do NOT use the implementation delegation pattern.** If you find yourself writing a task prompt that starts with "Implement:", STOP — implementation is a developer role's responsibility, not yours. Route it to the appropriate developer via `@lead`.
+{%- elif identity_dev_acp_flow == "codex_then_claude_review" %}
+**Two-stage workflow: Codex implements, Claude Code reviews.**
 
-**Two separate spawns per task iteration.** The review session must run
-*after* the implementation commit exists, not in parallel. If review
-surfaces required changes, loop back to Stage 1 with the feedback in
-the task prompt.
-{% else %}
+**Stage 1 — Implementation (Codex):**
+```json
+{"task": "Implement: <description>. No placeholders. Print files changed + commit SHA when done.", "runtime": "acp", "agentId": "codex", "thread": true}
+```
+
+**Stage 2 — Review (Claude Code):** After Stage 1 commits, spawn:
+```json
+{"task": "Review commit <sha>. Run /simplify then /codex adversarial-review. Post findings — do not commit fixes.", "runtime": "acp", "agentId": "claude", "thread": true}
+```
+
+Two separate spawns per task. Review runs *after* the commit exists, not in parallel. If review surfaces changes, loop back to Stage 1 with feedback.
+{%- else %}
 Use a single `sessions_spawn` call to delegate implementation and
 review to a Claude Code ACP session:
 
@@ -685,7 +677,7 @@ The Claude Code ACP session has these skills:
 
 **Always include both review steps in the task prompt.** One
 `sessions_spawn` call = implement + /simplify + /codex review.
-{% endif %}
+{%- endif %}
 {% endif %}
 
 ## Safety
