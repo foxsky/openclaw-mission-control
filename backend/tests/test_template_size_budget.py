@@ -590,45 +590,63 @@ def test_qa_agents_get_validation_specific_checklist_not_developer_checklist() -
     )
 
 
-def test_qa_agents_get_qa_specific_hard_rules_in_identity() -> None:
-    """QA agents should see 're-validate with fresh evidence' in HARD
-    RULES, not 'implement real changes and show a new commit'.
+def test_hard_rules_in_agents_not_identity() -> None:
+    """HARD RULES moved from IDENTITY.md to AGENTS.md per workspace
+    architecture docs (IDENTITY = name/vibe/emoji, AGENTS = operating
+    instructions). Verify IDENTITY is clean and AGENTS has the rules.
     """
-    qa_identity = _render_template(
+    # IDENTITY must NOT have hard rules anymore
+    worker_identity = _render_template(
         "BOARD_IDENTITY.md.j2",
         agent_name="QA-Unit",
         agent_id="qa-id",
         is_board_lead=False,
-        identity_role="Quality Assurance and Reverse-Mode Validator",
+        identity_role="Quality Assurance",
         identity_communication_style="methodical",
         identity_emoji=":gear:",
-        identity_validation_flow="qa_validation",
     )
-    assert "re-validate" in qa_identity.lower(), (
-        "QA HARD RULES must mention re-validation"
+    assert "HARD RULES" not in worker_identity, (
+        "IDENTITY.md must not have HARD RULES — they belong in AGENTS.md"
     )
-    assert "implement real changes" not in qa_identity.lower(), (
-        "QA agents must NOT see developer-centric 'implement real changes'"
-    )
-    assert "Fabricating evidence" in qa_identity, (
-        "Fabrication rule must apply to ALL agents including QA"
+    assert "MANDATORY" not in worker_identity, (
+        "IDENTITY.md must not have nudge mandate — it belongs in AGENTS.md"
     )
 
-    # Non-QA worker keeps developer hard rules
-    dev_identity = _render_template(
-        "BOARD_IDENTITY.md.j2",
-        agent_name="Programmer-Backend",
-        agent_id="pb-id",
-        is_board_lead=False,
-        identity_role="Backend Developer",
-        identity_communication_style="direct",
-        identity_emoji=":gear:",
+    # AGENTS.md must have QA-specific hard rules
+    qa_agents = _render_template(
+        "BOARD_AGENTS.md.j2",
+        **{
+            **_REALISTIC_RENDER_CONTEXT,
+            "is_main_agent": False,
+            "is_board_lead": False,
+            "agent_name": "QA-Unit",
+            "agent_id": "qa-id",
+            "identity_validation_flow": "qa_validation",
+        },
     )
-    assert "implement real changes" in dev_identity.lower(), (
-        "Developer workers must keep the developer HARD RULES"
+    assert "re-validate" in qa_agents.lower(), (
+        "QA Worker HARD RULES must mention re-validation"
     )
-    assert "deploy to a different machine" in dev_identity.lower(), (
-        "Developer workers must keep the deploy safety rule"
+    assert "Fabricating evidence" in qa_agents, (
+        "Fabrication rule must apply to ALL agents"
+    )
+    assert "Nudge Supervisor" in qa_agents, (
+        "Nudge mandate must be in AGENTS.md for workers"
+    )
+
+    # Developer AGENTS.md must have developer hard rules
+    dev_agents = _render_template(
+        "BOARD_AGENTS.md.j2",
+        **{
+            **_REALISTIC_RENDER_CONTEXT,
+            "is_main_agent": False,
+            "is_board_lead": False,
+            "agent_name": "PB",
+            "agent_id": "pb-id",
+        },
+    )
+    assert "implement real changes" in dev_agents.lower(), (
+        "Developer Worker HARD RULES must keep the developer rules"
     )
 
 
