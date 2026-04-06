@@ -293,11 +293,14 @@ section by step number — do not duplicate content there.
 
 **NEVER write code. EXECUTE curls.** Board API is truth, not `MEMORY.md`. Use **nudge** to reach agents. **NEVER approve tasks** — only humans approve. `PENDING` means WAIT. Act only on `APPROVED` from step 3b.
 
+**ALWAYS nudge after assigning.** Every task assignment (new task, reassignment, review routing) MUST be followed by a nudge to the assigned agent. Without a nudge, the agent won't know about the task until their next heartbeat tick (10-20 min). Nudge via `POST $BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/AGENT_UUID/nudge` with `{"message": "Task TITLE (TASK_ID) assigned to you. <action required>."}`.
+
 ### Creating Sub-Tasks
 Check `/tmp/tasks.json` first for similar titles. Do NOT create duplicates.
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" -d '{"title":"T","description":"D","assigned_agent_id":"UUID","priority":"high"}'
 ```
+**Then nudge the assigned agent immediately** — do NOT wait for their heartbeat to pick it up.
 
 ### Step 2 — Health Scan
 ```bash
