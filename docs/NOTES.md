@@ -3,6 +3,55 @@ Review the tasks waiting for approval, use Chome MCP if necessary, the expected 
 
 Investigate why the agents aren't nudging each other as instructed
 
+## 2026-04-07 — System Restore + Post-Mortem + Process Guardrails
+
+### Dashboard Restore
+- Restored .63:3000 to build `index-KYqUn_wm.js` (1.12MB, commit 101388d) — the last working PF build
+- 5 rogue builds (~870KB each) had overwritten the working build overnight by an unknown process, stripping Google Fonts, org management UI, and ~250KB of features
+- Cancelled 5 tasks (4 phantom fix tasks + 1 unnecessary split) created as symptoms of rogue deployments
+
+### useAuth.ts Fix
+- Applied `enabled: hasToken` guard to `useAuth.ts` useQuery — the actual 1-line fix that stops 401 noise on unauthenticated pages
+- Built `index-DmfeZOa9.js`, deployed to .63:3000, committed as `4771594` in PF workspace
+- Codex fact-checked this claim: fix was necessary but NOT sufficient — additional bugs (ProfilePage token sync, LoginPage mounting, PeoplePanel API) were also real and correctly fixed by PF overnight
+
+### Redis-Memory Plugin Disabled
+- Plugin was injecting stale/wrong memories into agent sessions via `before_prompt_build` hook
+- Stale memories ("interceptor already exists", "401 fix: retry:0 + catch()") caused PF to repeat failed approaches
+- `autoRecall: false`, `autoCapture: false`, then `enabled: false` + memory slot cleared
+- Per-agent disable not supported by the plugin — global only
+- Agents still have workspace `memory/` directory + `MEMORY.md` for file-based state
+
+### PF Model Comparison
+- Live-tested 6 Ollama cloud models (qwen3.5, gemma4:31b, minimax-m2.7, kimi-k2.5, nemotron-3-super, glm-5) on a real bug fix from agent interactions
+- All 6 produced correct fixes; gemma4:31b-cloud best balance of speed (5.8s) + exact pattern match; nemotron fastest (4.3s)
+- PF reverted to `claude_with_skills` ACP flow with `openai-codex/gpt-5.4` as primary model
+
+### Post-Mortem: Why 2 simple tasks took 6 days and 580 comments
+- **Phase 1D**: 450 comments, 27 builds, 47 QA FAILs, 7 ACP sessions, 6.3 days
+- **Phase 1C**: 130 comments, 18 builds, 21 QA FAILs, 6.3 days
+- Combined: 580 comments, 45 builds, 68 QA FAILs for tasks needing ~4 components + 1 fix
+- **91% of Phase 1D activity** happened after 18:00 Apr 6 — the explosion was hyperactivity, not inaction
+- 10 failure modes identified: ACP death, memory poisoning, deployment chaos, layered auth bugs, Supervisor overhead, permission deadlocks, auth/QA friction, no pre-deploy validation, phantom fix tasks, tick budget waste
+- Codex balanced review: PF did real RCA in some cases, Supervisor was 64% substantive (not pure noise), operator interventions also caused harm (scope churn, premature "STOP ALL WORK", overconfident fix claims)
+
+### Process Guardrails Added (commit e2da873 + 399aaca)
+**Worker rules:**
+- QA Failure Rework: diagnose ALL root causes, fix all in one rework cycle, not one at a time
+- Pre-QA Self-Test: typecheck+build, verify live build matches commit — excludes QA and Architect
+- Escalation Rule: 3+ consecutive QA FAILs → stop and escalate to operator
+- Scope Authority: operator decisions are authoritative, deferred items stay deferred unless operator revises
+
+**Supervisor rules:**
+- Comment Discipline: only comment when routing/deciding/identifying — skip pure acks, max 3/task/hour
+- Guard Rails: 3+ QA FAILs → escalate and stop fix cycles; verify bugs in committed source before creating fix tasks (prevents phantom tasks from deployment drift)
+
+### Board Status (end of session)
+- 92/95 tasks done (5 cancelled phantom/split tasks counted as done)
+- 3 remaining: Phase 1C (in_progress), Phase 1D (review), Phase 1 umbrella (in_progress)
+- All 8 agents online and heartbeating
+- Dashboard live on .63:3000 with build `index-DmfeZOa9.js`
+
 ## 2026-04-06 — Direct Flow + OpenClaw 2026.4.5 Upgrade + Gateway RPC Expansion
 
 ### PF Direct Implementation Flow
@@ -166,3 +215,134 @@ Fix: idempotent write (compare before/after). Gateway stable 2+ hours. Recovery 
   └───────────────┴─────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘  
 
 All tasks are stuck, Phase 1C: Organization management UI (frontend) is to review for a long time. What's happening? These tasks are there for almost three days   
+All 6 models got it right this time. Here's the real-world comparison:
+
+  ┌────────────────────────┬───────┬────────┬───────────────────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────┐
+  │         Model          │ Time  │ Tokens │                                Correct Fix                                │                            Code Quality                             │
+  ├────────────────────────┼───────┼────────┼───────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+  │ nemotron-3-super:cloud │ 4.3s  │ 257    │ Yes — inline enabled: typeof window !== "undefined" && !!getStoredToken() │ Clean, minimal, no variable. Slightly different but equally correct │
+  ├────────────────────────┼───────┼────────┼───────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+  │ gemma4:31b-cloud       │ 5.8s  │ 320    │ Yes — hasToken variable + enabled: hasToken                               │ Exact match of the reference pattern. Clean formatting              │
+  ├────────────────────────┼───────┼────────┼───────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+  │ glm-5:cloud            │ 6.3s  │ 749    │ Yes — same hasToken pattern                                               │ Correct, more verbose output                                        │
+  ├────────────────────────┼───────┼────────┼───────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+  │ minimax-m2.7:cloud     │ 28.2s │ 1,348  │ Yes — same hasToken pattern                                               │ Correct, added // ignore comment                                    │
+  ├────────────────────────┼───────┼────────┼───────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+  │ qwen3.5:cloud          │ 37.1s │ 2,981  │ Yes — same hasToken pattern                                               │ Correct but 3K tokens for a simple fix                              │
+  ├────────────────────────┼───────┼────────┼───────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+  │ kimi-k2.5:cloud        │ 51.1s │ 1,011  │ Yes — same hasToken pattern                                               │ Correct, compact style                                              │
+  └────────────────────────┴───────┴────────┴───────────────────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────┘
+
+  Real-world ranking
+
+  1. nemotron-3-super:cloud — 4.3s, 257 tokens, correct. Inlined the guard instead of creating a variable — slightly different but equally valid. Fastest by far.
+  2. gemma4:31b-cloud — 5.8s, 320 tokens, exact pattern match. Closest to the reference implementation.
+  3. glm-5:cloud — 6.3s, 749 tokens, correct. Unexpectedly fast here vs the first test (48s → 6s, likely cached).
+  4. minimax-m2.7:cloud — 28s, correct this time (fixed the inversion bug from test 1).
+  5. qwen3.5:cloud — 37s, correct but 3K tokens of bloat.
+  6. kimi-k2.5:cloud — 51s, correct but slowest.
+
+  gemma4:31b-cloud is the best balance — fast (5.8s), exact pattern match, clean code, no unnecessary output. nemotron is faster but takes liberties with the pattern. For a frontend dev agent that needs to follow existing
+  codebase conventions, gemma4 is the safer pick.
+
+                                                                                                                                                                                                                                    
+  PF has clear instructions: one fix (enabled: !!getStoredToken() in useAuth.ts), one deploy, one validation cycle. The rogue deployment source still needs investigation to prevent recurrence. 
+
+
+  Three layers: template rules (today), MC backend features (this week), process discipline (ongoing).                                                                                                                            
+                                                                                                                                                                                                                                
+  Layer 1: Template Rules (implementable now)                                                                                                                                                                                     
+                                                                                                                                                                                                                                  
+  1. Pre-QA self-test gate                                                                                                                                                                                                        
+                                                                                                                                                                                                                                
+  Before submitting to QA, the agent must run a self-test checklist and post results. This catches the layered bugs that created the deploy→fail loop.                                                                            
+                                                                                                                                                                                                                                
+  ### Pre-QA Self-Test (mandatory before moving to review)                                                                                                                                                                        
+  Before posting evidence or moving to review, run ALL checks:                                                                                                                                                                    
+  1. `curl -s http://192.168.2.63:3000/ | grep -c '401\|error'` — must be 0                                                                                                                                                       
+  2. Open the app unauthenticated — zero console errors expected                                                                                                                                                                  
+  3. Login with OTP — verify the authenticated flow works                                                                                                                                                                         
+  4. Test the SPECIFIC feature you changed — click through it                                                                                                                                                                     
+  5. `git diff --stat` — list exactly what files you changed                                                                                                                                                                      
+  If ANY check fails, fix before submitting. Do NOT submit partial fixes.                                                                                                                                                         
+                                                                                                                                                                                                                                  
+  2. Diagnose-all-before-fixing rule                                                                                                                                                                                              
+                                                                                                                                                                                                                                  
+  ### Bug Fix Protocol                                                                                                                                                                                                            
+  When QA reports a FAIL:                                                                                                                                                                                                       
+  1. Read the FULL QA report — list every failing criterion                                                                                                                                                                       
+  2. Read the SOURCE CODE for each failing area — diagnose root causes                                                                                                                                                            
+  3. Post a comment listing ALL bugs found with file:line references                                                                                                                                                              
+  4. Fix ALL bugs in ONE commit, not one at a time                                                                                                                                                                                
+  5. Then deploy and submit to QA                                                                                                                                                                                                 
+  Do NOT deploy after fixing only one bug. Batch your fixes.                                                                                                                                                                      
+                                                                                                                                                                                                                                  
+  3. Overnight escalation gate                                                                                                                                                                                                    
+                                                                                                                                                                                                                                  
+  ### Escalation Rule                                                                                                                                                                                                             
+  If a task has received 3+ consecutive QA FAILs without a PASS:                                                                                                                                                                
+  - STOP working on it                                                                                                                                                                                                            
+  - Post: "ESCALATION: 3+ QA FAILs. Requesting operator review before continuing."                                                                                                                                                
+  - Do NOT deploy again until operator responds                                                                                                                                                                                   
+                                                                                                                                                                                                                                  
+  4. Supervisor comment throttle                                                                                                                                                                                                  
+                                                                                                                                                                                                                                
+  ### Lead Comment Rules                                                                                                                                                                                                          
+  - Do NOT acknowledge every agent comment. Only comment when:                                                                                                                                                                  
+    - Routing to a different agent                                                                                                                                                                                                
+    - Making a scope/priority decision
+    - Identifying a problem the agent missed                                                                                                                                                                                      
+    - Answering a question                                                                                                                                                                                                      
+  - Pure acknowledgments ("Acknowledged. Stay in progress.") are NOISE. Skip them.                                                                                                                                                
+  - Maximum 3 comments per task per hour                                                                                                                                                                                          
+                                                                                                                                                                                                                                  
+  5. Scope authority                                                                                                                                                                                                              
+                                                                                                                                                                                                                                
+  ### Scope Authority                                                                                                                                                                                                             
+  Operator scope decisions are FINAL. Do not reopen deferred items.                                                                                                                                                             
+  If Architect or QA flags a deferred item, respond:
+  "Item X was explicitly deferred to Phase 2 by operator. Not in scope."                                                                                                                                                          
+                                                                                                                                                                                                                                  
+  Layer 2: MC Backend Features (this week)                                                                                                                                                                                        
+                                                                                                                                                                                                                                  
+  1. Deploy tracking                                                                                                                                                                                                            
+
+  MC should track the expected build hash per deployment:                                                                                                                                                                         
+  - After PF deploys, PF posts the build hash in a structured comment
+  - MC stores it: {agent_id, task_id, build_hash, commit_sha, deployed_at}                                                                                                                                                        
+  - Heartbeat sweep checks: is the live build still what was deployed?                                                                                                                                                          
+  - Alert if build drift detected                                                                                                                                                                                                 
+                                                                                                                                                                                                                                  
+  2. QA fail counter                                                                                                                                                                                                              
+                                                                                                                                                                                                                                  
+  MC counts consecutive QA FAILs per task:                                                                                                                                                                                        
+  - After 3 FAILs without a PASS, automatically post escalation comment + pause heartbeat for the assigned agent on that task                                                                                                   
+  - Operator must explicitly resume                                                                                                                                                                                               
+                                                                                                                                                                                                                                
+  3. Deploy lock                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                
+  Only one deploy to a target (e.g., .63:3000) at a time:                                                                                                                                                                         
+  - PF requests deploy via MC API
+  - MC checks: is another deploy in progress? Is the target locked?                                                                                                                                                               
+  - If locked, reject with "Deploy target locked by task X"                                                                                                                                                                     
+                                                                                                                                                                                                                                  
+  Layer 3: Process Discipline (ongoing)                                                                                                                                                                                           
+  
+  For the operator (me)                                                                                                                                                                                                           
+                                                                                                                                                                                                                                
+  - Don't claim a fix is complete without QA validation                                                                                                                                                                           
+  - Don't stop agents mid-work unless the system is actively breaking
+  - Scope decisions must be explicit, final, and posted ONCE                                                                                                                                                                      
+  - When intervening, diagnose ALL issues before deploying — not just the obvious one                                                                                                                                             
+                                                                                                                                                                                                                                  
+  For the agents                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                  
+  - PF: batch fixes, self-test before QA, don't deploy partial work                                                                                                                                                               
+  - Supervisor: less acking, more routing. 3 comments/hour max
+  - QA-E2E: test against the COMMITTED build hash, not whatever happens to be live                                                                                                                                                
+                                                                                                                                                                                                                                  
+  ---                                                                                                                                                                                                                             
+  The template rules are the fastest win — they address the deploy→fail loop, overnight autonomy, and supervisor noise directly. Want me to implement them in BOARD_AGENTS.md.j2 now?         
+
+
+  Use codex to review and validate your assumptions and implementation 
