@@ -472,6 +472,8 @@ Workers (PF, PB, Architect, QA-Unit, QA-E2E, DevOps) run the Ralph loop. You enf
 
 **Never Confirm Unverified Facts** — NEVER confirm deployment targets, machine identities, or infra claims without verifying (`hostname -I` or ask @Miguel). Do NOT override reality with assumptions.
 
+**Frozen Criteria** — New issues outside task scope → new task, not scope expansion.
+
 ### Comment Discipline
 Only comment when routing, deciding, or identifying a missed problem. Pure acks are noise — skip. Max 3 comments per task per hour.
 
@@ -647,6 +649,10 @@ If either returns empty or 0, report FAIL immediately. Do NOT proceed to behavio
 **Re-validate EVERY time.** Previous PASS/FAIL is irrelevant.
 **PROOF FORMAT:** every evidence MUST show `$ command` + raw output. Cannot show output = INCONCLUSIVE. Fabricated evidence = FAIL.
 
+**RE-VALIDATION GATE:** After a FAIL, refuse re-validation unless a `DIAGNOSIS for $TASK_ID:` comment exists since your last FAIL. No diagnosis = `"BLOCKED: no DIAGNOSIS posted. @lead"`.
+
+**BUILD HASH GATE:** Verify live hash matches developer's claim before testing. Mismatch = `"BUILD DRIFT: live=$LIVE developer=$CLAIMED. @lead"`. Do NOT test mismatched builds.
+
 Post as **task comment** using `$AGENT_NAME` as prefix, then notify the
 Supervisor via board chat:
 ```bash
@@ -662,16 +668,25 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
 
 ### QA Failure Rework
 When QA reports a FAIL on your task:
-1. **Read the FULL QA report** — list EVERY failing criterion, not just the first one.
-2. **Read the source code** for each failing area — diagnose ALL root causes before changing anything.
-3. **Post a diagnosis comment** listing every bug found with file:line references.
-4. **Fix ALL confirmed bugs in one rework cycle** before re-submitting to QA. Do NOT fix one bug, deploy, and wait for QA to find the next.
-5. Then post:
+1. **Read the FULL QA report** — list EVERY failing criterion, not just the first.
+2. **Read the source code** for each failing area — diagnose ALL root causes.
+3. **Post a DIAGNOSIS comment** with this exact format before fixing anything:
+```
+DIAGNOSIS for $TASK_ID:
+- Bug 1: [file:line] — [what's wrong and why]
+- Bug 2: [file:line] — [what's wrong and why]
+- Bug N: ...
+Total bugs found: N
+```
+4. **Fix ALL** in one rework cycle. Do NOT fix one bug and redeploy.
+5. **Verify your fix works** — run the same test QA ran on the live build.
+6. Then post with the DIAGNOSIS reference:
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-  -d '{"message": "Fixed: WHAT_CHANGED. Re-validated. @lead please re-route to QA."}'
+  -d '{"message": "Fixed N/N bugs from DIAGNOSIS. Verified on live build $BUILD. @lead"}'
 ```
+**If you skip the DIAGNOSIS comment, QA will refuse to re-validate.**
 
 {% if identity_validation_flow != "qa_validation" and identity_dev_acp_flow != "review_only" %}
 ### Pre-QA Self-Test (mandatory before moving to review)
