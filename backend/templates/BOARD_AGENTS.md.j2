@@ -556,35 +556,53 @@ for c in page.get('items', []):
 - Self-check: does the result satisfy EVERY acceptance criterion? If ANY missing, fix and redeploy. Do NOT move to review until ALL pass.
 {% endif %}
 {% if identity_validation_flow == "qa_validation" %}
-- **QA VALIDATION:** Validate the task against its acceptance criteria:
-  - Verify task is in `review` status. If not, reply `@lead task not in review` and stop.
+- **QA VALIDATION:** When assigned a `review` task:
+  - Fetch and verify status is `review`: `curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" -H "X-Agent-Token: $AUTH_TOKEN"`. If not in review → `@lead task not in review` and stop.
   - List each acceptance criterion. Validate EACH. Missing ANY = FAIL.
-  - Browser/Playwright REQUIRED for UI tasks. Use auth helper for authenticated features.
-  - Verify live build hash matches developer's claim before testing.
-  - Post: `$AGENT_NAME validation — PASS/FAIL — EVIDENCE. @lead`
+  - **Browser/Playwright REQUIRED for UI tasks.** For auth features: `import { authenticatedPage } from './playwright-auth-helper.mjs'`. Verify `page.url()` is NOT `/login`.
+  - **Verify live build hash** before testing. Mismatch = `"BUILD DRIFT. @lead"`.
+  - **PROOF FORMAT:** evidence MUST show `$ command` + raw output.
+  - Post validation + nudge:
+    `curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" -d '{"message": "$AGENT_NAME validation\n\nPASS/FAIL — EVIDENCE\n\n@lead"}'`
+    `curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" -d '{"content": "@lead QA posted for $TASK_ID.", "tags": ["chat"]}'`
 {% endif %}
 
 {% if identity_dev_acp_flow == "review_only" %}
-7) **Post review findings** as task comment. Tag `@lead` when done.
+7) **Post review findings** as task comment and nudge Supervisor:
+```bash
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"message": "$AGENT_NAME review\n\nFINDINGS\n\n@lead"}'
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "@lead Review posted for task $TASK_ID.", "tags": ["chat"]}'
+```
 {% else %}
-7) **Move to review** with evidence:
+7) **Move to review** — do NOT deploy new builds after this until QA finishes:
 ```bash
 curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"status": "review", "comment": "ALL acceptance criteria PASS. Commit: SHA. Build: HASH. @lead"}'
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "@lead Task $TASK_ID moved to review.", "tags": ["chat"]}'
 ```
 {% endif %}
 
-8) Pick next inbox task (step 2) or post idle.
+8) Pick next inbox task (step 2) or post idle:
+```bash
+curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "@lead $AGENT_NAME idle. Available for work.", "tags": ["chat"]}'
+```
 
 ### If QA rejects your task
 Read the FULL QA report. Fix ALL issues in one pass. Redeploy. Re-submit.
-
-### MANDATORY: Nudge Supervisor After Finishing Work
-After moving a task to review or completing a deployment, nudge the Supervisor via board memory chat. Do NOT just tag @lead in a comment and wait.
+Do NOT re-submit with "PASS by design" or "no changes needed" — you MUST show a new commit.
 
 ### Rules
-- Deploy target comes from the **task description**. Do NOT guess paths.
+- Deploy target comes from the **task description**. Do NOT guess paths. NEVER deploy to a different machine than specified.
+- Operator scope decisions are authoritative. Items deferred by operator must NOT be reopened.
 - Stay in your role. Ask `@lead` for cross-role work.
 - Fabricating evidence is a critical violation.
 - If stuck 3+ times on same issue, escalate to `@Miguel`.

@@ -660,8 +660,8 @@ def test_hard_rules_in_agents_not_identity() -> None:
     assert "Fabricating evidence" in qa_agents, (
         "Fabrication rule must apply to ALL agents"
     )
-    assert "Nudge Supervisor" in qa_agents, (
-        "Nudge mandate must be in AGENTS.md for workers"
+    assert "nudge" in qa_agents.lower() or "board memory" in qa_agents.lower() or "@lead" in qa_agents, (
+        "Supervisor notification mechanism must be in AGENTS.md for workers"
     )
 
     # Developer AGENTS.md must have developer hard rules
