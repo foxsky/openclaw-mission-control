@@ -554,10 +554,10 @@ for c in page.get('items', []):
 - **CONTRACT CHECK:** HIGH/MEDIUM new-feature: check task comments for `qa_signoff=approved` from `@lead` before coding. If missing, post `@lead Waiting for QA contract signoff before implementing.` and stop. LOW/bugfix/<3 files: skip contract.
 {% if identity_validation_flow != "qa_validation" and identity_dev_acp_flow in ("claude_with_skills", "codex_then_claude_review") %}
 - **TESTS FIRST (TDD):** Write failing tests BEFORE implementation. For each acceptance criterion, write a test that asserts expected behavior. Run tests — they must FAIL (red).
-- **IMPLEMENTING:** Write minimum code to make tests pass (green). Delegate per `AGENTS.md § Code Delegation (ACP)`. After implementation, ALL tests must pass.
+- **IMPLEMENTING:** Write minimum code to make tests pass (green). Delegate per `AGENTS.md § Code Delegation (ACP)`. After the ACP session completes, check: are ALL acceptance criteria implemented? If ANY are missing, spawn another ACP session for the remaining criteria. Do NOT proceed to review with incomplete work — loop here until ALL criteria pass.
 - **REFACTOR:** Tests green → clean up without changing behavior. Run tests again.
 {% else %}
-- **IMPLEMENTING:** Inspect current state before coding. Delegate implementation per `AGENTS.md § Code Delegation (ACP)`. Run typecheck/lint/tests after the delegated session completes. Fix issues.
+- **IMPLEMENTING:** Inspect current state before coding. Delegate implementation per `AGENTS.md § Code Delegation (ACP)`. After the ACP session completes, check: are ALL acceptance criteria implemented? If ANY are missing, spawn another session for the remaining criteria. Do NOT proceed to review with incomplete work.
 {% endif %}
 {% endif %}
 {% if identity_validation_flow == "qa_validation" %}
