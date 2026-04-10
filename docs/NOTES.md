@@ -3,6 +3,18 @@ Review the tasks waiting for approval, use Chome MCP if necessary, the expected 
 
 Investigate why the agents aren't nudging each other as instructed
 
+## 2026-04-10 — TaskFlow API Codex Review Fixes
+
+### TaskFlow API — Codex (gpt-5.4) Review + 6 Fixes
+- **High**: Schema migrations in `ensure_support_tables` — `boards.owner_person_id` column + `board_id_counters` table with composite PK
+- **Medium**: `/auth/me` backfill UPDATE runs on separate `read_only=False` connection, guarded with `WHERE name IS NULL OR name = ''`
+- **Medium**: `_resolve_person_id` rewritten — requires 9+ digits, pre-filters on last 9 in SQL, confirms full-digit equivalence in Python, returns None on ambiguity (no silent LIMIT 1 mis-mapping)
+- **Low**: `TaskNotePayload.normalize_fields` strips whitespace before emptiness check
+- **Low**: Debug `traceback.print_exc()` replaced with `logger.exception()`
+- 76 tests pass (71 original + 5 new regression tests)
+- Gateway Agent recovered — was stale since Apr 8, heartbeat sent, now online
+- Board agent heartbeat intervals doubled (except Supervisor 5m, Gateway 10m)
+
 ## 2026-04-09 — TaskFlow Dashboard Fixes + WhatsApp Notifications + Cancelled UI
 
 ### TaskFlow Dashboard Layout Restoration (.63)
