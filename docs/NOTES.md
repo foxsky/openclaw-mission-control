@@ -3,6 +3,45 @@ Review the tasks waiting for approval, use Chome MCP if necessary, the expected 
 
 Investigate why the agents aren't nudging each other as instructed
 
+## 2026-04-09 — TaskFlow Dashboard Fixes + WhatsApp Notifications + Cancelled UI
+
+### TaskFlow Dashboard Layout Restoration (.63)
+- Restored last-week's kanban layout broken by agent deploy drift (DevOps rsync --delete)
+- Columns default expanded (not auto-collapsed when empty)
+- Columns sized to content (items-start) with maxHeight cap for scrollbar
+- Gray bg-slate-200 backdrop restored, horizontal scrollbar at viewport edge
+- People panel overflow-y-auto for large teams (Seci 13 members)
+- Cancelled column removed from TASK_COLUMNS, kept in type
+
+### TaskFlow Dashboard UX Improvements (.63)
+- Personal boards aggregate tasks from parent board (assigned to owner)
+- Orphan subtasks render as top-level cards when parent not in same column
+- Board owner name hidden on own cards (uses owner_person_id from DB)
+- Delegation chain resolution: non-member assignees resolved to board member via subtasks
+- Parent project title shown on subtask cards (P1 - Migração SEI)
+
+### TaskFlow API Enhancements (.63)
+- WhatsApp notifications via NanoClaw IPC: task create, move, reassign, comment
+- Unified task ID counters: uses board_id_counters (same table as NanoClaw engine)
+- /auth/me resolves person_id, role from board_people via phone matching
+- Board filtering by owner_person_id + descendants (BFS traversal)
+- parent_task_title subquery in fetch_tasks (cross-board)
+- VALID_COLUMNS includes cancelled
+
+### MC Dashboard Cancelled UI (.64)
+- AC6: Cancel button in task detail footer with confirmation
+- AC7: window.confirm before cancel
+- AC8: Cancelled column hidden by default
+- AC9: Toggle in board configuration/edit page (DB-backed show_cancelled_column)
+- AC10: Strikethrough title + muted opacity + red border on cancelled cards
+- API types updated: TaskCardReadStatus, TaskUpdate include cancelled
+- StatusDot includes cancelled color
+
+### MC Frontend Systemd Fix (.64)
+- Fixed mission-control.service: corrected WorkingDirectory, ExecStart, .env path
+- Fixed .next/ ownership (root → mcontrol)
+- Service enabled for auto-start on boot
+
 ## 2026-04-07 — System Restore + Post-Mortem + Process Guardrails + Phase 1 Complete
 
 ### Phase 1 Complete — 97/97 tasks done
