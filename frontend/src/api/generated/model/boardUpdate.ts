@@ -22,6 +22,7 @@ export interface BoardUpdate {
   name?: string | null;
   objective?: string | null;
   only_lead_can_change_status?: boolean | null;
+  show_cancelled_column?: boolean | null;
   require_approval_for_done?: boolean | null;
   require_review_before_done?: boolean | null;
   slug?: string | null;

@@ -301,6 +301,9 @@ export default function EditBoardPage() {
   const [onlyLeadCanChangeStatus, setOnlyLeadCanChangeStatus] = useState<
     boolean | undefined
   >(undefined);
+  const [showCancelledColumn, setShowCancelledColumn] = useState<
+    boolean | undefined
+  >(undefined);
   const [maxAgents, setMaxAgents] = useState<number | undefined>(undefined);
   const [successMetrics, setSuccessMetrics] = useState<string | undefined>(
     undefined,
@@ -516,6 +519,8 @@ export default function EditBoardPage() {
     false;
   const resolvedOnlyLeadCanChangeStatus =
     onlyLeadCanChangeStatus ?? baseBoard?.only_lead_can_change_status ?? false;
+  const resolvedShowCancelledColumn =
+    showCancelledColumn ?? baseBoard?.show_cancelled_column ?? false;
   const resolvedMaxAgents = maxAgents ?? baseBoard?.max_agents ?? 1;
   const resolvedSuccessMetrics =
     successMetrics ??
@@ -599,6 +604,7 @@ export default function EditBoardPage() {
       updated.block_status_changes_with_pending_approval ?? false,
     );
     setOnlyLeadCanChangeStatus(updated.only_lead_can_change_status ?? false);
+    setShowCancelledColumn(updated.show_cancelled_column ?? false);
     setMaxAgents(updated.max_agents ?? 1);
     setSuccessMetrics(
       updated.success_metrics
@@ -667,6 +673,7 @@ export default function EditBoardPage() {
       block_status_changes_with_pending_approval:
         resolvedBlockStatusChangesWithPendingApproval,
       only_lead_can_change_status: resolvedOnlyLeadCanChangeStatus,
+      show_cancelled_column: resolvedShowCancelledColumn,
       max_agents: resolvedMaxAgents,
       success_metrics: resolvedBoardType === "general" ? null : parsedMetrics,
       target_date:
@@ -1132,6 +1139,39 @@ export default function EditBoardPage() {
                   </span>
                   <span className="block text-xs text-slate-600">
                     Restrict status changes to the board lead.
+                  </span>
+                </span>
+              </div>
+              <div className="flex items-start gap-3 rounded-lg border border-slate-200 px-3 py-3">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={resolvedShowCancelledColumn}
+                  aria-label="Show cancelled column"
+                  onClick={() =>
+                    setShowCancelledColumn(!resolvedShowCancelledColumn)
+                  }
+                  disabled={isLoading}
+                  className={`mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition ${
+                    resolvedShowCancelledColumn
+                      ? "border-emerald-600 bg-emerald-600"
+                      : "border-slate-300 bg-slate-200"
+                  } ${isLoading ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition ${
+                      resolvedShowCancelledColumn
+                        ? "translate-x-5"
+                        : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+                <span className="space-y-1">
+                  <span className="block text-sm font-medium text-slate-900">
+                    Show cancelled column
+                  </span>
+                  <span className="block text-xs text-slate-600">
+                    Display a <code>Cancelled</code> column on the Kanban board.
                   </span>
                 </span>
               </div>

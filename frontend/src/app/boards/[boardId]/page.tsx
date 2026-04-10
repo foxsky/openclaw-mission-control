@@ -909,20 +909,7 @@ export default function BoardDetailPage() {
   const [isDeletingTask, setIsDeletingTask] = useState(false);
   const [deleteTaskError, setDeleteTaskError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"board" | "list">("board");
-  const [showCancelledColumn, setShowCancelledColumn] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try { return localStorage.getItem(`board:${boardId}:showCancelled`) === "true"; } catch { return false; }
-  });
-  // Sync showCancelledColumn with localStorage changes (from board edit page)
-  useEffect(() => {
-    const handler = () => {
-      try {
-        setShowCancelledColumn(localStorage.getItem(`board:${boardId}:showCancelled`) === "true");
-      } catch {}
-    };
-    window.addEventListener("storage", handler);
-    return () => window.removeEventListener("storage", handler);
-  }, [boardId]);
+  const showCancelledColumn = board?.show_cancelled_column ?? false;
 
   const [isLiveFeedOpen, setIsLiveFeedOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);

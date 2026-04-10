@@ -34,6 +34,7 @@ class BoardBase(SQLModel):
     comment_required_for_review: bool = False
     block_status_changes_with_pending_approval: bool = False
     only_lead_can_change_status: bool = False
+    show_cancelled_column: bool = False
     max_agents: int = Field(default=1, ge=0)
 
 
@@ -79,6 +80,7 @@ class BoardUpdate(SQLModel):
     comment_required_for_review: bool | None = None
     block_status_changes_with_pending_approval: bool | None = None
     only_lead_can_change_status: bool | None = None
+    show_cancelled_column: bool | None = None
     max_agents: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")

@@ -23,6 +23,7 @@ export interface BoardCreate {
   name: string;
   objective?: string | null;
   only_lead_can_change_status?: boolean;
+  show_cancelled_column?: boolean;
   require_approval_for_done?: boolean;
   require_review_before_done?: boolean;
   slug: string;
