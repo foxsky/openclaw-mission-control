@@ -400,7 +400,7 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/QA_UNIT_ID/nud
 ```
 If not all required QA have posted → proceed to step 4, check next heartbeat.
 
-- **QA posted FAIL or PARTIAL** → treat PARTIAL as FAIL. Reject approval if pending, move to inbox, nudge dev with the specific failing dimensions:
+- **QA posted FAIL or PARTIAL** → treat PARTIAL as FAIL. Reject approval if pending, move task to `rework` (NOT `inbox`) with explicit dev assignment, nudge dev with failing dimensions:
 ```bash
 APPROVAL_ID=$(curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/approvals?status=pending" \
   -H "X-Agent-Token: $AUTH_TOKEN" | python3 -c "
@@ -414,10 +414,10 @@ for a in json.load(sys.stdin).get('items',[]):
   -d '{"status": "rejected"}'
 curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-  -d '{"status": "inbox", "assigned_agent_id": "DEV_AGENT_UUID"}'
+  -d '{"status": "rework", "assigned_agent_id": "DEV_AGENT_UUID"}'
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/agents/DEV_AGENT_UUID/nudge" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
-  -d '{"message": "QA FAILED: DETAILS. Fix and tag @lead when moving to review."}'
+  -d '{"message": "QA FAILED: DETAILS. Your task is in `rework`. Fix, move to `in_progress`, then `review`, and tag @lead."}'
 ```
 
 - **QA posted PASS (all required):** If 3b output shows PENDING, skip — already waiting for human. Otherwise:
@@ -503,22 +503,22 @@ curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks?assigned_agent_id=$AGEN
 import sys,json
 for t in json.load(sys.stdin).get('items',[]):
     s=t.get('status','')
-    if s in ('inbox','in_progress','review'):
+    if s in ('inbox','in_progress','review','rework'):
         print(f\"{t['id']} {s} blocked={t.get('is_blocked',False)} deps={t.get('depends_on_task_ids',[])} {t.get('title','')}\")
         if t.get('description'): print(t['description'])
 "
 ```
-If `MEMORY.md` says "Done" but board shows `inbox`/`in_progress` → `MEMORY.md` is wrong. Board is truth.
+If `MEMORY.md` says "Done" but board shows `inbox`/`in_progress`/`rework` → `MEMORY.md` is wrong. Board is truth.
 
-3) **Pick task**: continue `in_progress`; else pick assigned `inbox`; else pick assigned `review` (if QA); else idle.
+3) **Pick task**: continue `in_progress`;{% if identity_dev_acp_flow == "review_only" or identity_validation_flow == "qa_validation" %} else pick assigned `review`; else pick assigned `inbox`;{% else %} else pick assigned `rework` (fix failed work first); else pick assigned `inbox`; else pick assigned `review`;{% endif %} else idle.
 
-4) **When picking `inbox`, move it IMMEDIATELY.** Your target status is determined by your role (do NOT pick it yourself):
+4) **When picking `inbox` or `rework`, move it IMMEDIATELY.** Your target status is determined by your role (do NOT pick it yourself):
 {% if identity_dev_acp_flow == "review_only" or identity_validation_flow == "qa_validation" %}
-- Your role is **review/QA/Architect** → move the task to `review`.
+- Your role is **review/QA/Architect** → move the task to `review`. (You never receive `rework`.)
 {% else %}
-- Your role is **implementation** → move the task to `in_progress`.
+- Your role is **implementation** → move the task to `in_progress`. For `rework`: read QA FAIL comment first, then fix, then `review`.
 {% endif %}
-Do NOT work while task is in `inbox`:
+Do NOT work while task is in `inbox` or `rework`:
 ```bash
 curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
