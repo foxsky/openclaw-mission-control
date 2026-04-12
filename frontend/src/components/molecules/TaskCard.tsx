@@ -2,7 +2,13 @@ import { CalendarClock, UserCircle } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-type TaskStatus = "inbox" | "in_progress" | "review" | "done" | "cancelled";
+type TaskStatus =
+  | "inbox"
+  | "in_progress"
+  | "review"
+  | "rework"
+  | "done"
+  | "cancelled";
 
 interface TaskCardProps {
   title: string;

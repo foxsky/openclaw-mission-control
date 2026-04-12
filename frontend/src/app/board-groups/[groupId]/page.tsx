@@ -57,6 +57,8 @@ const statusLabel = (value?: string | null) => {
       return "In progress";
     case "review":
       return "Review";
+    case "rework":
+      return "Rework";
     case "done":
       return "Done";
     default:
@@ -69,6 +71,8 @@ const statusTone = (value?: string | null) => {
     case "in_progress":
       return "bg-emerald-50 text-emerald-700 border-emerald-200";
     case "review":
+      return "bg-indigo-50 text-indigo-700 border-indigo-200";
+    case "rework":
       return "bg-amber-50 text-amber-800 border-amber-200";
     case "done":
       return "bg-slate-50 text-slate-600 border-slate-200";

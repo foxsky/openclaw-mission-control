@@ -342,9 +342,9 @@ for a in json.load(open('/tmp/agents.json')).get('items',[]):
 
 ### Step 2b — Route Inbox Tasks
 
-**Decomposition gate** (MANDATORY, run FIRST for new inbox tasks). Route to Architect instead of implementation if ANY: ≥5 ACs; multi-component (FE+BE in one deliverable); ≥2 distinct deliverables; missing AC list; new architecture (data model, API contract, auth scope, state machine status). Skip ONLY when single-deliverable AND <5 ACs AND shipped-pattern AND no architectural decision. Override: `[NO-DECOMPOSE: <reason>]` in title — reason required.
+**Decomposition gate** (MANDATORY, run FIRST for new inbox tasks OR tasks assigned to you). Route to Architect instead of implementation if ANY: ≥5 ACs; multi-component (FE+BE in one deliverable); ≥2 distinct deliverables; missing AC list; new architecture (data model, API contract, auth scope, state machine status). Skip ONLY when single-deliverable AND <5 ACs AND shipped-pattern AND no architectural decision. Override: `[NO-DECOMPOSE: <reason>]` in title — reason required.
 
-**Action**: PATCH `{"assigned_agent_id":"ARCHITECT_ID","status":"in_progress"}` + nudge: `"DECOMPOSE $TASK_ID. Post per-AC→subtask map with roles (PF/PB/DevOps/QA-E2E/QA-Unit) and dependency order. Do NOT implement."`
+**Action**: PATCH `{"assigned_agent_id":"ARCHITECT_ID","status":"in_progress"}` + nudge: `"DECOMPOSE $TASK_ID. Post per-AC→subtask map with roles (PF/PB/DevOps/QA-E2E/QA-Unit) and dependency order. Do NOT implement."` **If Architect plan already in thread**: skip this Action, run Umbrella lifecycle in this tick; no ack before POSTs.
 
 **Umbrella lifecycle** (Architect is `review_only` and won't move the umbrella):
 1. Create each subtask from Architect's plan (`assigned_agent_id` + `depends_on_task_ids` + ACs copied).

@@ -17,7 +17,14 @@ export interface TaskUpdate {
   description?: string | null;
   due_at?: string | null;
   priority?: string | null;
-  status?: "inbox" | "in_progress" | "review" | "done" | "cancelled" | null;
+  status?:
+    | "inbox"
+    | "in_progress"
+    | "review"
+    | "rework"
+    | "done"
+    | "cancelled"
+    | null;
   tag_ids?: string[] | null;
   title?: string | null;
 }

@@ -90,7 +90,7 @@ if TYPE_CHECKING:
 
 router = APIRouter(prefix="/boards/{board_id}/tasks", tags=["tasks"])
 
-ALLOWED_STATUSES = {"inbox", "in_progress", "review", "done"}
+ALLOWED_STATUSES = {"inbox", "in_progress", "review", "rework", "done"}
 TASK_EVENT_TYPES = {
     "task.created",
     "task.updated",
@@ -1565,6 +1565,14 @@ async def create_task(
     auth: AuthContext = USER_AUTH_DEP,
 ) -> TaskRead:
     """Create a task and initialize dependency rows."""
+    # `rework` is a transitional status only reachable via a lead PATCH from
+    # `review`. Tasks cannot be CREATED directly in `rework` state — that would
+    # bypass the "failed review" provenance the column is meant to capture.
+    if payload.status == "rework":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tasks cannot be created directly in `rework` state.",
+        )
     data = payload.model_dump(exclude={"depends_on_task_ids", "tag_ids", "custom_field_values"})
     depends_on_task_ids = list(payload.depends_on_task_ids)
     tag_ids = list(payload.tag_ids)
@@ -2251,15 +2259,15 @@ async def _lead_apply_status(
                 f"task status is `review` (current: `{update.task.status}`)."
             ),
         )
-    if target_status not in {"done", "inbox"}:
+    if target_status not in {"done", "inbox", "rework"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                "Lead status target gate failed: review tasks can only move to `done` or "
-                f"`inbox` (requested: `{target_status}`)."
+                "Lead status target gate failed: review tasks can only move to `done`, "
+                f"`inbox`, or `rework` (requested: `{target_status}`)."
             ),
         )
-    if target_status == "inbox":
+    if target_status in {"inbox", "rework"}:
         # Respect an explicit assignment provided by the lead in this PATCH.
         # Without an explicit assignee, fall back to routing the task to the
         # last worker who moved it to review (the "changes requested" return
@@ -2305,7 +2313,7 @@ async def _lead_notify_new_assignee(
     if board:
         if (
             update.previous_status == "review"
-            and update.task.status == "inbox"
+            and update.task.status in {"inbox", "rework"}
             and update.actor.actor_type == "agent"
             and update.actor.agent
             and update.actor.agent.is_board_lead
@@ -2484,6 +2492,28 @@ async def _apply_non_lead_agent_task_rules(
                 detail="Only board leads can change task status.",
             )
         status_value = _required_status_value(update.updates["status"])
+        # `rework` is a lead-only terminal-from-review state: only a board lead
+        # may place a task in `rework` (after a failed review). Non-lead agents
+        # can pick up a rework task and move it forward, but they may never
+        # PUT a task into rework themselves.
+        if status_value == "rework":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only board leads can move a task to `rework`.",
+            )
+        # When a task is currently in `rework`, force the worker to restart the
+        # review cycle from the beginning: the only valid worker transitions
+        # are rework->in_progress (pick it up and fix it) or rework->inbox
+        # (drop it back into the queue). Shortcutting to `review` or `done`
+        # would bypass the "fix it first" intent of the rework column.
+        if update.task.status == "rework" and status_value not in {"in_progress", "inbox"}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Rework tasks must re-enter the review cycle via `in_progress`. "
+                    f"Direct transition rework -> `{status_value}` is not allowed."
+                ),
+            )
         if status_value != "inbox":
             dep_ids = await _task_dep_ids(
                 session,
@@ -2570,6 +2600,16 @@ async def _apply_admin_task_rules(
             update.task.previous_in_progress_at = update.task.in_progress_at
             update.task.assigned_agent_id = None
             update.task.in_progress_at = None
+        elif status_value == "rework":
+            update.task.previous_in_progress_at = update.task.in_progress_at
+            update.task.in_progress_at = None
+            # Admin path: if the admin did not supply an explicit assignee, do
+            # NOT silently strand the task on the lead (who is the auto-assignee
+            # of `review` tasks via `_assign_review_task_to_lead`). Clear the
+            # assignee so the rework task lands unassigned; the admin is
+            # expected to explicitly re-assign as part of the same PATCH.
+            if "assigned_agent_id" not in update.updates:
+                update.task.assigned_agent_id = None
         elif status_value == "in_progress":
             update.task.in_progress_at = utcnow()
 
@@ -2737,7 +2777,7 @@ async def _notify_task_update_assignment_changes(
 
     if (
         update.previous_status == "review"
-        and update.task.status == "inbox"
+        and update.task.status in {"inbox", "rework"}
         and update.actor.actor_type == "agent"
         and update.actor.agent
         and update.actor.agent.is_board_lead

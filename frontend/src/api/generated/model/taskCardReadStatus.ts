@@ -12,6 +12,7 @@ export const TaskCardReadStatus = {
   inbox: "inbox",
   in_progress: "in_progress",
   review: "review",
+  rework: "rework",
   done: "done",
   cancelled: "cancelled",
 } as const;

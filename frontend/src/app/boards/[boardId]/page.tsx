@@ -516,6 +516,7 @@ const statusOptions = [
   { value: "inbox", label: "Inbox" },
   { value: "in_progress", label: "In progress" },
   { value: "review", label: "Review" },
+  { value: "rework", label: "Rework" },
   { value: "done", label: "Done" },
 ];
 

@@ -790,6 +790,13 @@ async def create_task(
     """
     _guard_board_access(agent_ctx, board)
     _require_board_lead(agent_ctx)
+    # `rework` is a transitional status only reachable via a lead PATCH from
+    # `review`. Tasks cannot be CREATED directly in `rework` state.
+    if payload.status == "rework":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tasks cannot be created directly in `rework` state.",
+        )
     data = payload.model_dump(
         exclude={"depends_on_task_ids", "tag_ids", "custom_field_values"},
     )

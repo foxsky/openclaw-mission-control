@@ -13,7 +13,13 @@ import { TaskCard } from "@/components/molecules/TaskCard";
 import { parseApiDatetime } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 
-type TaskStatus = "inbox" | "in_progress" | "review" | "done" | "cancelled";
+type TaskStatus =
+  | "inbox"
+  | "in_progress"
+  | "review"
+  | "rework"
+  | "done"
+  | "cancelled";
 
 type Task = {
   id: string;
@@ -72,6 +78,14 @@ const columns: Array<{
     accent: "hover:border-indigo-400 hover:bg-indigo-50",
     text: "group-hover:text-indigo-600 text-slate-500",
     badge: "bg-indigo-100 text-indigo-700",
+  },
+  {
+    title: "Rework",
+    status: "rework",
+    dot: "bg-amber-500",
+    accent: "hover:border-amber-400 hover:bg-amber-50",
+    text: "group-hover:text-amber-700 text-slate-500",
+    badge: "bg-amber-100 text-amber-800",
   },
   {
     title: "Done",
@@ -301,6 +315,7 @@ export const TaskBoard = memo(function TaskBoard({
       inbox: [],
       in_progress: [],
       review: [],
+      rework: [],
       done: [],
       cancelled: [],
     };

@@ -12,5 +12,6 @@ export const TaskCreateStatus = {
   inbox: "inbox",
   in_progress: "in_progress",
   review: "review",
+  rework: "rework",
   done: "done",
 } as const;
