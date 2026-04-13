@@ -600,6 +600,7 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
   -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"content": "@lead Review posted for task $TASK_ID.", "tags": ["chat"]}'
 ```
+**Re-review rule** (when a task you previously reviewed comes back to you after rejection): you MUST re-test, NOT re-cite. Re-citing your previous PASS verdict on re-submitted code is forbidden. Required: (a) read the rejection comment, (b) check `git log` since your last review — if no new commits, post FAIL "no code changed since previous review", (c) if new commits exist, re-run the SAME test that triggered the rejection, in the browser if it's a UI/functional AC. Do not approve until you have new evidence that the original failure no longer reproduces.
 {% else %}
 7) **Move to review** — re-fetch the task first to guard against stale session state:
 ```bash
@@ -627,11 +628,21 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
   -d '{"content": "@lead $AGENT_NAME idle. Available for work.", "tags": ["chat"]}'
 ```
 
-### If QA rejects your task
-Post a DIAGNOSIS comment before fixing: `DIAGNOSIS for $TASK_ID:\n- Bug 1: file:line — description\n- Bug 2: file:line — description\nTotal bugs: N`
-Fix ALL bugs in one pass. Redeploy. Re-submit with new commit SHA.
-Do NOT re-submit with "PASS by design" or "no changes needed".
-If **3+ consecutive QA FAILs** on the same task: STOP and escalate to `@Miguel`.
+### If your task is rejected (QA, Architect, or Lead)
+Post a DIAGNOSIS comment before fixing. Required structured format:
+```
+DIAGNOSIS for $TASK_ID rejection:
+  Reviewer said (verbatim quote): "<paste rejection reason word-for-word>"
+  Root cause I found: <file:line + analysis>
+  Fix applied: <git diff summary, MUST be non-empty>
+  Re-test evidence: <curl/script/Chrome MCP output proving the original failure no longer reproduces>
+```
+Fix ALL bugs in one pass. Redeploy. Re-submit with NEW commit SHA.
+**The same code cannot be re-submitted.** If `git diff <last-rejection-commit>` is empty, do not re-submit — your fix is missing.
+Do NOT re-submit with "PASS by design", "no changes needed", or "structure ready".
+**Functional ACs require behavioral evidence.** ACs containing "functional", "works", "interactive", "switches", "toggles" need a click+observe test in browser, NOT just DOM presence. Visual existence ≠ functional. Posting "structure ready" on a functional AC = rejection.
+**Read the rejection reason carefully.** If multiple reviewers posted rejections, address each one separately in DIAGNOSIS. Do not pattern-match on the most recent message and ignore deeper rejections.
+If **3+ consecutive rejections** (any reviewer) on the same task: STOP and escalate to `@Miguel`. The board API blocks the 4th submission until an operator unblocks via `@Miguel` mention.
 
 ### Rules
 - Do NOT stop between states unless blocked. Finish the task in one session.
