@@ -1,7 +1,33 @@
 
-Review the tasks waiting for approval, use Chome MCP if necessary, the expected behavior is fully compliance with the task spect, only approve with full evidence check
+Review the tasks waiting for approval, use Chome MCP, the expected behavior is fully compliance with the task spect, only approve with full and strong evidence check
 
 Investigate why the agents aren't nudging each other as instructed
+
+## 2026-04-12 — Rework Column State Machine + Template Discipline
+
+### Tier 3 — Dedicated `rework` task status (backend + template + frontend)
+- **Problem**: Failed-review tasks were re-routed to `inbox`, causing the Supervisor to confuse them with new work and thrash (task `60a29e0f` bounced inbox↔review 8 times in 36 min)
+- **Backend state machine** (`backend/app/api/tasks.py`): added `rework` to `ALLOWED_STATUSES` + `TaskStatus` Literal; lead can move `review → {done, inbox, rework}` with explicit-assignee-wins fallback; worker cannot PUT a task into rework (403); worker in rework can only move to `in_progress` or `inbox` (shortcut to review/done rejected); admin `review → rework` clears assignee if not explicit (prevents stranding on auto-assigned lead); both `POST /tasks` endpoints reject `status=rework` on create; `_notify_agent_on_task_rework` fires on review→rework in addition to review→inbox
+- **Tests** (`backend/tests/test_task_agent_permissions.py`): 6 new cases — lead explicit assignee wins, fallback to last reviewer, worker cannot set rework, worker cannot shortcut rework→review, worker cannot shortcut rework→done, valid rework→in_progress pickup. All 19 permission tests pass
+- **Codex (gpt-5.4) adversarial review** caught: worker shortcut holes, admin stranding on lead, TaskCreate rejection gap, template Jinja gate inconsistency, `board_group_snapshot.py` status ordering missing rework. All 5 must-fix items applied
+- **Template** (`BOARD_AGENTS.md.j2`): Supervisor QA-FAIL routing now PATCHes `{status: rework, assigned_agent_id: DEV}` (was inbox); worker Step 3 pick rules Jinja-gated — implementation role prioritizes rework above inbox; Step 4 pickup prose + "do NOT work" guard include rework; QA/review roles never see rework instructions
+- **Frontend** (`TaskBoard.tsx` + generated models): new amber Rework column; initially placed after Review (semantically wrong — implied Review→Rework→Done forward flow), then reordered to **Inbox → Rework → In Progress → Review → Done → Cancelled** to express actual backward flow (rework tasks go back to in_progress) and match template pickup priority
+- Backend dirty files on `.64` quarantined to commit `911e086` before surgical deploy; 4 pre-rework backup files kept on server for rollback
+- `mc-backend.service` + `mc-frontend.service` restarted; smoke test `POST /tasks {"status": "rework"}` returns 400 with correct error message; all 7 agents synced via Sync Templates API (board temporarily unpaused for the sync)
+
+### Template stale-FAIL memory discipline (Tier 1/Tier 2 recovery)
+- Added **Re-review rule** for reviewers: when a previously-reviewed task comes back after rejection, re-test NOT re-cite; required steps — read rejection comment, check `git log` since last review (no new commits → FAIL "no code changed since previous review"), re-run the SAME failing test in the browser for UI/functional ACs
+- Added **structured DIAGNOSIS format** for workers after any rejection: verbatim rejection quote, root cause with file:line, fix applied with git diff summary, re-test evidence showing original failure no longer reproduces
+- Added **git diff empty guard**: if diff since last-rejection-commit is empty, do not re-submit
+- Added **functional evidence requirement**: ACs mentioning "functional", "works", "interactive", "switches", "toggles" need click+observe in browser, not just DOM presence
+- Added **multi-reviewer handling**: when multiple rejections posted, address each one separately
+- **3+ rejections escalation** extended to any reviewer (not just QA); board API blocks the 4th submission until `@Miguel` mention
+
+### Template concurrent-overwrite incident
+- Commit `990db7d` was intended to include 7 rework template edits but silent concurrent overwrite reverted them between Edit tool calls and `git add`
+- Recovery commit `9cc09ac` restored the 7 edits (with compacted parentheticals to fit the 23000-char lead variant budget)
+- A second concurrent overwrite added legitimate Tier 1/Tier 2 discipline content between `9cc09ac` and the next `git diff` check — committed as `5cbd8ad` since the additions filled the Tier 1 line-480 / Tier 2 gap that was drafted but never applied
+- Added `feedback_template_read_after_write.md` auto-memory documenting the pattern for future sessions
 
 ## 2026-04-10 — TaskFlow API Codex Review Fixes
 
@@ -741,8 +767,7 @@ In resume what the Openclaw memory plugin does: auto-captures conversation summa
                                                                                                                                                                                                                                   
   7. Model fallback 404 fix — automatic after upgrade                                                                                                                                                                             
                                                                                                                                                                                                                                   
-  No MC changes needed. After upgrading to 2026.4.8, HTTP 404 from model providers triggers the fallback chain instead of stopping. This improves resilience for our Ollama cloud models.                                         
-                                                                                                                                                                                                                                
+                                                                                                                                        
   ---                                                                                                                                                                                                                             
   Implementation priority                                                                                                                                                                                                       
                          
@@ -771,92 +796,168 @@ In resume what the Openclaw memory plugin does: auto-captures conversation summa
   Want me to upgrade and configure?   
 
 
-Try again the test againt the Gemma4, maybe the same case, outputs to a thinking field, not response
 
- Programmer-Frontend Agent Analysis (2026-04-08)
 
-  What the agent is working on
+  Do you want me to proceed with appending the auditor-fix entry to .claude/skills/add-taskflow/CHANGELOG.md on this assumption, or pause here? 
 
-  Two tasks, both currently blocked:
-  - Phase 2D: Project/subtask hierarchy view (9f32504c)
-  - Phase 2E: TaskFlow-native notes on tasks (56f4737a)
+  Do you want me to proceed with appending the auditor-fix entry to .claude/skills/add-taskflow/CHANGELOG.md on this assumption, or pause here
 
-  Deploy target: nanoclaw@192.168.2.63 / verify URL: http://192.168.2.63:3000/
+    Architectural note. The cleaner long-term fix is to stop inferring DM-send success from task_history altogether and add a verifiable send signal. Best version: emit an audit trail for send_message tool calls. Acceptable fallback: cross-check messages.db for bot outbound        
+  messages to non-origin chats within the window and correlate by target JID or content snippet. Codex flagged this as the "right" direction; what I shipped is a noise-reduction patch, not a verification patch.
 
-  ---
-  Root Cause: HTTP 404 on verify endpoint
+  heartbeats RPC path 
 
-  http://192.168.2.63:3000/ is returning 404 for both tasks. This is a shared infrastructure blocker — the target
-  service/routing on that host is down or misconfigured. The agent confirmed this with curl, documented it on the board,
-  and is correctly waiting.
+    1. Deploy. The commit is local-only. ./scripts/deploy.sh will rsync dist/ + container/agent-runner/src/ + groups/ to production when you're ready. (Not pushed — per your standing policy I haven't touched git remotes.)                                                             
+  2. skill/taskflow refresh. Documented in the CHANGELOG as an outstanding housekeeping task. skill/taskflow is still 90 commits behind main. Whenever you want to tackle it, I can plan + execute the catch-up.                                                                        
+  3. Architectural follow-up. Codex's "right fix" — emit a verifiable audit trail for send_message tool calls, so we can actually verify cross-group sends instead of regex-exempting them. Deferred to a separate, larger task.                                                        
+  4. Commit author identity — git warned that it used a fallback root <root@nanoclaw.mylocal> identity. If you want the commit to be attributed to a specific name/email, let me know and I can amend it (or you can git commit --amend --reset-author yourself after setting user.name
+  / user.email).   
 
-  The supervisor already acknowledged this and classified it as a DevOps routing issue (not a code issue). The agent's
-  response:
-  ▎ "Holding both tasks on the shared live blocker. Will wait for target routing/service recovery or contradictory evidence
-   before retrying live browser validation."
 
-  ---
-  The frequent resets are normal
+   When an LLM-native approach would be right                                                                                                                                                                                                                                        
+                                                                                                                                                                                                                                                                                       
+    If you wanted to replace the regex with an LLM, the right design would be a separate, small-model prefilter (e.g., Haiku) that classifies each message into {dm_send, task_write, both, neither} once at ingest time and writes the label into messages.db. Then the auditor would
+    read the stored label instead of running regex. That's a legitimate future direction — it's closer to the "emit a verifiable send_message audit trail" item in the deferred follow-ups. But it requires a schema change, a backfill, and a new ingest-time pipeline. The regex fix 
+    is the right short-term move because it's a 6-line patch that closes the active false-positive without touching the data model.                                                                                                                                                    
+                                                                                                                                                  
+    Short version                                                                                                                                                                                                                                                                       
+                                                                                                                                                  
+    The regex lives in a non-LLM pre-filter whose job is cheap deterministic triage. The LLM downstream trusts the pre-filter's labels. Plural imperatives slipping through the regex means the LLM gets lied to, not that the LLM is failing to understand Portuguese. The minimal fix 
+    restores the pre-filter's recall until we're ready to replace it with an ingest-time classifier — which is a bigger, separately-scoped change.  
 
-  The session resets every ~20–80 minutes throughout the day — this is the openclaw control framework intentionally
-  trimming context bloat. Not a failure signal.
+      Commit still lands as root <root@nanoclaw.mylocal> — same as 391226b. Not pushed. The open follow-ups from last round still stand:                                                                                                                                                    
+  1. Deploy — ./scripts/deploy.sh                                                                                                                                                                                                                                                       
+  2. skill/taskflow refresh — now 91 commits behind                                                                                                                                                                                                                                     
+   PB simply chose to code directly instead of delegating. There's no technical blocker — it's a model behavior choice. GPT-5.4 read the skill, had sessions_spawn available, had SSH access, and still decided to implement directly.                                                   
+                                                                                                                                                                                                                                                                                        
+  The fix is stronger template language — the AGENTS.md should not just say "use the skill" but should make it a hard rule: "You MUST delegate via sessions_spawn. Direct coding via exec/ssh is NOT allowed for implementation work."                                                  
+                                      
+  Want me to add that guardrail?   
 
-  ---
-  Is the agent actually failing?
 
-  No — the agent is behaving correctly. It:
-  1. Detected the 404 blocker independently
-  2. Escalated to the supervisor (@lead)
-  3. Is holding both tasks, not looping or spinning
-  4. Awaiting DevOps intervention on the server at 192.168.2.63
 
-  The real problem is infrastructure: the frontend deployment target (192.168.2.63:3000) is not serving, so the agent
-  cannot verify any work it does. Until that service is up, both tasks are stuck in in_progress limbo.
 
-  Action needed: Check why the service on 192.168.2.63:3000 is returning 404 — it may be down, misconfigured, or the deploy
-   path changed.
 
-     ┌─────────────────────┬───────────────────────────────────────────────────┬─────────────────────────────────────────────────┬────────────────────────────────────┐                                                              
-  │       Source        │                   What it shows                   │                  How to access                  │                Size                │                                                              
-  ├─────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────────────┼────────────────────────────────────┤                                                              
-  │ Session JSONL files │ Every model turn — prompts, tool calls, responses │ /root/.openclaw/agents/<id>/sessions/*.jsonl    │ 142MB for PF, 180MB for Supervisor │                                                              
-  ├─────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────────────┼────────────────────────────────────┤
-  │ Gateway command log │ All gateway RPC calls                             │ /root/.openclaw/logs/commands.log (301KB)       │ Commands only                      │                                                              
-  ├─────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────────────┼────────────────────────────────────┤                                                              
-  │ Config audit log    │ Config changes                                    │ /root/.openclaw/logs/config-audit.jsonl (4.8MB) │ Config mutations                   │                                                              
-  ├─────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────────────┼────────────────────────────────────┤                                                              
-  │ openclaw logs       │ Real-time gateway log tail                        │ openclaw logs on .60                            │ Live stream                        │                                                            
-  ├─────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────────────┼────────────────────────────────────┤                                                              
-  │ Task comments       │ Agent posts to board                              │ MC API /tasks/{id}/comments                     │ What we've been reading            │                                                            
-  ├─────────────────────┼───────────────────────────────────────────────────┼─────────────────────────────────────────────────┼────────────────────────────────────┤                                                              
-  │ Board memory        │ Agent chat posts                                  │ MC API /boards/{id}/memory                      │ Inter-agent messages               │                                                            
-  └─────────────────────┴───────────────────────────────────────────────────┴─────────────────────────────────────────────────┴────────────────────────────────────┘  
 
-  What's the solution for Until Playwright auth works, no frontend task can close through QA.? 
+  Three-agent template review — aggregated findings                   
+                                                                                                                                                                                                                                                                                      
+  Overall: 12 HIGH / 23 MEDIUM / 17 LOW across all three reviews. The template is largely correct on action names and engine semantics but has real bugs in a handful of specific rows and significant drift from user-facing docs.                                                     
+                                                                                                                                                                                                                                                                                        
+  HIGH priority issues (shipped bugs that will cause real failures or user-bot divergence)                                                                                                                                                                                              
+                                                                                                                                                                                                                                                                                        
+  Engine alignment (1 HIGH):                                                                                                                                                                                                                                                            
+  - L303-L307 manage_holidays uses wrong parameter names. Template says operation: 'add' with date: 'YYYY-MM-DD', but engine (ipc-mcp-stdio.ts:940) requires holiday_operation (not operation), holidays: [{date, label?}] array (not single date), holiday_dates array (not single
+  date), and holiday_year (not year). Every holiday call the agent issues verbatim will fail.                                                                                                                                                                                           
+                                                                                             
+  Internal consistency (4 HIGH):                                                                                                                                                                                                                                                        
+  - L1015-L1017 Batch Operations table lists cancel under taskflow_move actions, but cancel is a taskflow_admin action (cancel_task) everywhere else in the template.                                                                                                                   
+  - L423 references "Board View Format" section that doesn't exist (actual content is at L715 under "Rendered Output Format").                                                                                                                                                          
+  - L30 vs L532 give contradictory formulas for "can this board create a child board" — level + 1 < max_depth vs level < max_depth. The two flip for any parent-level board at max depth.                                                                                               
+  - L258 "estender RXXX por mais N ciclos" tells the agent to do CURRENT_CYCLE + N arithmetic, but Schema Reference at L833 declares current_cycle TEXT (JSON object) — arithmetic on a JSON object.                                                                                    
+                                                                                                                                                                                                                                                                                        
+  Cross-document drift (7 HIGH):                                                                                                                                                                                                                                                        
+  - revisao command mismatch: template maps bare revisao → weekly report (L525), but user manual maps @Case revisao → Review column query. Users will get the wrong thing.                                                                                                              
+  - reparent/detach verbs: template teaches "mover T5 para projeto P10" / "desvincular T5 do projeto"; manual teaches "mover T001 para dentro de T002" / "destacar T001.1". Zero overlap. destacar never appears in the template.                                                       
+  - cadastrar flow: template L286/L532 requires a hidden division/sigla question; manual L443 documents cadastrar as a 3-field command with no sigla follow-up. Users blindsided.                                                                                                       
+  - Inbox one-shot shortcut "T1 para Alexandre, prazo sexta": in user manual L374, not in template at all.                                                                                                                                                                              
+  - add_external_participant field name: template uses name, meetings-reference uses display_name.                                                                                                                                                                                      
+  - remove_external_participant shape: template passes { name: 'Maria' }, meetings-reference passes external_id as a string.                                                                                                                                                            
+  - scheduled_at timezone: template (L319) says local, no Z; meetings-reference (L13, L43, L164, L196) says "ISO-8601 UTC" with Z examples. Memory backs the template but the doc needs to catch up.                                                                                    
+                                                                                                                                                                                                                                                                                        
+  MEDIUM issues (summary)                                                                                                                                                                                                                                                               
+                                                                                                                                                                                                                                                                                        
+  - Three conflicting names for "create child board": create_group IPC tool vs provision_child_board MCP tool vs taskflow_admin register_person → auto_provision_request flow (L30, L874, L861).                                                                                        
+  - Subtask-update contradiction: table mostly passes parent-ID for subtask operations, but one row passes subtask-ID directly, and L264 says "always use subtask-ID". Three different conventions.
+  - boards, external_contacts tables referenced in SQL fallback examples but not in Schema Reference — agent has nowhere to look up the columns.                                                                                                                                        
+  - Template mentions reassign confirmed: false shortcut for bulk but skips explaining that taskflow_admin has no dry-run mode — agent might drop confirmed: false from reassigns too.                                                                                                  
+  - User manual says column is 👁️  Revisão, template says 🔍 Revisão; operator-guide's sample board shows English column labels.                                                                                                                                                         
+  - Próxima Ação vs Próximas Ações (singular vs plural) — template plural, manual singular.                                                                                                                                                                                             
+  - Meeting return action documented in meetings-reference but missing from template's Meeting Movement row.                                                                                                                                                                            
+  - mudancas/feriados/como está?/status command aliases in user manual, no template mapping.                                                                                                                                                                                            
+  - SKILL.md claims template is ~400 lines; actual is 1124. SKILL.md also references CLAUDE.md.template.v1 rollback file that no longer exists.                                                                                                                                         
+  - Template teaches INSERT INTO attachment_audit_log (L1118) but operator-guide + feature matrix mark the table as dormant/stale-in-prod.                                                                                                                                              
+                                                                                                                                                                                                                                                                                        
+  LOW (cosmetic / no behavior impact)                                                                                                                                                                                                                                                   
+                                                                                                                                                                                                                                                                                        
+  - Undefined placeholder conventions (TARGET_ID, CURRENT_CYCLE, YESTERDAY_ISO, EXT_ID, FREQ used without introduction)                                                                                                                                                                 
+  - Mixed code-fence language tags (only sql tagged explicitly, other 40+ fences bare)
+  - Task-ID example format: template uses T1/M1, user manual T001/M001, quick-start TXXX — all accepted by engine, cosmetic only                                                                                                                                                        
+  - L846 "All timestamps: ISO-8601 UTC" blanket statement conflicts with repeated local-time guidance (stored=UTC vs wire=local, template never states this explicitly)                                                                                                                 
+  - Meeting phase mapping: template adds done → post, meetings-reference only documents through review → post (template more complete, not a bug)                                                                                                                                       
+                                                                                                                                                                                                                                                                                        
+  Verified correct (no findings)                                                                                                                                                                                                                                                        
+                                                                                                                                                                                                                                                                                        
+  The engine-alignment agent verified ~60 factual claims against the actual code: all action vocabularies (taskflow_move, taskflow_admin, taskflow_hierarchy, taskflow_dependency), all column names, task types, recurrence frequencies, priority enum, undo window semantics,         
+  offer_register / requires_confirmation / wip_warning response shapes, WIP enforcement points, meeting note phase mapping, schema column names, duplicate-detection thresholds, force_create override, reparent_task/detach_task requirements, external invite flow, IPC tool shapes,
+  and more. The core template is factually accurate — the bugs are concentrated in a specific set of rows.                                                                                                                                                                              
+                                                            
+  Recommended action priority
 
-  ---                                                                                                                                                                                                                                                                                   
- Phase 2E backend: persist task notes via TaskFlow API
-Comment
-Programmer-Backend
-·
-Backend Developer
-·
-Apr 8, 07:32 PM
-Update
+  1. Fix the 5 HIGH bugs first (1 engine + 4 internal) — these break real commands                                                                                                                                                                                                      
+  2. Reconcile revisao, reparent/detach verbs, cadastrar flow with user manual — pick canonical form
+  3. Fix add_external_participant/remove_external_participant shape with meetings-reference + engine                                                                                                                                                                                    
+  4. Either update SKILL.md line count or accept that it's stale metadata                                                                                                                                                                                                               
+  5. Decide on column emoji (👁️  vs 🔍) and Próxima/Próximas pluralization across all sources    
 
-Local implementation complete: notes field added to TaskFlow API schemas, handlers, and DB migration in /root/.openclaw/workspace/taskflow-api/app/main.py
-Tests pass: pytest -q tests/test_api.py -k notes -> 2 passed
-BLOCKED on AC5 (live evidence): taskflow-api on .63:8100 does not have the notes deployment yet
-Live .63:8100 OpenAPI does not show notes in task payloads
-Evidence
 
-Local code: grep -n notes /root/.openclaw/workspace/taskflow-api/app/main.py shows schema, parse, migration, PATCH logic
-Tests: 2 passed, 72 deselected in 3.58s
-Live check: curl -s http://192.168.2.63:8100/openapi.json -> notes NOT in CreateTaskPayload or UpdateTaskPayload
-Request Now
 
-Need deploy path/runbook for taskflow-api to .63:8100 from @DevOps or @Miguel
-Once deployed, will run live PATCH+GET round-trip evidence for AC5
-Next
 
-Waiting on deploy access to complete AC5 and route to Architect @lead
+Goal: Design a 3-page web presence for Nanoclaw's Taskflow Skill product, developed by the MC Squad Team.
+Step 1 — Research & Context Gathering
+
+Documentation & Skill codebase: Access the .160 development machine to read Nanoclaw's Taskflow Skill user documentation and understand the product's features, architecture, value proposition, and target audience.
+Frontend UI codebase: Access the .63 production machine to review the existing Taskflow Mission Control UI — note current design patterns, components, and UX conventions already in use.
+Design reference: Use Chrome MCP to visit https://dribbble.com/shots/23360548-TaskFlow-A-SasS-template-design — extract from the image of the layout, layout patterns, color palette, typography, and component styles for inspiration.
+
+Step 2 — Plan & Design
+Using the frontend design skills, create a detailed plan and build three pages that align with the existing Mission Control UI while elevating the visual style based on the Dribbble reference:
+
+Landing Page — Hero section, key features, social proof, and CTA. Conversion-focused first impression.
+Product Page — Deeper feature breakdown, screenshots/demos, pricing or plans, and use cases.
+Documentation Page — Clean, navigable docs layout with sidebar, code examples, and search-friendly structure.
+
+Environment Reference:
+
+.160 (dev) — Taskflow Skill codebase & documentation
+.63 (prod) — Taskflow Mission Control UI (frontend)
+
+Constraints:
+
+Team: MC Squad Team
+Style: SaaS-modern, clean (Dribbble reference), consistent with existing Mission Control UI (to be improved too)
+Output: Working React or HTML artifacts for each page        
+
+
+
+  What's NOT done                                                                                                                                                                                                                                                                       
+                                                                                                                                                                                                                                                                                        
+  - Step 2 (codex harness) is still pending. Open question: do you want to wait and observe whether strict-agentic alone is enough before committing to the bigger change with the gateway restart + compaction-config unknown? 
+
+
+
+
+  The real fix is finding what's leaking (likely
+   lossless-claw conversation accumulation, or memory-core's vector store, or whatsapp-scheduler's context cache)
+
+
+
+
+
+
+
+
+   How to solve this: Between v2 and v3 the Architect's session ended and restarted. The new session's model prior ("for a marketing SPA with routing and SEO concerns, default to Next.js app router") weighted heavier than the thread history I'd pinned. The coordination task I created has the Vite-only rule in its description, but the Architect's heartbeat loop apparently doesn't re-inject the full task description — it works from a summarization, and the summarization lost the word "Vite-only".
+
+Compounding this: the v3 plan also hallucinated a Status page that was never in the original spec. That's the model filling in a plausible 3-page web presence from scratch ("Landing / Docs / Status") rather than re-reading the original task c5c5a6a6 which specified Landing / Product / Docs. So the Architect on its third tick didn't just drift on the framework — it drifted on the entire product definition, because its context summary was lossy on both dimensions.
+
+
+hard_constraints schema column — deferred as codex suggested. The immediate defect is prompt visibility, not storage. Revisit if post-patch behavior still drifts.
+
+
+
+The honest tradeoff: Vite SPA has worse SEO and worse image delivery out of the box. If you add prerendering (vite-plugin-ssg or migrate to Astro) and vite-imagetools, you close most of the gap. If this is a real marketing site that needs to rank on Google and show nice link previews on social, Next.js SSG would be meaningfully better. If it's an internal landing page or documentation, Vite is fine.
+
+My recommendation: for a public marketing site, I'd actually pick Astro over both — it uses Vite under the hood, gives you zero-JS static pages by default (perfect for marketing), file-based routing, image optimization, and you can drop React components in where you need interactivity. But your team already invested in the Vite tree and the hard constraint is "Vite only" — so sticking with Vite is fine as long as you add SSG/prerendering later if SEO becomes a concern.
+
+
+
