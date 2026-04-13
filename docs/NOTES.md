@@ -1,7 +1,64 @@
 
-Review the tasks waiting for approval, use Chome MCP, the expected behavior is fully compliance with the task spect, only approve with full and strong evidence check
+Review the tasks waiting for approval, use Chome MCP, the expected behavior is fully compliance with the task spect, approve only after a thorough and robust verification of the evidence
 
 Investigate why the agents aren't nudging each other as instructed
+
+## 2026-04-13 — OpenClaw v2026.4.11/4.12 upgrade evaluation + context-overflow fix
+
+### Verified post-upgrade
+- **`tick timeout` keepalive fix (v2026.4.12)** — zero events on `.60` today, fix is preventative not curative
+- **Cron heartbeat preservation (v2026.4.12)** — confirmed across both config touches AND a real OOM-kill restart at 18:34:56 UTC. All 9 agent heartbeat overrides survived (5m Supervisor, 10-40m others). The "manually re-set heartbeats after every config change" toil from `feedback_sigusr1_resets_heartbeats.md` is retired.
+- **Active Memory plugin (v2026.4.12)** — silently auto-enabled by the upgrade. Visible in gateway startup log: "ready (11 plugins: acpx, **active-memory**, browser, device-pair, lossless-claw, memory-core, memory-wiki, phone-control, talk-voice, whatsapp, whatsapp-scheduler; 5.2s)". Contributes to memory pressure on top of existing lossless-claw.
+
+### Critical fix applied
+- **`agents.defaults.contextTokens` bumped 128000 → 200000** to fix a context-overflow flood (50 events on Apr 13, 19 post-restart). Root cause: gateway pre-flight safe-threshold check uses the global `agents.defaults.contextTokens` budget; gpt-5.4 sessions were getting rejected at 32-200 messages because their estimated context exceeded 128k. Hot-reloaded at 18:25:41 UTC. Verified zero overflow events in the 10+ minutes since (vs ~3 events per 30-min window before).
+- Backup: `/root/.openclaw/openclaw.json.pre-contextTokens-fix-20260413-181814`
+
+### Schema discoveries (failed override paths, kept for future reference)
+- `models.providers.openai-codex.models[]` → schema requires `baseUrl` + `models[].name` (not just `id`). Docs example was incomplete.
+- `agents.defaults.models[<modelId>].contextTokens` (sibling of params) → rejected, "Unrecognized key"
+- `agents.list[i].contextTokens` (per-agent) → rejected, "Unrecognized key"
+- `params.contextTokens` (inside passthrough) → accepted but **passthrough-only, no effect on the safe-threshold check**
+- **Only `agents.defaults.contextTokens` (global) actually affects the gateway's pre-flight overflow check.**
+
+### Pre-existing issues surfaced during investigation (not fixed)
+- **`minimax/minimax-m2.7` "Unknown model" errors — 381 occurrences today**, first at 05:53:40 (well before any of my changes). Cause: `models.providers.minimax` is **not registered in providers section at all**. References exist in 7 fallback chains (defaults + Architect + Programmer-Backend + QA-E2E + DevOps + Gateway Agent + Supervisor). Same pattern as openai-codex. When gpt-5.4 fails over, fallback chain hits "Unknown model" and falls through to ollama (which works) — degraded but functional.
+- Dead passthrough params on `gpt-5.4`: `model_context_window: 1050000` and `model_auto_compact_token_limit: 200000` — added earlier in session under the assumption they'd be honored. They aren't. Should be cleaned up.
+
+### Gateway OOM at 18:34:56 UTC (rolled back, not from my changes)
+- Previous gateway PID 2541642 had been running since 15:20:08 UTC (~3h 14min uptime, 1.9GB memory at peak)
+- Hit `--max-old-space-size=4096` ceiling, V8 OOM, systemd `Result: oom-kill`
+- Auto-restart fired cleanly, new PID 2567051 since 18:35:01
+- Memory now stable oscillating 800MB-1.0GB
+- Likely contributors: `active-memory` plugin (auto-enabled by upgrade) + `lossless-claw` plugin (couldn't disable earlier) + 3+ hour accumulation. The contextTokens=200000 bump may have accelerated but isn't the root cause (took ~9 minutes from bump to OOM, gateway memory was already trending up before).
+- Heartbeat preservation through OOM kill: ✓ verified
+
+### Codex harness plugin investigation (deferred to maintenance window)
+- New bundled Codex harness plugin from v2026.4.12 (`plugins.entries.codex.enabled = true`). Simpler config than the providers.codex path.
+- Prerequisites all met on .60: `codex-cli 0.120.0` at `/usr/bin/codex`, `~/.codex/auth.json` present (Apr 12 19:08), gateway can read both.
+- **Plugin enable requires gateway RESTART, not hot reload.** Tried at 18:33:16, gateway responded: "config change requires gateway restart (plugins.entries.codex) — deferring until 11 operation(s), 1 reply(ies), 2 embedded run(s), 14 task run(s) complete". Rolled back immediately to cancel the deferred restart.
+- Migration would also require changing `model.primary` for each of 9 agents from `openai-codex/gpt-5.4` → `codex/gpt-5.4`. Per-agent updates, not bulk.
+- Codex app-server reportedly handles compaction natively, may eliminate the need for the contextTokens bandage.
+
+### Maintenance window TODO (do NOT execute without scheduling)
+1. **Pause dev-squad board** before any restart
+2. **Bump `NODE_OPTIONS=--max-old-space-size`** in `/root/.config/systemd/user/openclaw-gateway.service.d/node-options.conf` from `4096` to `8192` (gateway needs more headroom now that active-memory is loaded)
+3. **Enable `plugins.entries.codex.enabled = true`** in same change
+4. **Optionally disable active-memory plugin** (`plugins.entries.active-memory.enabled = false`) if user decides the memory cost outweighs the benefit
+5. **One controlled restart** via `systemctl --user restart openclaw-gateway` to apply all 4 changes at once
+6. **Verify after restart**: gateway PID changed, all 9 agents online, heartbeat overrides preserved, no schema validation errors, plugin loaded ("ready (12 plugins: ...codex...)" or similar)
+7. **Test ONE non-critical agent** (DevOps or Gateway Agent) by changing its `model.primary` to `codex/gpt-5.4`, watch one heartbeat cycle
+8. **If clean, expand migration** to remaining 8 agents in a single config patch
+9. **If migration succeeds**, consider reverting `agents.defaults.contextTokens` from 200000 back to 128000 (Codex harness handles compaction natively)
+10. **Resume dev-squad board**
+
+### Pre-existing issues to fix (separate from above)
+- Add `models.providers.minimax` provider entry with proper baseUrl + per-model declarations OR scrub `minimax/minimax-m2.7` and `minimax/minimax-m2.1` from all 7 fallback chains (Architect, PB, QA-E2E, DevOps, Gateway Agent, Supervisor, defaults)
+- Clean up dead passthrough params on `agents.defaults.models["openai-codex/gpt-5.4"].params`: remove `model_context_window` and `model_auto_compact_token_limit` (no-ops)
+
+### Files changed today on .60
+- `/root/.openclaw/openclaw.json`: `agents.defaults.contextTokens` 128000 → 200000 (live)
+- Backups: `openclaw.json.pre-gpt54-params-20260413-010625`, `openclaw.json.pre-context-params-20260413-011907`, `openclaw.json.pre-contextTokens-fix-20260413-181814`, `openclaw.json.pre-codex-plugin-20260413-183*`
 
 ## 2026-04-12 — Rework Column State Machine + Template Discipline
 
