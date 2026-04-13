@@ -69,19 +69,85 @@ This merged spec was submitted to three independent subagents for validation on 
 
 > "The merged spec correctly identifies the anti-patterns and correctly diagnoses that prose-based evidence is the root primitive, but the enforcement mechanism it ships at v1 has at least four structural bypasses that an LLM agent under heartbeat pressure will find within days. An agent that can fake `proof_output` as free text, pick its own `failure_class`, and self-supersede cannot be stopped by this spec's mechanism. The spec still cannot verify a test was actually run. That is the problem the spec claims to solve, and it does not."
 
-### Root-cause fix (deferred to a future spec)
+### Root-cause categorization (narrowed after Codex skeptic review)
 
-The three paths that would actually work:
+My initial framing claimed "mechanical evidence-quality enforcement is categorically not solvable at the FastAPI layer." A subsequent Codex gpt-5.4 high-reasoning review of MY REJECTION (not the spec) partially reversed this conclusion. The claim is too strong. The correct narrower statement is:
 
-- **Path A — signed probe-runner service.** A standalone probe-runner binary that signs its output. The backend trusts only output signed by the runner, and `proof_output` must include a valid signature. Closes the hand-written bypass. Aligns with the existing gateway plugin model. 1–2 weeks of focused work.
+> **"Mechanical verification that an agent truly ran the claimed test is not solvable at the FastAPI layer when agents can self-author evidence."**
 
-- **Path B — out-of-band verdict production.** CI/probe infrastructure produces verdicts via webhooks; agents never mint their own. Clean separation of concerns. Requires building CI integration. 2–3 weeks.
+That is true. But `d6174c4` (rejection-loop counter) proves that **structural** honesty — freshness, provenance, post-rejection invalidation, role separation — IS partially solvable at the FastAPI layer. The merged spec failed because it conflated three different problems:
 
-- **Path C — accept human-in-the-loop as the real gate.** The existing enforcement layers (`d6174c4` rejection counter + `5cbd8ad` template prose + operator first-hand verification via Chrome DevTools MCP) are already doing the work. In the 2026-04-12 → 2026-04-13 session that motivated this spec, every anti-pattern was caught by operator-level validation, not by any automated layer. Stop trying to mechanize reviewer honesty; tighten operator attention instead. Zero backend code. This is the current state.
+1. **Stale evidence reuse** — solvable (FK timestamp check)
+2. **Reviewer provenance / role independence** — solvable (role column + validation)
+3. **Semantic proof that a test actually ran** — NOT solvable at FastAPI without trusted external signer
 
-**Decision:** Accept Path C for now. Implementation of this spec is deferred indefinitely. The existing three-layer enforcement plus operator gate handles every observed anti-pattern, and the three-subagent review confirms that no mechanical layer short of Path A or Path B can close the "agents mint plausible prose" primitive. The spec remains on disk as historical record of what was considered and why it was rejected.
+Only problem 3 is categorically unsolved. Problems 1 and 2 are the ones that caused anti-patterns 1 and 4 in the motivating session, and they can be mechanically blocked.
 
-**Lesson learned:** Each successive attempt in this session was an incremental improvement over the last but still a workaround: Option A+B (regex theater on qa_evidence) → fresh-comment DB gate (syntactic hurdle) → TaskVerdict typed rows (storage improvement, still prose-gameable) → merged spec with failure classes + probes (comprehensive but still has 4 structural bypasses). The adversarial reviewer correctly identified that mechanical evidence-quality enforcement at the FastAPI layer is categorically not solvable without either (a) a trusted external signer or (b) removing agents from the verdict-production path entirely. Neither is in scope for tonight's work.
+### Recommended path forward (Middle Path A+)
+
+Instead of deferring entirely or shipping the full merged spec with its 4 structural bypasses, ship a narrow v1 that attacks only what's actually mechanically solvable:
+
+**Ship:**
+- `task_verdicts` table with reviewer identity + verdict value + commit_sha (string) + created_at
+- `approval_verdict_links` many-to-many join table
+- `relies_on_verdict_ids` on `ApprovalCreate` schema
+- `_ensure_verdict_backed_approval_for_move_to_done` guard enforcing: cited PASS verdicts must have `created_at > last_rejection.created_at` for the task
+- Role gate: only verdicts from `{qa_e2e, qa_unit, architect, lead, operator}` roles satisfy the approval eligibility check; `dev` role cannot self-verdict into approval
+- **Explicit new operator override endpoint for create-time failures** (do NOT pretend `/unblock` solves this — it doesn't work on create-time gates, only on existing approval rows)
+- Optional `methodology` field as a free-text audit tag (NOT an enum, NOT a matching enforcement target)
+
+**Do NOT ship — defer to a later spec:**
+- Failure-class taxonomy and `required_proof_type`
+- Proof-type matching between reject-side and resubmission-side
+- Probe library (`backend/tests/probes/*.mjs`)
+- Structured `proof_output` field
+- AC identifier parsing for `ac_results`
+- Supersession chain semantics
+- Frontend UI changes
+
+**Scope:** ~600–800 LOC, ~1 focused day for implementation + ~0.5 day for testing and dogfooding.
+
+**What this achieves:**
+
+| Anti-pattern | Outcome |
+|---|---|
+| 1: Stale-verdict re-citation | **BLOCKED mechanically** via FK timestamp check |
+| 4: Post-rejection stale re-cite | **BLOCKED mechanically** via same check |
+| 2: Clean-session laundering | **COST RAISED** — requires a fresh reviewer PASS verdict, not stale re-citation. Real fix for semantic honesty still needs signed runner (Path A) |
+| 3: Phantom AC false alarm | **NOT FIXED** — explicitly deferred, acceptable at v1 |
+
+**Narrow-v1 claim:** *"We are not verifying that tests truly ran. We are enforcing that approvals after rejection must cite fresh, typed, post-rejection reviewer verdicts from appropriate roles."* Truthful, implementable, materially useful.
+
+### Longer-term root-cause paths (still deferred)
+
+Still valid but out of scope for narrow v1:
+
+- **Path A — signed probe-runner service.** Revised estimate after Codex review: **2–4 focused weeks** (not 1–2), accounting for signing, key distribution, trust root, rotation, runner rollout, failure handling, and operator tooling.
+
+- **Path B — out-of-band verdict production via CI/webhooks.** Revised estimate: **4–8+ focused weeks** (not 2–3), because no CI substrate currently exists to build on.
+
+- **Path C — accept human-in-the-loop as the real gate.** Valid as a temporary operational posture (what we're on right now), NOT valid as the product answer. The session that motivated this spec depended on an attentive operator with Chrome DevTools MCP access — this does not scale. Path C only works while someone is actively watching.
+
+### Decision
+
+- **Reject the full merged spec as written.** The 4 structural bypasses (first-submission race, self-supersession chain, `failure_class="other"` + `static_only`, hand-written `proof_output`) make it not worth shipping.
+- **Do NOT accept Path C as the product answer.** Path C is our current operational state and is acceptable for tonight, but it is defeat on autonomy and should not be recorded as the strategic choice.
+- **Recommend Middle Path A+ as the narrow v1 to ship when capacity allows.** This is the correct answer that came out of three design iterations + three subagent reviews + Codex skeptic review of my rejection. Track as a concrete backend feature request, not as a deferred-indefinitely item.
+- **Semantic-honesty enforcement** (did the test actually run) is explicitly deferred to a future signed-runner or out-of-band-production design. Not conflated with Middle Path A+.
+
+### Lesson learned
+
+Each successive attempt in this session was an incremental improvement over the last but still a workaround:
+
+1. Option A+B (regex theater on `qa_evidence`) — rejected by Codex adversarial review
+2. Fresh-comment DB gate — rejected by Codex as syntactic hurdle
+3. `TaskVerdict` typed rows — my first draft, missing proof-type matching
+4. Merged spec (this doc) — comprehensive but 4 structural bypasses
+5. **Middle Path A+** (narrow v1 extracted from merged spec) — the right answer
+
+The pattern: each iteration tried to solve MORE than mechanically solvable at the FastAPI layer. The right scope emerged only after three adversarial reviews narrowed the categorical claim from "evidence quality" (too broad, unsolvable) to "structural honesty" (narrow, solvable). Middle Path A+ ships the solvable subset cleanly.
+
+The three prior design docs on disk (`2026-04-13-task-verdict-first-class-design.md`, `2026-04-13-rejection-resolution-contracts-design.md`, and this merged version) all remain as historical record of the iteration.
 
 ---
 
