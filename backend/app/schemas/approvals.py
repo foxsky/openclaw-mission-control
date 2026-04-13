@@ -95,3 +95,16 @@ class ApprovalRead(ApprovalBase):
     agent_id: UUID | None = None
     created_at: datetime
     resolved_at: datetime | None = None
+
+
+class ApprovalUnblock(SQLModel):
+    """Payload for clearing a rejection loop on a task/approval.
+
+    An authenticated human user or board lead agent calls this endpoint
+    to explicitly cut through the ``_ensure_no_rejection_loop`` guard
+    when they have reviewed the situation out-of-band. The reason is
+    recorded on the resulting ``approval_history`` row so the unblock
+    is auditable.
+    """
+
+    reason: str = Field(min_length=1, max_length=2000)

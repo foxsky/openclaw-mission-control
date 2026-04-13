@@ -7,11 +7,22 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.api import approvals
+from app.api.deps import ActorContext
 from app.models.agents import Agent
 from app.models.approvals import Approval
 from app.models.boards import Board
+from app.models.users import User
 from app.schemas.approvals import ApprovalRead, ApprovalUpdate
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
+
+
+def _fake_user_actor() -> ActorContext:
+    user = User(
+        id=uuid4(),
+        clerk_user_id=f"clerk-{uuid4().hex[:8]}",
+        email=f"test-{uuid4().hex[:8]}@example.com",
+    )
+    return ActorContext(actor_type="user", user=user)
 
 
 class _ByIdQuery:
@@ -144,6 +155,7 @@ async def test_update_approval_notifies_lead_when_approved(
         payload=ApprovalUpdate(status="approved"),
         board=board,
         session=session,  # type: ignore[arg-type]
+        actor=_fake_user_actor(),
     )
 
     assert updated.status == "approved"
@@ -188,6 +200,7 @@ async def test_update_approval_skips_notify_when_status_not_resolved(
         payload=ApprovalUpdate(status="pending"),
         board=board,
         session=session,  # type: ignore[arg-type]
+        actor=_fake_user_actor(),
     )
 
     assert updated.status == "pending"

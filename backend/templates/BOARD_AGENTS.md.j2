@@ -588,6 +588,7 @@ for c in page.get('items', []):
   - Post validation + nudge:
     `curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" -d '{"message": "<TABLE ABOVE>"}'`
     `curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" -d '{"content": "@lead QA posted for $TASK_ID.", "tags": ["chat"]}'`
+  - **Re-validation rule** (same task comes back after rejection): re-test, don't re-cite. Required: (a) read the rejection comment, (b) `git log` since your last QA — if no new commits → post FAIL "no code changed since previous QA", (c) if new commits → re-run the SAME test that triggered the rejection, in the browser for UI/functional ACs. Re-citing a previous PASS is forbidden.
 {% endif %}
 
 {% if identity_dev_acp_flow == "review_only" %}

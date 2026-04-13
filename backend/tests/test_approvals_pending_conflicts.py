@@ -9,10 +9,23 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import approvals as approvals_api
+from app.api.deps import ActorContext
 from app.models.boards import Board
 from app.models.organizations import Organization
 from app.models.tasks import Task
+from app.models.users import User
 from app.schemas.approvals import ApprovalCreate, ApprovalUpdate
+
+
+def _test_actor(session: AsyncSession) -> ActorContext:
+    """Synthesize a human actor for direct-call test harnesses."""
+    user = User(
+        id=uuid4(),
+        clerk_user_id=f"clerk-{uuid4().hex[:8]}",
+        email=f"test-{uuid4().hex[:8]}@example.com",
+    )
+    session.add(user)
+    return ActorContext(actor_type="user", user=user)
 
 
 async def _make_engine() -> AsyncEngine:
@@ -61,6 +74,7 @@ async def test_create_approval_rejects_duplicate_pending_for_same_task() -> None
                 ),
                 board=board,
                 session=session,
+                actor=_test_actor(session),
             )
             assert created.task_titles == [f"task-{task_id}"]
 
@@ -75,6 +89,7 @@ async def test_create_approval_rejects_duplicate_pending_for_same_task() -> None
                     ),
                     board=board,
                     session=session,
+                    actor=_test_actor(session),
                 )
 
             assert exc.value.status_code == 409
@@ -104,6 +119,7 @@ async def test_create_approval_rejects_pending_conflict_from_linked_task_ids() -
                 ),
                 board=board,
                 session=session,
+                actor=_test_actor(session),
             )
             assert created.task_titles == [f"task-{task_a}", f"task-{task_b}"]
 
@@ -118,6 +134,7 @@ async def test_create_approval_rejects_pending_conflict_from_linked_task_ids() -
                     ),
                     board=board,
                     session=session,
+                    actor=_test_actor(session),
                 )
 
             assert exc.value.status_code == 409
@@ -137,6 +154,30 @@ async def test_update_approval_rejects_reopening_to_pending_with_existing_pendin
         async with await _make_session(engine) as session:
             board, task_ids = await _seed_board_with_tasks(session, task_count=1)
             task_id = task_ids[0]
+            # v2.1: ``create_approval`` only accepts ``pending`` — state
+            # transitions go through ``PATCH``. To set up "one resolved +
+            # one pending" on the same task, create approval A first
+            # (will become the resolved one), PATCH it to approved, then
+            # create approval B as the active pending slot.
+            resolved_pending = await approvals_api.create_approval(
+                payload=ApprovalCreate(
+                    action_type="task.review",
+                    task_id=task_id,
+                    payload={"reason": "Review decision completed earlier."},
+                    confidence=90,
+                    status="pending",
+                ),
+                board=board,
+                session=session,
+                actor=_test_actor(session),
+            )
+            resolved = await approvals_api.update_approval(
+                approval_id=resolved_pending.id,  # type: ignore[arg-type]
+                payload=ApprovalUpdate(status="approved"),
+                board=board,
+                session=session,
+                actor=_test_actor(session),
+            )
             pending = await approvals_api.create_approval(
                 payload=ApprovalCreate(
                     action_type="task.execute",
@@ -147,17 +188,7 @@ async def test_update_approval_rejects_reopening_to_pending_with_existing_pendin
                 ),
                 board=board,
                 session=session,
-            )
-            resolved = await approvals_api.create_approval(
-                payload=ApprovalCreate(
-                    action_type="task.review",
-                    task_id=task_id,
-                    payload={"reason": "Review decision completed earlier."},
-                    confidence=90,
-                    status="approved",
-                ),
-                board=board,
-                session=session,
+                actor=_test_actor(session),
             )
 
             with pytest.raises(HTTPException) as exc:
@@ -166,6 +197,7 @@ async def test_update_approval_rejects_reopening_to_pending_with_existing_pendin
                     payload=ApprovalUpdate(status="pending"),
                     board=board,
                     session=session,
+                    actor=_test_actor(session),
                 )
 
             assert exc.value.status_code == 409

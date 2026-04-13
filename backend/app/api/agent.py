@@ -1226,7 +1226,7 @@ async def create_approval(
         payload=payload,
         board=board,
         session=session,
-        _actor=_actor(agent_ctx),
+        actor=_actor(agent_ctx),
     )
 
 
