@@ -1565,3 +1565,75 @@ def test_offline_threshold_covers_30m_heartbeat_agents():
     assert OFFLINE_AFTER.total_seconds() > (
         max_worker_interval + HEARTBEAT_RECOVERY_GRACE_AFTER_INTERVAL.total_seconds()
     )
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_routes_through_openclaw_call(monkeypatch):
+    # OpenClaw 2026.4.14 (#62006) made the model-facing gateway tool reject
+    # config.patch/config.apply calls that newly enable dangerous flags.
+    # MC's direct authenticated operator RPC path is unaffected, but only
+    # while patch_agent_heartbeats keeps routing through openclaw_call().
+    # This is the structural regression test: it exercises the real
+    # provisioning caller (not the openclaw_call helper in isolation) and
+    # asserts every gateway interaction goes through provisioning.openclaw_call,
+    # not through any model-facing tool wrapper.
+    from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
+    from app.services.openclaw.provisioning import OpenClawGatewayControlPlane
+
+    calls: list[tuple[str, object]] = []
+
+    async def _fake_openclaw_call(method, params=None, *, config):
+        del config
+        calls.append((method, params))
+        if method == "config.get":
+            return {
+                "hash": "h-base",
+                "config": {
+                    "agents": {
+                        "list": [
+                            {
+                                "id": "agent-x",
+                                "workspace": "/old/ws",
+                                "heartbeat": {"every": "10m"},
+                            },
+                        ],
+                    },
+                },
+            }
+        if method == "config.patch":
+            return {"ok": True}
+        msg = f"unexpected gateway method: {method}"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(agent_provisioning, "openclaw_call", _fake_openclaw_call)
+
+    control_plane = OpenClawGatewayControlPlane(
+        config=GatewayClientConfig(url="ws://gateway.example/ws"),
+    )
+
+    await control_plane.patch_agent_heartbeats(
+        entries=[("agent-x", "/new/ws", {"every": "5m"})],
+    )
+
+    methods = [call[0] for call in calls]
+    assert "config.get" in methods, "patch_agent_heartbeats must read config first"
+    assert "config.patch" in methods, (
+        "patch_agent_heartbeats must apply via config.patch through openclaw_call; "
+        "if MC ever drifts to a model-facing tool wrapper, OpenClaw 4.14 #62006 "
+        "would reject dangerous-flag changes silently"
+    )
+    # No other RPC methods should be involved in this code path. If a future
+    # change adds one (e.g. a tool-facing wrapper, a session.* call, etc.),
+    # make sure the new path is also operator-trusted before relaxing this.
+    assert set(methods) == {"config.get", "config.patch"}, (
+        f"unexpected gateway RPCs in patch_agent_heartbeats path: {methods}"
+    )
+
+    patch_call = next(call for call in calls if call[0] == "config.patch")
+    patch_params = patch_call[1]
+    assert isinstance(patch_params, dict)
+    assert "raw" in patch_params, "config.patch must carry the 'raw' JSON payload"
+    assert patch_params.get("baseHash") == "h-base", (
+        "config.patch must include baseHash from the prior config.get for "
+        "optimistic concurrency"
+    )

@@ -199,16 +199,16 @@ async def test_openclaw_call_surfaces_scope_error_without_device_fallback(
 
 
 @pytest.mark.asyncio
-async def test_config_patch_uses_operator_rpc_path(
+async def test_openclaw_call_config_patch_builds_operator_connect_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # OpenClaw 2026.4.14 (#62006) made the model-facing gateway tool reject
-    # config.patch/config.apply calls that newly enable dangerous flags.
-    # MC must keep routing these calls through the direct authenticated
-    # operator RPC path, where the rejection does not apply. This regression
-    # test pins that contract: a config.patch call must reach the gateway
-    # via the operator-role connect handshake, not any model-facing tool
-    # wrapper.
+    # Narrow unit check: when openclaw_call is invoked with method "config.patch",
+    # the connect handshake it would perform still builds operator-role params
+    # via _build_connect_params. This proves the connect-params builder treats
+    # config.patch like any other operator-trusted method — but it does NOT
+    # exercise the real provisioning caller. For the real-caller assertion see
+    # tests/test_agent_provisioning_utils.py::
+    #     test_patch_agent_heartbeats_routes_through_openclaw_call
     captured: dict[str, object] = {}
 
     async def _fake_call_once(
