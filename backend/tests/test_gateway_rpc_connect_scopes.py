@@ -198,6 +198,52 @@ async def test_openclaw_call_surfaces_scope_error_without_device_fallback(
         )
 
 
+@pytest.mark.asyncio
+async def test_config_patch_uses_operator_rpc_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OpenClaw 2026.4.14 (#62006) made the model-facing gateway tool reject
+    # config.patch/config.apply calls that newly enable dangerous flags.
+    # MC must keep routing these calls through the direct authenticated
+    # operator RPC path, where the rejection does not apply. This regression
+    # test pins that contract: a config.patch call must reach the gateway
+    # via the operator-role connect handshake, not any model-facing tool
+    # wrapper.
+    captured: dict[str, object] = {}
+
+    async def _fake_call_once(
+        method: str,
+        params: dict[str, object] | None,
+        *,
+        config: GatewayConfig,
+        gateway_url: str,
+    ) -> object:
+        del gateway_url
+        captured["method"] = method
+        captured["params"] = params
+        captured["connect_params"] = _build_connect_params(config)
+        return {"ok": True}
+
+    monkeypatch.setattr(gateway_rpc, "_openclaw_call_once", _fake_call_once)
+
+    payload = await openclaw_call(
+        "config.patch",
+        {"agentId": "agent-x", "patch": {"channels": {}}},
+        config=GatewayConfig(url="ws://gateway.example/ws"),
+    )
+
+    assert payload == {"ok": True}
+    assert captured["method"] == "config.patch"
+    connect_params = captured["connect_params"]
+    assert isinstance(connect_params, dict)
+    assert connect_params["role"] == "operator"
+    assert connect_params["scopes"] == list(GATEWAY_OPERATOR_SCOPES)
+    assert "operator.admin" in connect_params["scopes"]
+    assert connect_params["client"]["id"] == DEFAULT_GATEWAY_CLIENT_ID
+    assert connect_params["client"]["mode"] == DEFAULT_GATEWAY_CLIENT_MODE
+    assert "device" in connect_params
+
+
 class _FakeConnectContext:
     async def __aenter__(self) -> object:
         return object()
