@@ -1,6 +1,6 @@
 # TaskFlow Web Presence — Improve / Evolve Plan
 
-**Status:** Draft v1.3 (amended after Codex adversarial review), not yet implemented
+**Status:** Draft v1.4 (amended after live-source/live-browser truth audit), not yet implemented
 **Date:** 2026-04-14
 **Source audit:** 10-agent source/DOM review + 4-agent pure-visual browser review + 3-agent human-perspective review + Codex (gpt-5.4/high) two-round adversarial review (all 2026-04-14)
 **Target codebase:** the Dev Squad's **TaskFlow marketing site** — a Vite + React 19 + Tailwind 4 + i18next project at `/root/.openclaw/workspace/workspace-mc-3461451b-5824-4ed0-872c-d14d5d2be107/taskflow-web-presence-vite/` on the gateway machine `192.168.2.60`, copied locally to `/tmp/tf-site/` for audit purposes. This is **NOT** the `frontend/` directory in this repo (which is the separate Next.js Mission Control dashboard for a different product). The plan file lives in `openclaw-mission-control/docs/plans/` only as a shared reference for the Supervisor and Dev Squad.
@@ -8,8 +8,8 @@
 **Scope excluded:** backend/product code changes, real testimonial collection, real logo licensing, third-party integrations. This plan is about making the marketing site honest, complete, and rep-worthy. Not about building new product features.
 
 **Amendments in v1.1** (2026-04-14, after a 4-agent Chrome-DevTools-MCP visual audit and operator design feedback on the hero composition and navigation):
-- Three new findings the source audit missed: (1) frosted glass on docs is cosmetically broken — classes present, visual effect absent; (2) docs code blocks are visually indistinguishable from body prose; (3) docs mobile/tablet users are functionally locked out of sidebar navigation (no hamburger trigger).
-- Severity upgrade on the docs mobile hamburger item from MEDIUM to HIGH.
+- Three new findings the source audit missed at that stage: (1) frosted glass on docs is cosmetically broken — classes present, visual effect absent; (2) docs code blocks are visually indistinguishable from body prose; (3) docs mobile/tablet users appeared functionally locked out of sidebar navigation. The third finding was later corrected in v1.4 against the current live deployment.
+- Severity upgrade on the docs mobile hamburger item from MEDIUM to HIGH at that stage. This was later narrowed in v1.4 to a usability/trust problem rather than a missing-menu problem.
 - New Phase 3 Track E for visual/aesthetic correctness.
 - New section 10 (Methodology note) on why a visual audit layer is required in every future QA pass, not just DOM assertions.
 - **Hero composition rebuild** (Phase 1 Track A): the Landing hero's right column replaces three floating specks on bare navy with a layered composition — a Kanban dashboard screenshot as the base plate inside a browser frame, with the WhatsApp bubble and Arc Connector overlaid on top so the arc points at an actual task card. This subsumes the separate Product Preview section conditionally.
@@ -24,7 +24,7 @@
 - **Header now names the target codebase explicitly** (the first round of Codex review failed because the plan never stated which project it was talking about — Codex went looking in this repo and audited the wrong thing).
 - **Phase 1 Track C invisible-heading fix revised.** The root-cause diagnosis (global `h1-h6 { color: var(--navy) }` rule overrides inherited `text-white`) is correct. The originally proposed fix (drop the global color rule) is collateral-heavy because the rule is load-bearing on every light-background heading across all 3 pages. Safer fix: add `text-white` (or appropriate token) directly on every dark-surface heading element. Better structural fix as a follow-up: refactor heading color out of global selectors entirely and scope it via `.prose` wrappers or component-level classes.
 - **New Phase 1 Track C item: Navigation.jsx has hardcoded English strings.** Codex caught that the nav imports `useTranslation` for language switching but renders `Home`, `Product`, `Docs` as hardcoded strings. These must be wrapped in `t()` calls in Phase 1, not deferred to Phase 2. The i18n problem is worse than the plan originally stated: even the chrome that "works" when you switch locale is partially fake.
-- **Phase 1 duration bumped from 2-3 days to 4-5 days.** With the hero composition rebuild, 3 missing sections, Product hero rewrite, Government use case add, CTA button, invisible-heading fix across all affected headings, nav sign-in/Get-Started additions, nav hardcoded-string wrapping, nav overlap fix, and a11y form field fixes, 2-3 days was fake. 4-5 days of PF full-time is realistic.
+- **Phase 1 duration bumped from 2-3 days to 4-5 days.** With the hero composition rebuild, Product hero rewrite, Government use case add, CTA wiring, invisible-heading fix across all affected headings, nav sign-in/Get-Started additions, nav hardcoded-string wrapping, nav overlap fix, docs-truth cleanup, and a11y form field fixes, 2-3 days was fake. 4-5 days of PF full-time is realistic.
 - **Phase 2 Track A i18n duration bumped and acceptance gate strengthened.** Extracting ~500 keys + translating into PT/ES/FR + metadata localization + QA test repair is ~4-5 days, not 2. The "matching key counts" gate is replaced with: a Playwright test that asserts **zero known English anchor phrases render in the non-EN locales**, plus a lint that fails if any `t()` call returns its own key (missing translation fallback).
 - **New Phase 2 Track E: Commercial foundation (SEO + legal + performance + analytics).** The original plan omitted OG tags, Twitter cards, sitemap.xml, robots.txt, canonical URLs, privacy policy, terms of service, cookie consent, image optimization, preconnect/preload hints, performance budgets, and analytics scaffolding — all basic requirements for a v1.0 commercial marketing site. A Vite SPA has no SSR framework metadata layer, which makes this problem more acute than it would be for a Next.js or Astro site. Track E covers the structural/scaffolding work; pricing page and 404 page scaffold go in Phase 1 Track D (new, cheap wins); real content for legal pages blocks on operator input in Phase 4.
 - **Phase 3 Track E split into Track E (correctness) and Track F (design pass).** Codex flagged that Phase 3 was labeled "No new content, just correctness" but Track E mixed frosted glass / code block treatment / type rhythm (correctness) with feature card variation / hierarchy cascade / docs color rhythm (design judgment). Split them: Track E stays correctness, Track F is an explicit design pass that the plan no longer pretends is polish.
@@ -33,29 +33,39 @@
 - **Methodology section 10.1 softened.** The "skip the naive-first-visitor role" rule is downgraded from "never use" to "use with caution, requires adversarial priors to break the polite default." The "always require adversarial-buyer and designer-critic roles" is downgraded from "non-negotiable" to "required for large audits, overkill for small iterative fixes." The "contrast judgment rule" is replaced with a measurable WCAG contrast ratio check (4.5:1 body / 3:1 large text) — no more eyeball estimation by the agent.
 - **Framer Motion + prefers-reduced-motion reinforced.** Codex confirmed the plan's existing Phase 3 Track A fix is correct: the CSS `@media (prefers-reduced-motion: reduce)` block in `index.css` handles CSS animations but Framer Motion components still animate unless wrapped in `MotionConfig` or a `useReducedMotion()` hook. Explicit call-out kept.
 
+**Amendments in v1.4** (2026-04-14, after a live-source + live-browser truth audit against `http://192.168.2.60:3000` with measured contrast checks and skeptical-buyer verification):
+- **Attribution.** v1.4 was drafted in the shared workspace by Codex during the 2026-04-14 TaskFlow audit session after live source review plus browser verification against the deployed site.
+- **Truth-first reprioritization.** The biggest problem is not missing polish sections; it is that the live site currently says things it cannot back up and exposes CTAs that do nothing. Phase 1 is now explicitly "truth + conversion + legibility" before any further layout/design polish.
+- **Hero contrast bug upgraded from source suspicion to live-measured P0.** The Landing and Product hero H1s render at `1.0:1` contrast against their navy section background on the live site because global `h1-h6 { color: var(--navy) }` still wins on dark surfaces. This is now the first fix in the plan, not just one item among many.
+- **Dead CTAs and dead links added as a Phase 1 blocker.** `Get Started Free`, `Watch Demo`, and the bottom CTA buttons do not navigate or trigger anything on the live site, and several footer links still point to `#`. The plan now treats dead conversion paths as a release-blocking defect.
+- **i18n problem upgraded from source inference to live-verified localization theater.** Switching the live site to Portuguese updates `document.documentElement.lang`, but Product page narrative/body copy remains English. The plan now explicitly distinguishes between locale chrome and real body translation, and adds an interim option to reduce the switcher scope if full translation is not ready.
+- **Docs overclaiming added as a Phase 1 truth issue.** The docs page currently presents specific operational promises (for example webhooks, custom fields, automation rules, and a full REST API surface) as if they are shipped. This audit did not verify those capabilities against the live product surface, so the plan now requires trimming docs down to what is verified or clearly marked as planned before expanding them.
+- **Docs mobile-nav finding corrected.** The earlier claim that mobile/tablet docs had no hamburger trigger was true for an older audited state but is false on the current live deployment. The remaining docs-nav issue is not absence of a menu; it is trust/discoverability/functionality of the docs affordances.
+
 ---
 
 ## 1. Current state — in one paragraph
 
-The design system (tokens, fonts, components inventory) matches the plan almost perfectly **at the source level** — but the visual audit revealed that one of those wins (the frosted-glass docs aesthetic) is only classwise correct and doesn't actually render as a blur/translucency effect. Everything downstream of the design system is the problem: Landing page is missing 3 conversion-critical sections (Logo Bar, Social Proof, Product Preview), Product page hero has the wrong headline and the 6 "deep-dive" sections are Landing-quality blurbs, the Security card set would fail a Brazilian gov RFP, Docs sidebar is 4/10 complete, there is no Government use case, the i18n is cosmetic (≈8% real coverage — ProductPage and DocsPage have **zero** `t()` calls), motion ignores `prefers-reduced-motion`, sticky nav overlaps content on all 3 pages at mount, and a global `h1-h6 { color: var(--navy) }` rule in `index.css` makes every heading on every dark-background section **invisible** (navy-on-navy) — confirmed by visual audit across all 4 locales. The visual audit also surfaced three additional defects not visible from source: docs code blocks render visually indistinguishable from body prose (no distinct background, no syntax highlighting), the docs frosted-glass look is cosmetically flat (classes present but nothing to blur against), and mobile/tablet users are functionally locked out of docs navigation because the sidebar is hidden with no hamburger trigger. The chassis is right. The content, the i18n wiring, several polish details, and several visual-effect details that were reported as "done" from source are not.
+The live site is closer to a polished prototype than a shippable commercial/government web presence. The main failures are now clear and measured: the Landing and Product hero H1s are effectively invisible on dark backgrounds (`1.0:1` live contrast), the primary CTAs do nothing, footer/company links still point to `#`, the language switcher changes locale state without translating most of the Product and Docs body copy, and the docs page escalates marketing ambition into specific operational/API claims without this audit having verified that they are live product capabilities. The good news is that the deployed site is structurally richer than some earlier audits assumed: the Landing page already has social proof/video/features/how-it-works/stats sections, the docs page already has a mobile menu, and the repo builds cleanly. So the site does not need a ground-up redesign first. It needs an honesty pass, a conversion pass, and a legibility pass before any more polish work is worth doing.
 
 ## 2. Target state — the v1.0 definition of done
 
 A prospective buyer — including a Brazilian government procurement evaluator — can:
 1. **Land on any of the 3 pages in any of the 4 locales and read 100% of content in that language** (not just nav + hero).
-2. **Read the Product page and understand, with concrete proof (screenshots, specific feature copy, real integrations), what TaskFlow does** — and find a Government & Public Sector use case explicitly called out.
-3. **Read the Security & Data section and satisfy a basic RFP compliance checklist** (encryption at rest, encryption in transit, data residency, tenant isolation, audit logs, RBAC, retention, LGPD/GDPR, self-host) without having to "Contact us" for the answer.
-4. **Use the Docs page as an actual documentation portal** — search works, API reference is complete enough to integrate against, and every sidebar item leads to real content, not a stub.
-5. **Browse from any viewport (375 / 768 / 1440)** without horizontal overflow, overlap, or sub-44px tap targets, with `prefers-reduced-motion` honored.
-6. **Receive no visual or motion artifacts that contradict the design system** — navy-dominant, teal-action, purple-accent hierarchy holds everywhere, and every heading is legible on every background.
+2. **Click any primary CTA or footer trust link and get a real outcome** (signup flow, sales contact, demo, docs, GitHub, contact page) rather than a dead button or `#` placeholder.
+3. **Read the Product page and understand, with concrete proof (screenshots, specific feature copy, real integrations), what TaskFlow does** — and find a Government & Public Sector use case explicitly called out.
+4. **Read the Security & Data section and see only claims the operator is willing to stand behind** — no aspirational compliance language presented as established fact.
+5. **Use the Docs page as an actual documentation portal** — search works if present, API reference reflects real surface area if present, and no section presents roadmap/speculation as shipped reality.
+6. **Browse from any viewport (375 / 768 / 1440)** without horizontal overflow, overlap, or sub-44px tap targets, with `prefers-reduced-motion` honored.
+7. **Receive no visual or motion artifacts that contradict the design system** — navy-dominant, teal-action, purple-accent hierarchy holds everywhere, and every heading is legible on every background.
 
-## 3. Phased roadmap (4 phases, ≈2 weeks)
+## 3. Phased roadmap (4 phases, ≈3–4 weeks for Phases 1–3, plus external-gated Phase 4)
 
 The audit produced ~30 distinct findings plus one critical rendering bug discovered during plan review. Dropping them as one giant punch-list would overwhelm the Dev Squad and tangle the review cycle. Phase them so each phase produces a coherent, reviewable release with its own QA pass.
 
 | Phase | Theme | Duration | Release tag | Gate |
 |---|---|---|---|---|
-| **Phase 1** — Unblock | Fix the embarrassments. Right words in right places. Critical structural gaps. Invisible-heading P0. Mobile-first hero rebuild. Sign In / Get Started. Hardcoded nav strings. Commercial basics scaffold. | **4–5 days** *(bumped from 2-3 in v1.3)* | v0.6 | Architect visual QA at 375 → 768 → 1440 × EN |
+| **Phase 1** — Truth + Conversion + Legibility | Fix the release blockers first: invisible hero headings, dead CTAs/links, false or overstated claims, hardcoded nav strings, and docs overclaiming. Keep layout changes bounded. | **4–5 days** | v0.6 | Architect visual QA at 375 → 768 → 1440 × EN + skeptic re-check of CTAs/claims |
 | **Phase 2** — Substance + Commercial foundation | i18n coverage expansion. Security rewrite. Feature deep-dives. Docs content. SEO / legal / performance / analytics scaffolding. | **8–10 days** *(bumped from 5-7 in v1.3)* | v0.7 | Architect copy QA + QA-Unit i18n anchor-phrase test + Lighthouse SEO ≥ 90 |
 | **Phase 3** — Polish (correctness) + Design pass | Track E: a11y, responsive breakpoints, motion reduced-motion, TOC auto-gen, code highlighting, global color architecture refactor, frosted glass, type rhythm. Track F: feature card variation, hierarchy cascade verification, docs color rhythm. | 4–5 days | v0.8 | QA-E2E full responsive pass + Architect design-pass sign-off |
 | **Phase 4** — Content production | Real video, real testimonials, real customer logos, SOC 2 language, pricing page content, legal page content. Gated on external (operator input). | ongoing | v1.0 | Operator sign-off |
@@ -64,12 +74,20 @@ Work within a phase can run in parallel across tracks; phases themselves are seq
 
 ---
 
-## Phase 1 — Unblock (v0.6, 2–3 days)
+## Phase 1 — Truth + Conversion + Legibility (v0.6, 4–5 days)
 
-**Theme:** Stop shipping obviously wrong things. One-line-fix energy.
+**Theme:** Stop shipping things that are false, unreadable, or inert. No new polish work ships ahead of these fixes.
+
+### Track 0 — Truth and conversion blockers (NEW in v1.4)
+
+- **Make every primary CTA real.** The current Landing hero CTA buttons and bottom CTA buttons are inert. Wire `Get Started Free`, `Watch Demo`, `Start Free Trial`, and `Talk to Sales` to real destinations or remove them until the destinations exist. A waitlist, demo form, email handoff, or docs onboarding page is acceptable; a dead button is not.
+- **Remove or downgrade unsupported proof points.** Hardcoded numbers like `1,200+ teams`, `45K+ tasks`, `98% retention`, `5min setup`, and unsupported authority phrases like `Industry leading` must either be backed by operator-approved evidence or replaced with non-quantified, honest language.
+- **Trim docs to shipped reality.** Remove or clearly mark as planned any docs sections that present capabilities as current product behavior without this audit having verified them against the live product surface: webhooks, custom fields, automation rules, full REST API surface, and similar claims. Phase 2 can grow docs back once those claims are backed.
+- **Kill dead trust links.** Footer/company/community/social links must resolve to something real or be removed from the layout. Decorative trust links are worse than omission.
+- **Interim i18n honesty rule.** If full body translation is not ready for all 4 locales, reduce the switcher scope or label non-English locales as partial/beta. The current state — locale switch changes with English body copy still showing — is not acceptable.
 
 ### Track A — Landing page structural gaps
-- **[NEW in v1.1, revised mobile-first in v1.3] Rebuild the hero visual composition with a dashboard screenshot as the base layer.** Currently (LandingPage.jsx:72–112) the right column of the hero holds three absolute-positioned floating elements — a WhatsApp chat bubble, the Arc Connector, and a small "Q3 Budget Report" browser mockup — on a bare navy background. Visually the composition is unbalanced: a dense headline on the left, three disconnected floating specks on the right, and a large navy void between them. The fix is to replace the bare-navy right column with a layered composition:
+- **[NEW in v1.1, revised mobile-first in v1.3] Rebuild the hero visual composition with a dashboard screenshot as the base layer.** The current hero has the right ingredients, but the H1 is unreadable and the composition still relies on too much empty navy field. The fix is to replace the bare-navy right column with a layered composition:
   1. **Base layer:** full Kanban dashboard screenshot inside a `BrowserMockup` frame. Use the existing `public/screenshots/kanban-full.png` (already in the repo — no new asset needed). `dashboard-home.png` is an acceptable alternative depending on which view reads better at the hero scale.
   2. **Overlay 1:** the existing WhatsApp chat bubble (`bg-[#DCF8C6]` card from LandingPage.jsx:81–84), positioned at the upper-left of the composition with a slight negative offset so it visually "floats in front of" the browser frame.
   3. **Overlay 2:** the Arc Connector SVG, redrawn to originate from the WhatsApp bubble and **terminate on a specific Kanban card inside the dashboard screenshot** — the arc should have a real destination, not a trailing-off curve. This tells the story "chat message → task card" immediately.
@@ -78,13 +96,11 @@ Work within a phase can run in parallel across tracks; phases themselves are seq
   **[v1.3 critical addition] Mobile-first design process, not desktop-first.** Codex warned that the above composition could read fine at 1440px and collapse at 375px — the dashboard screenshot inside a browser frame becomes microscopic, the chat bubble overlay competes with the headline for attention, and the arc connector becomes decorative noise with no clear destination. **Architect must design the 375px composition first**, then 768, then 1440. Desktop is an enlargement of a mobile-correct layout, not the reverse. At 375px the composition may need to be: stacked vertically (headline above, then a smaller BrowserMockup, then CTA buttons), with the chat bubble and arc simplified to a single static illustration or hidden entirely. Phase 1 Track A ships to QA only after the 375px composition has been approved, not before. This is non-negotiable.
 
   This change also **subsumes the separate Product Preview section below** (originally plan 238–241) — the dashboard is now visible in the hero, which is where conversion-optimized SaaS sites want it anyway. Keep the later Product Preview section only if the dashboard in the hero is too small to read at typical viewport sizes; otherwise delete it from the scope and reclaim the vertical space.
-- **Add Logo Bar section** after Hero, before Features (plan 195–198). If no real logos exist, implement with `visibility: hidden` and a single `TODO: enable when 3 logos collected` comment. Component: `LogoStrip`, add to `src/components/`. Keep plan's "hide until 3 logos" directive.
-- **Product Preview section** (plan 238–241) — **conditionally cut** depending on hero rebuild. If the hero dashboard composition is legible at 1440px and mobile, this section becomes redundant and should be removed. If the hero dashboard is too small to be useful, keep this section with its own full-width dashboard + annotation callouts as originally planned. Architect decides after seeing the hero rebuild at Phase 1 review.
-- **Scaffold Social Proof section** at the correct position (plan 220–227). Honor the plan's "ship HIDDEN until 2+ real testimonials" rule: render the section only if `testimonials.length >= 2`, and leave the array empty. Component: `TestimonialCard` in `src/components/`. Dormant but buildable.
+- **Do not spend Phase 1 time adding more sections.** The live landing page already has social proof, video demo, features, how-it-works, stats, and bottom CTA. Section-count is no longer the bottleneck. Only keep section changes that directly improve truth, readability, or conversion.
 
 ### Track B — Product page critical fixes
 - **Rewrite ProductPage.jsx:101 hero** — replace "Teams that ship with TaskFlow" with "See what TaskFlow **actually does**" (plan line 260). Update purple-underline positioning accordingly.
-- **Add the Government & Public Sector use case** as the 5th card in the Use Cases section (plan 300). Copy draft: *"Inter-departmental task delegation with hierarchical boards and full audit trails. Every action logged, every decision traceable. LGPD-compliant, self-hostable, zero third-party data sharing."* Bump Use Cases grid from `md:grid-cols-2` (4 cards) to `md:grid-cols-2 lg:grid-cols-3` (5 cards).
+- **Add the Government & Public Sector use case** as the 5th card in the Use Cases section (plan 300). Copy draft: *"Inter-departmental task delegation with hierarchical boards and auditable workflows. Every action logged, every decision traceable. Built for procurement-sensitive teams that need clear ownership, accountability, and controlled process visibility."* Bump Use Cases grid from `md:grid-cols-2` (4 cards) to `md:grid-cols-2 lg:grid-cols-3` (5 cards). Any compliance or hosting claims stay out of this card unless separately verified.
 - **Add the missing CTA button** to the Product page Bottom CTA section (ProductPage.jsx:391–402). Primary "Get Started Free", secondary "Talk to Sales".
 
 ### Track C — Global visual and layout fixes
@@ -98,6 +114,7 @@ Work within a phase can run in parallel across tracks; phases themselves are seq
   This is a plan-level gap, not a delivery gap — the original design plan (2026-04-11-taskflow-web-presence-design.md:171–176) did not specify a Sign In link or a persistent Get Started CTA in the nav. The evolve plan corrects the omission.
 - **Fix sticky nav overlap** across all 3 pages. Add `padding-top: 80px` to `main` or `scroll-padding-top: 80px` to `html`. Verify on all viewports.
 - **Fix form field a11y warnings** — add `id="language-select"` + `name="locale"` to the language combobox in `Navigation.jsx` and `id="search-docs"` + `name="search"` to `DocsPage.jsx:49`.
+- **Docs mobile navigation item revised.** The current live docs page does have a hamburger trigger. Phase 1 does **not** need to invent a mobile menu from scratch. The real task is to make the existing docs navigation honest and usable: add an accessible label to the icon-only menu button, verify tap target size, and ensure the docs nav links actually land on real sections.
 
 ### Track D — Commercial basics scaffold (NEW in v1.3)
 
@@ -115,7 +132,7 @@ These are all cheap wins individually. Together they transform the site from "de
 ### Phase 1 acceptance gate
 - All 3 pages render without nav overlap at 375 / 768 / 1440.
 - **Every heading on every page is legible on its background** (manual screenshot review by Architect in EN + PT + ES + FR, verified by a measurable WCAG contrast ratio check ≥ 4.5:1 for body headings and ≥ 3:1 for large display headings — not eyeball estimation).
-- Landing has 11 sections (the plan's required list) in the plan's order, with Social Proof dormant.
+- Landing ships with no decorative placeholder sections, no inert controls, and no section-level claims that outrun the current product surface.
 - **Landing hero mobile composition (375px) is approved by Architect before desktop composition is reviewed.** Hero work does not ship to QA until the mobile-first version is signed off.
 - Product hero says "See what TaskFlow actually does".
 - Product Use Cases has 5 cards, Government included.
@@ -123,17 +140,20 @@ These are all cheap wins individually. Together they transform the site from "de
 - 404 page, privacy/terms placeholders, robots.txt, sitemap.xml, and base OG meta tags exist.
 - No console a11y warnings on any page at any viewport.
 - Architect reviews screenshots and posts PASS.
+- Skeptical-buyer re-check: every CTA/important footer link clicked live, every high-trust claim either backed or removed, no dead `#` trust surfaces remain.
 - Supervisor approves → merge → deploy → v0.6 tag.
 
 ---
 
-## Phase 2 — Substance (v0.7, 5–7 days)
+## Phase 2 — Substance (v0.7, 8–10 days)
 
 **Theme:** Make the content honest and deep. This is where the real work is.
 
 ### Track A — Full i18n remediation (≈4–5 days, bumped from 2 in v1.3)
 
 This is the largest single piece of work in the whole plan. The mechanical nature makes it parallelizable per page, but Codex (v1.3) correctly pushed back on the original 2-day estimate as fantasy. Extracting ~500 keys, namespace design, JSX wiring, translation into 3 target locales, metadata localization, and test repair is realistically 4-5 days of focused PF work, not 2.
+
+**Step 0.** If full multilingual body coverage cannot land in one pass, temporarily reduce the live language switcher to English-only or mark non-English locales as partial/beta in the UI. Do not keep the current "fully translated" implication while Product/Docs remain English.
 
 **Step 1.** Expand `src/locales/en.json` from 18 keys to ~500 keys. Every user-visible string in `LandingPage.jsx`, `ProductPage.jsx`, `DocsPage.jsx`, `Navigation.jsx`, `Footer.jsx` gets a translation key. Use a flat namespace per page: `landing.hero.title`, `product.feature_capture.title`, `docs.getting_started.intro`, etc.
 
@@ -232,7 +252,7 @@ Codex's critique #7 was the most important miss in v1.2: the plan claimed to pro
 
 ### Track B — Responsive breakpoints
 - **Docs sidebar breakpoint fix**: show sidebar at `md:` (768px), hide TOC at `md:` — plan responsive table lines 391–421. Current implementation waits until `lg:` (1024px).
-- **[HIGH — upgraded from MEDIUM in v1.1]** **Mobile hamburger for docs**: add an actual toggle button in the docs header that slides the sidebar in from the left as a drawer. Reuse state pattern from any existing mobile-nav code if present. **Severity upgraded:** the visual audit (agent 4) confirmed that at both 375×812 and 768×1024 there is no visible trigger at all, which means mobile and tablet users are **functionally locked out** of docs navigation — they can only see whichever single section loads on initial render. This is not a "small tap-target polish" issue; it's a broken navigation surface on every non-desktop viewport and must land in Phase 1 or early Phase 3 at the latest.
+- **Docs mobile navigation regression check (revised in v1.4).** The current live docs page already has a hamburger/drawer pattern, so Phase 3 does not re-implement mobile docs nav. It verifies that the Phase 1 fix survived the broader responsive refactor: the icon-only button remains labeled and tappable, the drawer still opens/closes cleanly, and the mobile drawer links still point to real sections that scroll correctly.
 - **Language button tap target**: bump to `min-h-[44px] min-w-[44px]` with appropriate padding. All 3 pages, both Navigation and Footer.
 
 ### Track C — Typography fixes
@@ -297,7 +317,7 @@ These items are **design judgment calls**, not correctness fixes. They were move
 - `prefers-reduced-motion` honored: Chrome DevTools emulation → all motion collapses to instant/opacity-only.
 - Architect verifies the Arc Connector behavior on scroll (not mount) and mobile-hidden.
 - **[NEW in v1.1]** **Mandatory visual walkthrough:** Architect takes Chrome-DevTools screenshots at 375 / 768 / 1440 natural on all 3 pages × all 4 locales = 36 screenshots, and eyeballs every one for legibility (no invisible text), layout integrity (no overlap, no overflow), visual effect rendering (frosted glass actually frosted, code blocks actually code-like), and content completeness (no empty sections with whitespace voids). This step is explicitly required because the v1.0 audit demonstrated that DOM-based QA is blind to contrast failures, cosmetic class-vs-render mismatches, and empty-section voids. No purely-DOM QA replaces this gate.
-- **[NEW in v1.1]** Mobile/tablet docs navigation is functional: tapping the hamburger opens the sidebar drawer; every section is reachable.
+- **[REVISED in v1.4]** Mobile/tablet docs navigation is functional and honest: the hamburger button is labeled and tappable, the drawer opens/closes cleanly, and every docs nav item lands on a real section.
 - Supervisor approves → v0.8 tag.
 
 ---
@@ -333,7 +353,7 @@ Phase 4 is **event-driven**: each item unblocks independently. PF opens a new PR
 
 ## 5. Definition of "done" per phase
 
-- **Phase 1 gate:** Architect screenshot PASS on all 3 pages at 1440px in all 4 locales. Every heading legible. Zero console errors. Plan compliance matrix shows 0 missing structural sections on Landing.
+- **Phase 1 gate:** Architect screenshot PASS on all 3 pages at `375 / 768 / 1440` in all 4 locales. Every heading legible. Zero console errors. Every primary CTA and trust link resolves to a real outcome, and every high-trust claim in Landing/Product/Docs is either backed or removed.
 - **Phase 2 gate:** `validate-i18n.spec.js` passes 12/12. Security section reviewed by operator. Docs sidebar has non-stub content for every link.
 - **Phase 3 gate:** QA-E2E full 4×3 responsive run PASS. Lighthouse a11y score ≥ 95 on all 3 pages. `prefers-reduced-motion` emulation test PASS.
 - **Phase 4 gate:** Operator sign-off. No automated gate — this phase is content, not code.
@@ -372,7 +392,7 @@ Phase 4 is **event-driven**: each item unblocks independently. PF opens a new PR
 3. Supervisor assigns to Programmer-Frontend with Architect as the reviewer.
 4. Architect gate at the end of Phase 1 → if green → same cycle repeats for Phase 2 after Track B's security input is unblocked.
 
-Alternatively, if scope must be trimmed: **Phase 1 alone** is ~2 days of PF work and would already lift the site from a 3/10 commercial grade to ~5/10 — it's the highest-leverage slice, and the P0 invisible-heading fix alone takes the site from "broken" to "at least readable."
+Alternatively, if scope must be trimmed: **Phase 1 alone** is ~4-5 days of PF work and would already lift the site from a 3/10 commercial grade to ~5/10 — it's the highest-leverage slice, and the P0 invisible-heading fix alone takes the site from "broken" to "at least readable."
 
 ---
 
@@ -385,7 +405,7 @@ After v1.0 was committed, a 4-agent pure-visual audit ran — each agent opened 
 1. **Invisible Landing hero H1** (navy-on-navy, confirmed across all 4 locales). The source/DOM agents took screenshots and queried `getBoundingClientRect` — they never compared foreground color against background color, and they never read the text on the image to see whether it was legible. The visual agent saw the bug immediately and confirmed it in all 4 locales.
 2. **Frosted glass on docs is cosmetically flat.** The source audit marked frosted glass as ✓ because `bg-white/95 backdrop-blur-md` was present in the JSX. The visual audit saw flat white cards — correct at the class level, wrong at the effect level. This is a class of bug that cannot be found by grep.
 3. **Docs code blocks are visually indistinguishable from body prose.** The source audit noted "no syntax highlighting library imported" as a minor issue. The visual audit confirmed that the visual experience is actually "I can't tell this is code" — which is much more severe than "missing Prism." A `font-mono` inheritance alone is insufficient when there is no background, no border, no padding, and no color differentiation.
-4. **Mobile docs is a dead end.** The source audit correctly flagged that there was no hamburger trigger, but scored it MEDIUM. The visual audit confirmed that means mobile and tablet users have no way at all to navigate the docs — the correct severity is HIGH.
+4. **Docs mobile affordances were misdiagnosed until the live check.** Earlier audits treated the problem as "no hamburger trigger"; the current live deployment proves the deeper issue is different: the menu exists, but the docs interaction layer still risks reading as decorative if links, anchors, and search affordances are not honest and functional. This is exactly why live visual verification must beat stale audit assumptions.
 
 **What this means for every future QA pass on this site (and any other UI product):**
 
