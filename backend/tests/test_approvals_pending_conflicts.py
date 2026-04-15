@@ -262,6 +262,7 @@ async def test_update_move_to_done_approval_rejects_approval_when_task_left_revi
             session.add(task)
             await session.commit()
 
+            actor = _test_actor(session)
             created = await approvals_api.create_approval(
                 payload=ApprovalCreate(
                     action_type="move_to_done",
@@ -272,6 +273,7 @@ async def test_update_move_to_done_approval_rejects_approval_when_task_left_revi
                 ),
                 board=board,
                 session=session,
+                actor=actor,
             )
 
             task.status = "inbox"
@@ -284,6 +286,7 @@ async def test_update_move_to_done_approval_rejects_approval_when_task_left_revi
                     payload=ApprovalUpdate(status="approved"),
                     board=board,
                     session=session,
+                    actor=actor,
                 )
 
             assert exc.value.status_code == 409
