@@ -12,6 +12,7 @@ from app.db.session import get_session
 from app.schemas.common import OkResponse
 from app.schemas.gateway_api import (
     GatewayCommandsResponse,
+    GatewayEvalApprovalResolveRequest,
     GatewayEvalSessionEnsureRequest,
     GatewayResolveQuery,
     GatewaySessionHistoryResponse,
@@ -192,6 +193,27 @@ async def send_eval_gateway_session_message(
     """Send a prompt into an isolated eval session."""
     service = GatewaySessionService(session)
     await service.send_eval_session_message(
+        session_id=session_id,
+        payload=payload,
+        board_id=board_id,
+        organization_id=ctx.organization.id,
+        user=auth.user,
+    )
+    return OkResponse()
+
+
+@router.post("/evals/sessions/{session_id}/approvals/resolve", response_model=OkResponse)
+async def resolve_eval_gateway_session_approval(
+    session_id: str,
+    payload: GatewayEvalApprovalResolveRequest,
+    board_id: str | None = BOARD_ID_QUERY,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> OkResponse:
+    """Resolve a pending exec approval inside an isolated eval session."""
+    service = GatewaySessionService(session)
+    await service.resolve_eval_session_exec_approval(
         session_id=session_id,
         payload=payload,
         board_id=board_id,

@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 from dataclasses import dataclass
+import re
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import HTTPException, status
 
 from app.core.logging import TRACE_LEVEL
+from app.models.agents import Agent
 from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.schemas.gateway_api import (
+    GatewayEvalApprovalResolveRequest,
     GatewayEvalSessionEnsureRequest,
     GatewayResolveQuery,
     GatewaySessionHistoryResponse,
@@ -34,6 +38,7 @@ from app.services.openclaw.gateway_rpc import (
     openclaw_call,
     send_message,
 )
+from app.services.openclaw.internal.agent_key import agent_key
 from app.services.openclaw.policies import OpenClawAuthorizationPolicy
 from app.services.openclaw.shared import GatewayAgentIdentity
 from app.services.organizations import require_board_access
@@ -60,18 +65,51 @@ class GatewayTemplateSyncQuery:
 class GatewaySessionService(OpenClawDBService):
     """Read/query gateway runtime session state for user-facing APIs."""
 
+    _EXEC_APPROVAL_ID_RE = re.compile(
+        r"Approval required \(id [^,]+, full ([0-9a-fA-F-]{36})\)",
+    )
+
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
 
     @staticmethod
     def _require_eval_session_id(session_id: str) -> str:
         normalized = session_id.strip()
-        if not normalized.startswith("eval-"):
+        if normalized.startswith("eval-"):
+            return normalized
+        if ":eval-" in normalized:
+            return normalized
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Eval session id must start with `eval-`.",
+        )
+
+    async def _resolve_eval_agent_gateway_id(self, *, board: Board, agent_id: str) -> str:
+        agent = await Agent.objects.by_id(agent_id).first(self.session)
+        if agent is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Agent not found",
+            )
+        if agent.board_id != board.id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="Eval session id must start with `eval-`.",
+                detail="Agent does not belong to the requested board.",
             )
-        return normalized
+        return agent_key(agent)
+
+    @staticmethod
+    def _eval_gateway_config(config: GatewayClientConfig) -> GatewayClientConfig:
+        """Use backend/device connect mode for isolated eval sessions.
+
+        Eval traffic is operator-driven but should not inherit control-ui/webchat
+        initiating-surface restrictions, otherwise session-level exec overrides
+        such as `/elevated full` are rejected before the role can do any work.
+        """
+
+        if not config.disable_device_pairing:
+            return config
+        return replace(config, disable_device_pairing=False)
 
     @staticmethod
     def to_resolve_query(
@@ -102,6 +140,37 @@ class GatewaySessionService(OpenClawDBService):
         if isinstance(value, Iterable):
             return list(value)
         return []
+
+    @staticmethod
+    def history_message_text(message: dict[str, object]) -> str:
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(part.strip() for part in parts if part.strip()).strip()
+        return ""
+
+    @classmethod
+    def _history_contains_exec_approval(cls, history: list[object], approval_id: str) -> bool:
+        normalized = approval_id.strip().lower()
+        if not normalized:
+            return False
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            text = cls.history_message_text(item)
+            for match in cls._EXEC_APPROVAL_ID_RE.finditer(text):
+                if match.group(1).strip().lower() == normalized:
+                    return True
+        return False
 
     async def resolve_gateway(
         self,
@@ -419,16 +488,46 @@ class GatewaySessionService(OpenClawDBService):
     ) -> GatewaySessionResponse:
         session_id = self._require_eval_session_id(session_id)
         board, config, _ = await self.require_gateway(board_id, user=user)
+        config = self._eval_gateway_config(config)
         self._require_same_org(board, organization_id)
         if user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
         await require_board_access(self.session, user=user, board=board, write=True)
         label = (payload.label or f"OpenClaw Eval Session {session_id}").strip()
         try:
-            ensured = await ensure_session(session_id, config=config, label=label)
-            if payload.reset:
-                await openclaw_call("sessions.reset", {"key": session_id}, config=config)
+            ensured: object
+            resolved_session_key = session_id
+            if payload.agent_id:
+                agent_gateway_id = await self._resolve_eval_agent_gateway_id(
+                    board=board,
+                    agent_id=payload.agent_id,
+                )
+                ensured = await openclaw_call(
+                    "sessions.create",
+                    {
+                        "key": session_id,
+                        "agentId": agent_gateway_id,
+                        "label": label,
+                    },
+                    config=config,
+                )
+                if isinstance(ensured, dict):
+                    resolved_session_key = str(
+                        ensured.get("key")
+                        or (ensured.get("entry") or {}).get("key")
+                        or session_id
+                    ).strip() or session_id
+            else:
                 ensured = await ensure_session(session_id, config=config, label=label)
+            if payload.reset:
+                await openclaw_call("sessions.reset", {"key": resolved_session_key}, config=config)
+                if not payload.agent_id:
+                    ensured = await ensure_session(session_id, config=config, label=label)
+                else:
+                    ensured = {
+                        "key": resolved_session_key,
+                        "label": label,
+                    }
         except OpenClawGatewayError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -450,6 +549,7 @@ class GatewaySessionService(OpenClawDBService):
     ) -> GatewaySessionHistoryResponse:
         session_id = self._require_eval_session_id(session_id)
         board, config, _ = await self.require_gateway(board_id, user=user)
+        config = self._eval_gateway_config(config)
         self._require_same_org(board, organization_id)
         if user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
@@ -476,12 +576,65 @@ class GatewaySessionService(OpenClawDBService):
     ) -> None:
         session_id = self._require_eval_session_id(session_id)
         board, config, _ = await self.require_gateway(board_id, user=user)
+        config = self._eval_gateway_config(config)
         self._require_same_org(board, organization_id)
         if user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
         await require_board_access(self.session, user=user, board=board, write=True)
         try:
-            await send_message(payload.content, session_key=session_id, config=config)
+            await send_message(
+                payload.content,
+                session_key=session_id,
+                config=config,
+                deliver=True,
+            )
+        except OpenClawGatewayError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+
+    async def resolve_eval_session_exec_approval(
+        self,
+        *,
+        session_id: str,
+        payload: GatewayEvalApprovalResolveRequest,
+        board_id: str | None,
+        organization_id: UUID,
+        user: User | None,
+    ) -> None:
+        session_id = self._require_eval_session_id(session_id)
+        board, config, _ = await self.require_gateway(board_id, user=user)
+        eval_config = self._eval_gateway_config(config)
+        self._require_same_org(board, organization_id)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+        await require_board_access(self.session, user=user, board=board, write=True)
+        approval_id = payload.approval_id.strip()
+        decision = payload.decision.strip()
+        try:
+            history = await get_chat_history(session_id, config=eval_config)
+        except OpenClawGatewayError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+        history_items = (
+            history["messages"]
+            if isinstance(history, dict) and isinstance(history.get("messages"), list)
+            else self.as_object_list(history)
+        )
+        if not self._history_contains_exec_approval(history_items, approval_id):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Approval id not present in eval session history.",
+            )
+        try:
+            await openclaw_call(
+                "exec.approval.resolve",
+                {"id": approval_id, "decision": decision},
+                config=config,
+            )
         except OpenClawGatewayError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -498,6 +651,7 @@ class GatewaySessionService(OpenClawDBService):
     ) -> None:
         session_id = self._require_eval_session_id(session_id)
         board, config, _ = await self.require_gateway(board_id, user=user)
+        config = self._eval_gateway_config(config)
         self._require_same_org(board, organization_id)
         if user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)

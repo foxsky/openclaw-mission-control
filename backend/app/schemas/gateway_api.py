@@ -15,11 +15,19 @@ class GatewaySessionMessageRequest(SQLModel):
     content: NonEmptyStr
 
 
+class GatewayEvalApprovalResolveRequest(SQLModel):
+    """Request payload for resolving an exec approval inside an eval session."""
+
+    approval_id: NonEmptyStr
+    decision: NonEmptyStr = "allow-once"
+
+
 class GatewayEvalSessionEnsureRequest(SQLModel):
     """Request payload for creating/resetting an isolated eval session."""
 
     label: str | None = None
     reset: bool = False
+    agent_id: NonEmptyStr | None = None
 
 
 class GatewayResolveQuery(SQLModel):
