@@ -2,6 +2,15 @@
 
 All notable changes to the OpenClaw Mission Control fork.
 
+## 2026-04-16
+
+### Fixed
+- **Heartbeat supervision gap**: Agents could appear `online` from ordinary authenticated API traffic while remaining effectively unsupervised because `agent_auth._touch_agent_presence()` updated `last_seen_at` without rearming `checkin_deadline_at`. This left the heartbeat sweep watching only agents with an already-populated deadline. Fixed by rearming the heartbeat deadline and resetting `wake_attempts` when authenticated agent traffic is the liveness signal.
+- **Live `.64` heartbeat recovery**: Deployed the auth-touch heartbeat rearm fix to `.64`, restarted the backend, and reseeded missing `checkin_deadline_at` values for the currently online agents so all monitored agents returned to active supervision immediately.
+
+### Changed
+- **Model policy note superseded**: The older `2026-04-09` fallback/model notes below are historical only. Current validated fallback policy is the later live `.64` policy recorded in the gateway provisioning/troubleshooting docs and subsequent sync commits, not the earlier `m2.1`-forward recommendations in that section.
+
 ## 2026-04-09
 
 ### Added
