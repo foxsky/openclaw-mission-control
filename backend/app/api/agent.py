@@ -838,6 +838,16 @@ async def create_task(
                 "blocked_by_task_ids": [str(value) for value in blocked_by],
             },
         )
+    if task.operator_decision_required and (task.assigned_agent_id is not None or task.status != "inbox"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Task is blocked pending operator decision.",
+                "blocked_by_task_ids": [],
+                "operator_decision_required": True,
+                "operator_decision_summary": task.operator_decision_summary,
+            },
+        )
     if task.assigned_agent_id:
         agent = await Agent.objects.by_id(task.assigned_agent_id).first(session)
         if agent is None:

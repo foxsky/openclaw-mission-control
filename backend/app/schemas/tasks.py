@@ -14,6 +14,17 @@ from app.schemas.tags import TagRef
 from app.schemas.task_custom_fields import TaskCustomFieldValues
 
 TaskStatus = Literal["inbox", "in_progress", "review", "rework", "done", "cancelled"]
+ReviewPacketType = Literal[
+    "frontend_ui",
+    "backend_api",
+    "review_only",
+    "content_copy",
+    "infra_ops",
+    "mixed",
+    "other",
+]
+ValidationTargetKind = Literal["live_url", "deploy_env", "workspace", "api_base", "other"]
+ValidationTargetScope = Literal["review", "runtime", "deploy", "all"]
 STATUS_REQUIRED_ERROR = "status is required"
 # Keep these symbols as runtime globals so Pydantic can resolve
 # deferred annotations reliably.
@@ -29,8 +40,40 @@ class TaskBase(SQLModel):
     priority: str = "medium"
     due_at: datetime | None = None
     assigned_agent_id: UUID | None = None
+    review_packet_type: ReviewPacketType | None = None
+    validation_target: str | None = None
+    validation_target_kind: ValidationTargetKind | None = None
+    validation_target_scope: ValidationTargetScope | None = None
+    operator_decision_required: bool = False
+    operator_decision_summary: str | None = None
     depends_on_task_ids: list[UUID] = Field(default_factory=list)
     tag_ids: list[UUID] = Field(default_factory=list)
+
+    @field_validator(
+        "validation_target",
+        "operator_decision_summary",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_text(cls, value: object) -> object | None:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def validate_validation_target_triplet(self) -> Self:
+        pieces = (
+            self.validation_target,
+            self.validation_target_kind,
+            self.validation_target_scope,
+        )
+        if any(piece is not None for piece in pieces) and not all(piece is not None for piece in pieces):
+            raise ValueError(
+                "validation_target, validation_target_kind, and validation_target_scope must be provided together"
+            )
+        return self
 
 
 class TaskCreate(TaskBase):
@@ -49,6 +92,12 @@ class TaskUpdate(SQLModel):
     priority: str | None = None
     due_at: datetime | None = None
     assigned_agent_id: UUID | None = None
+    review_packet_type: ReviewPacketType | None = None
+    validation_target: str | None = None
+    validation_target_kind: ValidationTargetKind | None = None
+    validation_target_scope: ValidationTargetScope | None = None
+    operator_decision_required: bool | None = None
+    operator_decision_summary: str | None = None
     depends_on_task_ids: list[UUID] | None = None
     tag_ids: list[UUID] | None = None
     custom_field_values: TaskCustomFieldValues | None = None
@@ -64,11 +113,34 @@ class TaskUpdate(SQLModel):
             return None
         return value
 
+    @field_validator(
+        "validation_target",
+        "operator_decision_summary",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_text(cls, value: object) -> object | None:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @model_validator(mode="after")
     def validate_status(self) -> Self:
         """Ensure explicitly supplied status is not null."""
         if "status" in self.model_fields_set and self.status is None:
             raise ValueError(STATUS_REQUIRED_ERROR)
+        triplet_fields = {
+            "validation_target",
+            "validation_target_kind",
+            "validation_target_scope",
+        }
+        provided = triplet_fields.intersection(self.model_fields_set)
+        if provided and provided != triplet_fields:
+            raise ValueError(
+                "validation_target, validation_target_kind, and validation_target_scope must be updated together"
+            )
         return self
 
 

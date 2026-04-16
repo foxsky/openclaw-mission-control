@@ -149,6 +149,22 @@ def _blocked_task_error(blocked_by_task_ids: Sequence[UUID]) -> HTTPException:
     )
 
 
+def _operator_decision_block_error(summary: str | None = None) -> HTTPException:
+    message = "Task is blocked pending operator decision."
+    if summary:
+        message = f"{message} {summary}"
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": message,
+            "code": "task_blocked_operator_decision_required",
+            "blocked_by_task_ids": [],
+            "operator_decision_required": True,
+            "operator_decision_summary": summary,
+        },
+    )
+
+
 def _approval_required_for_done_error() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
@@ -188,6 +204,16 @@ def _operator_only_cancel_error() -> HTTPException:
 
 def _status_clears_blockers(status_value: str) -> bool:
     return status_value in {"done", "cancelled"}
+
+
+def _task_has_operator_decision_block(task: Task) -> bool:
+    return bool(task.operator_decision_required) and not _status_clears_blockers(task.status)
+
+
+def _task_is_blocked(task: Task, blocked_by_task_ids: Sequence[UUID]) -> bool:
+    if _status_clears_blockers(task.status):
+        return False
+    return bool(blocked_by_task_ids) or _task_has_operator_decision_block(task)
 
 
 async def _reject_pending_move_to_done_approvals_for_task(
@@ -1335,7 +1361,7 @@ async def _task_read_page(
                     "tag_ids": tag_state.tag_ids,
                     "tags": tag_state.tags,
                     "blocked_by_task_ids": blocked_by,
-                    "is_blocked": bool(blocked_by),
+                    "is_blocked": _task_is_blocked(task, blocked_by),
                     "custom_field_values": custom_field_values_by_task_id.get(task.id, {}),
                 },
             ),
@@ -1428,7 +1454,7 @@ def _task_event_payload(
                 "tag_ids": tag_state.tag_ids,
                 "tags": tag_state.tags,
                 "blocked_by_task_ids": blocked_by,
-                "is_blocked": bool(blocked_by),
+                "is_blocked": _task_is_blocked(task, blocked_by),
                 "custom_field_values": resolved_custom_field_values_by_task_id.get(
                     task.id,
                     {},
@@ -1573,6 +1599,8 @@ async def create_task(
     )
     if blocked_by and (task.assigned_agent_id is not None or task.status != "inbox"):
         raise _blocked_task_error(blocked_by)
+    if task.operator_decision_required and (task.assigned_agent_id is not None or task.status != "inbox"):
+        raise _operator_decision_block_error(task.operator_decision_summary)
     session.add(task)
     # Ensure the task exists in the DB before inserting dependency rows.
     await session.flush()
@@ -2030,7 +2058,7 @@ async def _task_read_response(
             "tag_ids": tag_state.tag_ids,
             "tags": tag_state.tags,
             "blocked_by_task_ids": blocked_ids,
-            "is_blocked": bool(blocked_ids),
+            "is_blocked": _task_is_blocked(task, blocked_ids),
             "custom_field_values": custom_field_values_by_task_id.get(task.id, {}),
         },
     )
@@ -2070,6 +2098,12 @@ def _validate_lead_update_request(update: _TaskUpdateInput) -> None:
         "depends_on_task_ids",
         "tag_ids",
         "custom_field_values",
+        "review_packet_type",
+        "validation_target",
+        "validation_target_kind",
+        "validation_target_scope",
+        "operator_decision_required",
+        "operator_decision_summary",
     }
     requested_fields = _lead_requested_fields(update)
     if update.comment is not None:
@@ -2096,7 +2130,7 @@ def _validate_lead_update_request(update: _TaskUpdateInput) -> None:
 def _is_lead_rework_return(update: _TaskUpdateInput) -> bool:
     return (
         update.previous_status == "review"
-        and update.task.status in {"inbox", "rework"}
+        and update.task.status == "rework"
         and update.actor.actor_type == "agent"
         and update.actor.agent is not None
         and update.actor.agent.is_board_lead
@@ -2247,15 +2281,23 @@ async def _lead_apply_status(
                 f"`rework` (requested: `{target_status}`)."
             ),
         )
-    if target_status in {"inbox", "rework"}:
+    if target_status == "rework":
         update.task.previous_in_progress_at = update.task.in_progress_at
         update.task.in_progress_at = None
-        update.task.assigned_agent_id = await _last_worker_who_moved_task_to_review(
-            session,
-            task_id=update.task.id,
-            board_id=update.board_id,
-            lead_agent_id=lead_agent.id,
-        )
+        if "assigned_agent_id" not in update.updates:
+            update.task.assigned_agent_id = await _last_worker_who_moved_task_to_review(
+                session,
+                task_id=update.task.id,
+                board_id=update.board_id,
+                lead_agent_id=lead_agent.id,
+            )
+        update.task.status = target_status
+        return
+    if target_status == "inbox":
+        update.task.previous_in_progress_at = update.task.in_progress_at
+        update.task.in_progress_at = None
+        if "assigned_agent_id" not in update.updates:
+            update.task.assigned_agent_id = None
         update.task.status = target_status
         return
     update.task.status = target_status
@@ -2321,6 +2363,16 @@ async def _apply_lead_task_update(
         session,
         update=update,
     )
+    effective_operator_decision_required = bool(
+        update.updates.get(
+            "operator_decision_required",
+            update.task.operator_decision_required,
+        ),
+    )
+    effective_operator_decision_summary = update.updates.get(
+        "operator_decision_summary",
+        update.task.operator_decision_summary,
+    )
 
     # Blocked tasks should not be silently rewritten into a "blocked-safe" state.
     # Instead, reject assignment/status transitions with an explicit 409 payload.
@@ -2331,6 +2383,18 @@ async def _apply_lead_task_update(
         )
         if attempted_transition:
             raise _blocked_task_error(blocked_by)
+    if effective_operator_decision_required:
+        attempted_fields = set(update.updates.keys())
+        attempted_transition = (
+            "assigned_agent_id" in attempted_fields or "status" in attempted_fields
+        )
+        if attempted_transition:
+            raise _operator_decision_block_error(
+                effective_operator_decision_summary
+                if isinstance(effective_operator_decision_summary, str)
+                or effective_operator_decision_summary is None
+                else None
+            )
 
     await _lead_apply_assignment(session, update=update)
     await _lead_apply_status(session, update=update)
@@ -2428,7 +2492,11 @@ async def _apply_non_lead_agent_task_rules(
         )
     # Agents are limited to status/comment updates, and non-inbox status moves
     # must pass dependency checks before they can proceed.
-    allowed_fields = {"status", "comment", "custom_field_values"}
+    allowed_fields = {
+        "status",
+        "comment",
+        "custom_field_values",
+    }
     if (
         update.depends_on_task_ids is not None
         or update.tag_ids is not None
@@ -2469,6 +2537,23 @@ async def _apply_non_lead_agent_task_rules(
             )
             if blocked_ids:
                 raise _blocked_task_error(blocked_ids)
+            effective_operator_decision_required = bool(
+                update.updates.get(
+                    "operator_decision_required",
+                    update.task.operator_decision_required,
+                ),
+            )
+            effective_operator_decision_summary = update.updates.get(
+                "operator_decision_summary",
+                update.task.operator_decision_summary,
+            )
+            if effective_operator_decision_required:
+                raise _operator_decision_block_error(
+                    effective_operator_decision_summary
+                    if isinstance(effective_operator_decision_summary, str)
+                    or effective_operator_decision_summary is None
+                    else None
+                )
         if status_value == "inbox":
             update.task.assigned_agent_id = None
             update.task.previous_in_progress_at = update.task.in_progress_at

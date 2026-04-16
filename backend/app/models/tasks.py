@@ -29,6 +29,12 @@ class Task(TenantScoped, table=True):
     in_progress_at: datetime | None = None
     previous_in_progress_at: datetime | None = None
     cancelled_at: datetime | None = None
+    review_packet_type: str | None = None
+    validation_target: str | None = None
+    validation_target_kind: str | None = None
+    validation_target_scope: str | None = None
+    operator_decision_required: bool = Field(default=False, index=True)
+    operator_decision_summary: str | None = None
 
     created_by_user_id: UUID | None = Field(
         default=None,

@@ -73,6 +73,9 @@ def _task_to_card(
     )
     if task.status in {"done", "cancelled"}:
         blocked_by_task_ids = []
+    is_blocked = bool(blocked_by_task_ids) or (
+        bool(task.operator_decision_required) and task.status not in {"done", "cancelled"}
+    )
     return card.model_copy(
         update={
             "assignee": assignee,
@@ -82,7 +85,7 @@ def _task_to_card(
             "tag_ids": tag_state.tag_ids,
             "tags": tag_state.tags,
             "blocked_by_task_ids": blocked_by_task_ids,
-            "is_blocked": bool(blocked_by_task_ids),
+            "is_blocked": is_blocked,
         },
     )
 

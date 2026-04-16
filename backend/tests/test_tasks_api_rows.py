@@ -115,3 +115,37 @@ def test_task_event_payload_includes_activity_for_non_comment_event() -> None:
     assert isinstance(task_payload, dict)
     assert task_payload["id"] == str(task.id)
     assert task_payload["is_blocked"] is False
+
+
+def test_task_event_payload_marks_operator_decision_tasks_blocked() -> None:
+    task = Task(
+        board_id=uuid4(),
+        title="Need pricing call",
+        status="in_progress",
+        operator_decision_required=True,
+        operator_decision_summary="Awaiting operator pricing call.",
+        review_packet_type="content_copy",
+        validation_target="operator brief",
+        validation_target_kind="other",
+        validation_target_scope="all",
+    )
+    event = ActivityEvent(
+        event_type="task.updated",
+        message="Task updated: Need pricing call.",
+        task_id=task.id,
+    )
+
+    payload = _task_event_payload(
+        event,
+        task,
+        deps_map={task.id: []},
+        dep_status={},
+        tag_state_by_task_id={},
+    )
+
+    task_payload = payload["task"]
+    assert isinstance(task_payload, dict)
+    assert task_payload["is_blocked"] is True
+    assert task_payload["blocked_by_task_ids"] == []
+    assert task_payload["operator_decision_required"] is True
+    assert task_payload["review_packet_type"] == "content_copy"
