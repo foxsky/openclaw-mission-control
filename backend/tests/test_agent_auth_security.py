@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -11,6 +13,7 @@ from fastapi import HTTPException
 from app.api import deps
 from app.core import agent_auth
 from app.core.auth import AuthContext
+from app.models.agents import Agent
 
 
 class _RecordingLimiter:
@@ -163,3 +166,46 @@ async def test_optional_agent_auth_invalid_token_logs_short_prefix_only(
             ("/api/v1/tasks/task-2", "invali"),
         )
     ]
+
+
+class _RecordingSession:
+    def __init__(self) -> None:
+        self.added: list[object] = []
+        self.commits = 0
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
+@pytest.mark.asyncio
+async def test_touch_agent_presence_rearms_deadline_for_enabled_heartbeat_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = agent_auth.utcnow()
+    request = SimpleNamespace(method="GET")
+    session = _RecordingSession()
+    agent = Agent(
+        id=uuid4(),
+        name="worker",
+        gateway_id=uuid4(),
+        board_id=uuid4(),
+        status="online",
+        wake_attempts=2,
+        heartbeat_config={"every": "20m"},
+    )
+
+    monkeypatch.setattr(agent_auth, "utcnow", lambda: now)
+
+    await agent_auth._touch_agent_presence(
+        request=request,  # type: ignore[arg-type]
+        session=session,  # type: ignore[arg-type]
+        agent=agent,
+    )
+
+    assert agent.last_seen_at == now
+    assert agent.wake_attempts == 0
+    assert agent.checkin_deadline_at == now + timedelta(minutes=21)
+    assert session.commits == 1

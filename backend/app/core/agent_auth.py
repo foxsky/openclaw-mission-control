@@ -99,6 +99,15 @@ async def _touch_agent_presence(
     agent.updated_at = now
     if agent.status not in {"updating", "deleting"}:
         agent.status = "online"
+    # Agent-authenticated API traffic is still a real liveness signal. If an
+    # agent is actively calling MC, re-arm the heartbeat deadline so the sweep
+    # does not leave it "online" but effectively unmonitored.
+    from app.services.openclaw.provisioning_db import AgentLifecycleService
+
+    next_deadline = AgentLifecycleService._next_heartbeat_deadline(agent, now=now)
+    if next_deadline is not None:
+        agent.wake_attempts = 0
+        agent.checkin_deadline_at = next_deadline
     session.add(agent)
 
     # For safe HTTP methods, endpoints typically do not commit. Persist the touch
