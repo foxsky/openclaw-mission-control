@@ -508,6 +508,7 @@ async def test_admin_can_cancel_task_and_clear_assignment() -> None:
             assert updated.status == "cancelled"
             assert updated.assigned_agent_id is None
             assert updated.in_progress_at is None
+            assert updated.cancelled_at is not None
     finally:
         await engine.dispose()
 
@@ -546,6 +547,7 @@ async def test_admin_can_cancel_blocked_task_and_response_is_not_forced_back_to_
             assert updated.in_progress_at is None
             assert updated.blocked_by_task_ids == []
             assert updated.is_blocked is False
+            assert updated.cancelled_at is not None
     finally:
         await engine.dispose()
 
@@ -570,6 +572,7 @@ async def test_admin_can_reopen_cancelled_task_to_inbox() -> None:
 
             assert updated.status == "inbox"
             assert updated.assigned_agent_id is None
+            assert updated.cancelled_at is None
     finally:
         await engine.dispose()
 
@@ -606,6 +609,7 @@ async def test_cancelling_task_rejects_pending_move_to_done_approval() -> None:
             assert updated.status == "cancelled"
             assert approval.status == "rejected"
             assert approval.resolved_at is not None
+            assert updated.cancelled_at is not None
     finally:
         await engine.dispose()
 

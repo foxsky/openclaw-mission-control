@@ -2540,10 +2540,14 @@ async def _apply_admin_task_rules(
             update.task.previous_in_progress_at = update.task.in_progress_at
             update.task.assigned_agent_id = None
             update.task.in_progress_at = None
+            if update.task.status == "cancelled":
+                update.task.cancelled_at = None
         elif status_value == "cancelled":
             update.task.previous_in_progress_at = update.task.in_progress_at
             update.task.assigned_agent_id = None
             update.task.in_progress_at = None
+            if update.task.status != "cancelled":
+                update.task.cancelled_at = utcnow()
             await _reject_pending_move_to_done_approvals_for_task(
                 session,
                 board_id=update.board_id,
@@ -2553,8 +2557,12 @@ async def _apply_admin_task_rules(
             update.task.previous_in_progress_at = update.task.in_progress_at
             update.task.assigned_agent_id = None
             update.task.in_progress_at = None
+            if update.task.status == "cancelled":
+                update.task.cancelled_at = None
         elif status_value == "in_progress":
             update.task.in_progress_at = utcnow()
+            if update.task.status == "cancelled":
+                update.task.cancelled_at = None
 
     assigned_agent_id = _optional_assigned_agent_id(
         update.updates.get("assigned_agent_id"),

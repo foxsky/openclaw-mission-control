@@ -79,6 +79,7 @@ class TaskRead(TaskBase):
     board_id: UUID | None
     created_by_user_id: UUID | None
     in_progress_at: datetime | None
+    cancelled_at: datetime | None
     created_at: datetime
     updated_at: datetime
     blocked_by_task_ids: list[UUID] = Field(default_factory=list)
