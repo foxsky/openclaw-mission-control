@@ -86,8 +86,8 @@ async def test_ack_only_comment_emits_one_event() -> None:
     assert event.agent_id == agent_id
     assert event.board_id == board_id
     assert event.source_event_id == source_id
-    assert event.metadata_json is not None
-    assert event.metadata_json["packet_type"] == "frontend_ui"
+    assert event.classifier_metadata is not None
+    assert event.classifier_metadata["packet_type"] == "frontend_ui"
 
 
 @pytest.mark.asyncio
@@ -120,17 +120,22 @@ async def test_near_duplicate_emits_event_when_prior_exists() -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_prior_lookup_when_agent_id_is_none() -> None:
-    """User comments (agent_id=None) skip the dedup path entirely."""
+async def test_user_comments_skip_classifier_entirely() -> None:
+    """User comments (agent_id=None) are exempt from classification.
+
+    The classifier measures agent noise; treating operator acks as
+    data points pollutes the histogram.
+    """
 
     session = _FakeSession(prior=None)
+    # Ack-shaped message that would flag if an agent posted it:
     events = await build_shadow_events_for_comment(
         session,  # type: ignore[arg-type]
         task_id=uuid4(),
         board_id=uuid4(),
         agent_id=None,
         source_event_id=uuid4(),
-        message="Filed PR, tests passing.",
+        message="Acknowledged. Holding exactly there. No status change.",
         packet_type="frontend_ui",
     )
     assert events == []
@@ -169,20 +174,71 @@ async def test_prior_outside_window_does_not_trigger_duplicate() -> None:
 
 
 @pytest.mark.asyncio
-async def test_classifier_failure_returns_empty_list() -> None:
-    """Exception inside classify() must not break the caller's commit."""
+async def test_db_failure_propagates_not_swallowed() -> None:
+    """A broken session must raise — silent fallback hides incident signal.
+
+    The caller's commit would fail on the same broken session anyway,
+    so swallowing here only loses observability at the worst time.
+    """
 
     class _ExplodingSession:
         async def exec(self, _statement: Any) -> _FakeExecResult:
             raise RuntimeError("simulated DB failure")
 
+    with pytest.raises(RuntimeError, match="simulated DB failure"):
+        await build_shadow_events_for_comment(
+            _ExplodingSession(),  # type: ignore[arg-type]
+            task_id=uuid4(),
+            board_id=uuid4(),
+            agent_id=uuid4(),
+            source_event_id=uuid4(),
+            message="Acknowledged. Holding there.",
+            packet_type="frontend_ui",
+        )
+
+
+@pytest.mark.asyncio
+async def test_classifier_exception_returns_empty_and_logs() -> None:
+    """A bug inside classify() must not break the caller's commit."""
+
+    import app.services.shadow_metrics as sm
+
+    def _explode(*_a: Any, **_kw: Any) -> list[Any]:
+        raise ValueError("simulated classifier bug")
+
+    original = sm.classify
+    sm.classify = _explode  # type: ignore[assignment]
+    try:
+        session = _FakeSession()
+        events = await build_shadow_events_for_comment(
+            session,  # type: ignore[arg-type]
+            task_id=uuid4(),
+            board_id=uuid4(),
+            agent_id=uuid4(),
+            source_event_id=uuid4(),
+            message="Filed PR, tests passing.",
+            packet_type="frontend_ui",
+        )
+        assert events == []
+    finally:
+        sm.classify = original  # type: ignore[assignment]
+
+
+@pytest.mark.asyncio
+async def test_oversized_message_skips_classifier() -> None:
+    """Pathological message bodies don't stall the regex engine."""
+
+    import app.services.shadow_metrics as sm
+
+    session = _FakeSession()
+    huge = "x" * (sm.MESSAGE_CLASSIFY_MAX_CHARS + 1)
     events = await build_shadow_events_for_comment(
-        _ExplodingSession(),  # type: ignore[arg-type]
+        session,  # type: ignore[arg-type]
         task_id=uuid4(),
         board_id=uuid4(),
         agent_id=uuid4(),
         source_event_id=uuid4(),
-        message="Acknowledged. Holding there.",
+        message=huge,
         packet_type="frontend_ui",
     )
     assert events == []

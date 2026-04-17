@@ -54,7 +54,10 @@ class ShadowMetricEvent(QueryModel, table=True):
     # Optional pointer to the activity event that triggered this metric.
     # Not a FK — activity rows may be pruned independently.
     source_event_id: UUID | None = Field(default=None)
-    metadata_json: dict[str, Any] | None = Field(
+    # Classifier / instrumentation context (e.g., packet_type, jaccard,
+    # rework_count). Shape varies by event_type; downstream readers
+    # key off the event_type value to know which fields to expect.
+    classifier_metadata: dict[str, Any] | None = Field(
         default=None,
         sa_column=Column(JSON, nullable=True),
     )

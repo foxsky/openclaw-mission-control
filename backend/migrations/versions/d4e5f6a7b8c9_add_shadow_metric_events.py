@@ -30,16 +30,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add a composite index on activity_events to make the classifier's
-    # "prior comment by same author on same task within window" lookup
-    # cheap. Without this the query was the dominant per-comment cost
-    # flagged in efficiency review.
-    op.create_index(
-        op.f("ix_activity_events_task_agent_type_created"),
-        "activity_events",
-        ["task_id", "agent_id", "event_type", "created_at"],
-        unique=False,
-    )
+    # No new activity_events index needed: 99cd6df95f85 already ships a
+    # partial index ix_activity_events_task_comment_task_id_created_at
+    # on (task_id, created_at) WHERE event_type='task.comment' that
+    # serves the classifier's prior-lookup. PG filters the per-task
+    # result on agent_id after the range scan — selective enough at
+    # Dev-Squad scale.
     op.create_table(
         "shadow_metric_events",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
@@ -63,7 +59,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("source_event_id", sa.Uuid(), nullable=True),
-        sa.Column("metadata_json", sa.JSON(), nullable=True),
+        sa.Column("classifier_metadata", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
     )
     op.create_index(
@@ -103,7 +99,3 @@ def downgrade() -> None:
         table_name="shadow_metric_events",
     )
     op.drop_table("shadow_metric_events")
-    op.drop_index(
-        op.f("ix_activity_events_task_agent_type_created"),
-        table_name="activity_events",
-    )

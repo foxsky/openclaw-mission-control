@@ -30,6 +30,13 @@ from app.services.comment_classifier.patterns import (
     NEAR_DUPLICATE_WINDOW_SECONDS,
 )
 
+# Skip the classifier on messages longer than this. Regex passes are O(n)
+# and jaccard tokenizes the whole body; at ~32KB the per-comment cost
+# stays under a millisecond. Beyond that we risk stalling the request
+# loop on an adversarial payload. The activity_events row itself still
+# stores the full text — the cap is classifier-only.
+MESSAGE_CLASSIFY_MAX_CHARS = 32 * 1024
+
 logger = logging.getLogger(__name__)
 
 # Canonical event type constants. Keep these in sync with downstream
@@ -56,10 +63,11 @@ async def _fetch_prior_comment(
 ) -> ActivityEvent | None:
     """Most recent comment by ``agent_id`` on ``task_id`` at or after ``since``.
 
-    Uses the composite index on
-    ``(task_id, agent_id, event_type, created_at)`` added in migration
-    ``d4e5f6a7b8c9``; the filter order matches the index's leading
-    columns so the planner does a single range scan + pick-top.
+    PG uses the partial index
+    ``ix_activity_events_task_comment_task_id_created_at`` on
+    ``(task_id, created_at) WHERE event_type='task.comment'`` from
+    ``99cd6df95f85`` to range-scan on task_id, then filters agent_id in
+    the heap. Selective enough at per-task comment volumes.
     """
 
     statement = (
@@ -93,27 +101,42 @@ async def build_shadow_events_for_comment(
 
     Must be called BEFORE the new comment's ``ActivityEvent`` is added
     to the session so the prior-comment query does not see it.
-
-    Any exception inside this function is logged and the caller receives
-    an empty list — classifier failures must not break comment writes.
     """
 
-    try:
-        reference = now if now is not None else utcnow()
-        prior_message: str | None = None
-        prior_created_at: datetime | None = None
-        if agent_id is not None:
-            window_start = reference - timedelta(seconds=NEAR_DUPLICATE_WINDOW_SECONDS)
-            prior = await _fetch_prior_comment(
-                session,
-                task_id=task_id,
-                agent_id=agent_id,
-                since=window_start,
-            )
-            if prior is not None:
-                prior_message = prior.message
-                prior_created_at = prior.created_at
+    # User-authored comments (no agent_id) are exempt from ack-theater
+    # classification. The observability surface measures agent noise;
+    # treating operator acks as data points pollutes the histogram.
+    if agent_id is None:
+        return []
 
+    # Defensive cap on pathological payloads — see MESSAGE_CLASSIFY_MAX_CHARS.
+    if len(message) > MESSAGE_CLASSIFY_MAX_CHARS:
+        logger.info(
+            "shadow_metrics.message_too_long_skipped task_id=%s agent_id=%s length=%d",
+            task_id,
+            agent_id,
+            len(message),
+        )
+        return []
+
+    reference = now if now is not None else utcnow()
+    window_start = reference - timedelta(seconds=NEAR_DUPLICATE_WINDOW_SECONDS)
+    # DB failures must fail the whole request, not silently lose signal:
+    # the caller's commit would fail on the same broken session anyway,
+    # so silent fallback here only hides the incident signal.
+    prior = await _fetch_prior_comment(
+        session,
+        task_id=task_id,
+        agent_id=agent_id,
+        since=window_start,
+    )
+    prior_message = prior.message if prior is not None else None
+    prior_created_at = prior.created_at if prior is not None else None
+
+    # classify() is pure regex/jaccard — unexpected raises indicate a real
+    # code bug, not an operational failure. Keep a narrow guard so a bad
+    # input doesn't break comment writes, but still surface the exception.
+    try:
         flags = classify(
             message,
             packet_type=packet_type,
@@ -121,9 +144,9 @@ async def build_shadow_events_for_comment(
             prior_comment_created_at=prior_created_at,
             now=reference,
         )
-    except Exception:  # pragma: no cover - defensive
+    except Exception:
         logger.exception(
-            "shadow_metrics.classify_failed task_id=%s agent_id=%s",
+            "shadow_metrics.classify_raised task_id=%s agent_id=%s",
             task_id,
             agent_id,
         )
@@ -139,7 +162,7 @@ async def build_shadow_events_for_comment(
             agent_id=agent_id,
             board_id=board_id,
             source_event_id=source_event_id,
-            metadata_json={
+            classifier_metadata={
                 "packet_type": packet_type,
                 "message_length": len(message),
             },
