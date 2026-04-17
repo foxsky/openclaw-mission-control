@@ -71,7 +71,6 @@ class BoardBase(SQLModel):
     show_cancelled_column: bool = False
     max_agents: int = Field(default=1, ge=0)
     rollout_flags: dict[str, bool] = Field(default_factory=dict)
-    rollout_flags_unknown: dict[str, bool] = Field(default_factory=dict)
 
 
 class BoardCreate(BoardBase):
@@ -141,5 +140,6 @@ class BoardRead(BoardBase):
 
     id: UUID
     organization_id: UUID
+    rollout_flags_unknown: dict[str, bool] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime

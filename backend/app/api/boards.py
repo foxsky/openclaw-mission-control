@@ -495,8 +495,6 @@ async def create_board(
     """Create a board in the active organization."""
     data = payload.model_dump()
     data["organization_id"] = ctx.organization.id
-    # Partition rollout flags the same way PATCH does, so unknown keys
-    # land in the capture bucket rather than the canonical field.
     known, unknown = partition_rollout_flags(data.get("rollout_flags"))
     data["rollout_flags"] = known
     data["rollout_flags_unknown"] = unknown
