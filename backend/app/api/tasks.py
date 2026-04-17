@@ -69,6 +69,7 @@ from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConf
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 from app.services.openclaw.provisioning_db import AgentLifecycleService
 from app.services.organizations import require_board_access
+from app.services.shadow_metrics import build_shadow_events_for_comment
 from app.services.tags import (
     TagState,
     load_tag_state,
@@ -2999,7 +3000,22 @@ async def create_task_comment(
         board_id=task.board_id,
         agent_id=_comment_actor_id(actor),
     )
+    # Build shadow-metric events BEFORE adding the comment to the session
+    # so the prior-comment lookup doesn't see the uncommitted row. These
+    # commit atomically with the comment; classifier failures degrade to
+    # an empty list (see services/shadow_metrics.py).
+    shadow_events = await build_shadow_events_for_comment(
+        session,
+        task_id=task.id,
+        board_id=task.board_id,
+        agent_id=_comment_actor_id(actor),
+        source_event_id=event.id,
+        message=payload.message,
+        packet_type=task.review_packet_type,
+    )
     session.add(event)
+    for shadow in shadow_events:
+        session.add(shadow)
     await session.commit()
     await session.refresh(event)
     targets, mention_names = await _comment_targets(
