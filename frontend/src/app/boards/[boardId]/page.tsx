@@ -135,6 +135,30 @@ import {
 type Board = BoardRead;
 
 type TaskStatus = Exclude<TaskCardRead["status"], undefined>;
+type ReviewPacketType =
+  | "frontend_ui"
+  | "backend_api"
+  | "review_only"
+  | "content_copy"
+  | "infra_ops"
+  | "mixed"
+  | "other";
+type ValidationTargetKind =
+  | "live_url"
+  | "deploy_env"
+  | "workspace"
+  | "api_base"
+  | "other";
+type ValidationTargetScope = "review" | "runtime" | "deploy" | "all";
+
+type DeliveryContractFields = {
+  review_packet_type?: ReviewPacketType | null;
+  validation_target?: string | null;
+  validation_target_kind?: ValidationTargetKind | null;
+  validation_target_scope?: ValidationTargetScope | null;
+  operator_decision_required?: boolean;
+  operator_decision_summary?: string | null;
+};
 
 type TaskCustomFieldPayload = {
   custom_field_values?: TaskCustomFieldValues;
@@ -143,7 +167,8 @@ type TaskCustomFieldPayload = {
 type Task = Omit<
   TaskCardRead,
   "status" | "priority" | "approvals_count" | "approvals_pending_count"
-> & {
+> &
+  DeliveryContractFields & {
   status: TaskStatus;
   priority: string;
   approvals_count: number;
@@ -209,11 +234,13 @@ const isLiveFeedEventType = (value: string): value is LiveFeedEventType =>
 type BoardTaskCreatePayload = Parameters<
   typeof createTaskApiV1BoardsBoardIdTasksPost
 >[1] &
-  TaskCustomFieldPayload;
+  TaskCustomFieldPayload &
+  DeliveryContractFields;
 type BoardTaskUpdatePayload = Parameters<
   typeof updateTaskApiV1BoardsBoardIdTasksTaskIdPatch
 >[2] &
-  TaskCustomFieldPayload;
+  TaskCustomFieldPayload &
+  DeliveryContractFields;
 
 const toLiveFeedFromActivity = (
   event: ActivityEventRead,
@@ -483,12 +510,13 @@ const liveFeedEventPillClass = (eventType: LiveFeedEventType): string => {
   return "border-slate-200 bg-slate-100 text-slate-700";
 };
 
-const normalizeTask = (task: TaskCardRead): Task => ({
+const normalizeTask = (task: TaskCardRead & DeliveryContractFields): Task => ({
   ...task,
   status: task.status ?? "inbox",
   priority: task.priority ?? "medium",
   approvals_count: task.approvals_count ?? 0,
   approvals_pending_count: task.approvals_pending_count ?? 0,
+  operator_decision_required: task.operator_decision_required ?? false,
 });
 
 const normalizeAgent = (agent: AgentRead): Agent => ({
@@ -519,6 +547,91 @@ const statusOptions = [
   { value: "rework", label: "Rework" },
   { value: "done", label: "Done" },
 ];
+const reviewPacketTypeOptions: Array<{
+  value: ReviewPacketType;
+  label: string;
+  help: string;
+}> = [
+  {
+    value: "frontend_ui",
+    label: "Frontend UI",
+    help: "Rendered surface or browser-visible changes.",
+  },
+  {
+    value: "backend_api",
+    label: "Backend API",
+    help: "API/runtime contract work.",
+  },
+  {
+    value: "review_only",
+    label: "Review only",
+    help: "Findings or validation with no delivery target.",
+  },
+  {
+    value: "content_copy",
+    label: "Content / copy",
+    help: "Copy, messaging, or text surface changes.",
+  },
+  {
+    value: "infra_ops",
+    label: "Infra / ops",
+    help: "Deploy, environment, or operational validation.",
+  },
+  {
+    value: "mixed",
+    label: "Mixed",
+    help: "Cross-surface work that still needs a target.",
+  },
+  {
+    value: "other",
+    label: "Other",
+    help: "Use only when the task does not fit a standard packet.",
+  },
+];
+const validationTargetKindOptions: Array<{
+  value: ValidationTargetKind;
+  label: string;
+}> = [
+  { value: "live_url", label: "Live URL" },
+  { value: "deploy_env", label: "Deploy env" },
+  { value: "workspace", label: "Workspace" },
+  { value: "api_base", label: "API base" },
+  { value: "other", label: "Other" },
+];
+const validationTargetScopeOptions: Array<{
+  value: ValidationTargetScope;
+  label: string;
+}> = [
+  { value: "review", label: "Review" },
+  { value: "runtime", label: "Runtime" },
+  { value: "deploy", label: "Deploy" },
+  { value: "all", label: "All" },
+];
+
+const reviewPacketTypeRequiresValidationTarget = (
+  value: ReviewPacketType | "" | null | undefined,
+) => value === "frontend_ui" || value === "backend_api" || value === "infra_ops" || value === "mixed";
+
+const normalizeOptionalText = (value: string | null | undefined): string | null => {
+  const trimmed = (value ?? "").trim();
+  return trimmed ? trimmed : null;
+};
+
+const humanizeReviewPacketType = (value: ReviewPacketType | null | undefined) =>
+  reviewPacketTypeOptions.find((option) => option.value === value)?.label ??
+  "Not set";
+
+const humanizeValidationTargetKind = (
+  value: ValidationTargetKind | null | undefined,
+) =>
+  validationTargetKindOptions.find((option) => option.value === value)?.label ??
+  "Not set";
+
+const humanizeValidationTargetScope = (
+  value: ValidationTargetScope | null | undefined,
+) =>
+  validationTargetScopeOptions.find((option) => option.value === value)?.label ??
+  "Not set";
 
 const SSE_RECONNECT_BACKOFF = {
   baseMs: 1_000,
@@ -1140,6 +1253,20 @@ export default function BoardDetailPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("medium");
+  const [createReviewPacketType, setCreateReviewPacketType] = useState<
+    ReviewPacketType | ""
+  >("");
+  const [createValidationTarget, setCreateValidationTarget] = useState("");
+  const [createValidationTargetKind, setCreateValidationTargetKind] = useState<
+    ValidationTargetKind | ""
+  >("");
+  const [createValidationTargetScope, setCreateValidationTargetScope] = useState<
+    ValidationTargetScope | ""
+  >("");
+  const [createOperatorDecisionRequired, setCreateOperatorDecisionRequired] =
+    useState(false);
+  const [createOperatorDecisionSummary, setCreateOperatorDecisionSummary] =
+    useState("");
   const [createDueDate, setCreateDueDate] = useState("");
   const [createTagIds, setCreateTagIds] = useState<string[]>([]);
   const [createCustomFieldValues, setCreateCustomFieldValues] =
@@ -1151,6 +1278,20 @@ export default function BoardDetailPage() {
   const [editDescription, setEditDescription] = useState("");
   const [editStatus, setEditStatus] = useState<TaskStatus>("inbox");
   const [editPriority, setEditPriority] = useState("medium");
+  const [editReviewPacketType, setEditReviewPacketType] = useState<
+    ReviewPacketType | ""
+  >("");
+  const [editValidationTarget, setEditValidationTarget] = useState("");
+  const [editValidationTargetKind, setEditValidationTargetKind] = useState<
+    ValidationTargetKind | ""
+  >("");
+  const [editValidationTargetScope, setEditValidationTargetScope] = useState<
+    ValidationTargetScope | ""
+  >("");
+  const [editOperatorDecisionRequired, setEditOperatorDecisionRequired] =
+    useState(false);
+  const [editOperatorDecisionSummary, setEditOperatorDecisionSummary] =
+    useState("");
   const [editDueDate, setEditDueDate] = useState("");
   const [editAssigneeId, setEditAssigneeId] = useState("");
   const [editTagIds, setEditTagIds] = useState<string[]>([]);
@@ -1655,6 +1796,12 @@ export default function BoardDetailPage() {
       setEditDescription("");
       setEditStatus("inbox");
       setEditPriority("medium");
+      setEditReviewPacketType("");
+      setEditValidationTarget("");
+      setEditValidationTargetKind("");
+      setEditValidationTargetScope("");
+      setEditOperatorDecisionRequired(false);
+      setEditOperatorDecisionSummary("");
       setEditDueDate("");
       setEditAssigneeId("");
       setEditTagIds([]);
@@ -1669,6 +1816,14 @@ export default function BoardDetailPage() {
     setEditDescription(selectedTask.description ?? "");
     setEditStatus(selectedTask.status);
     setEditPriority(selectedTask.priority);
+    setEditReviewPacketType(selectedTask.review_packet_type ?? "");
+    setEditValidationTarget(selectedTask.validation_target ?? "");
+    setEditValidationTargetKind(selectedTask.validation_target_kind ?? "");
+    setEditValidationTargetScope(selectedTask.validation_target_scope ?? "");
+    setEditOperatorDecisionRequired(
+      selectedTask.operator_decision_required ?? false,
+    );
+    setEditOperatorDecisionSummary(selectedTask.operator_decision_summary ?? "");
     setEditDueDate(toLocalDateInput(selectedTask.due_at));
     setEditAssigneeId(selectedTask.assigned_agent_id ?? "");
     setEditTagIds(selectedTask.tag_ids ?? []);
@@ -1974,6 +2129,12 @@ export default function BoardDetailPage() {
     setTitle("");
     setDescription("");
     setPriority("medium");
+    setCreateReviewPacketType("");
+    setCreateValidationTarget("");
+    setCreateValidationTargetKind("");
+    setCreateValidationTargetScope("");
+    setCreateOperatorDecisionRequired(false);
+    setCreateOperatorDecisionSummary("");
     setCreateDueDate("");
     setCreateTagIds([]);
     setCreateCustomFieldValues(defaultCreateCustomFieldValues);
@@ -2001,14 +2162,49 @@ export default function BoardDetailPage() {
       );
       return;
     }
+    if (
+      reviewPacketTypeRequiresValidationTarget(createReviewPacketType) &&
+      (!normalizeOptionalText(createValidationTarget) ||
+        !createValidationTargetKind ||
+        !createValidationTargetScope)
+    ) {
+      setCreateError(
+        "Validation target, kind, and scope are required for this review packet.",
+      );
+      return;
+    }
     setIsCreating(true);
     setCreateError(null);
     try {
+      const reviewPacketType = createReviewPacketType || null;
+      const validationTarget = reviewPacketTypeRequiresValidationTarget(
+        createReviewPacketType,
+      )
+        ? normalizeOptionalText(createValidationTarget)
+        : null;
+      const validationTargetKind = reviewPacketTypeRequiresValidationTarget(
+        createReviewPacketType,
+      )
+        ? createValidationTargetKind || null
+        : null;
+      const validationTargetScope = reviewPacketTypeRequiresValidationTarget(
+        createReviewPacketType,
+      )
+        ? createValidationTargetScope || null
+        : null;
       const payload: BoardTaskCreatePayload = {
         title: trimmed,
         description: description.trim() || null,
         status: "inbox",
         priority,
+        review_packet_type: reviewPacketType,
+        validation_target: validationTarget,
+        validation_target_kind: validationTargetKind,
+        validation_target_scope: validationTargetScope,
+        operator_decision_required: createOperatorDecisionRequired,
+        operator_decision_summary: createOperatorDecisionRequired
+          ? normalizeOptionalText(createOperatorDecisionSummary)
+          : null,
         due_at: localDateInputToUtcIso(createDueDate),
         tag_ids: createTagIds,
         custom_field_values: createCustomFieldPayload,
@@ -2017,6 +2213,17 @@ export default function BoardDetailPage() {
         boardId,
         payload,
       );
+      if (result.status === 409) {
+        setCreateError(formatTaskConflictDetail(result.data.detail));
+        return;
+      }
+      if (result.status === 422) {
+        setCreateError(
+          result.data.detail?.[0]?.msg ??
+            "Validation error while creating task.",
+        );
+        return;
+      }
       if (result.status !== 200) throw new Error("Unable to create task.");
 
       const created = normalizeTask({
@@ -2156,6 +2363,30 @@ export default function BoardDetailPage() {
     return map;
   }, [tasks]);
 
+  const formatTaskConflictDetail = useCallback(
+    (detail: {
+      message?: string;
+      code?: string | null;
+      blocked_by_task_ids?: string[];
+      missing_fields?: string[];
+    }) => {
+      const message = detail.message ?? "Task update blocked.";
+      if (
+        detail.code === "task_delivery_contract_incomplete" &&
+        Array.isArray(detail.missing_fields) &&
+        detail.missing_fields.length > 0
+      ) {
+        return `${message} Missing: ${detail.missing_fields.join(", ")}.`;
+      }
+      const blockedIds = detail.blocked_by_task_ids ?? [];
+      const blockedTitles = blockedIds
+        .map((id) => taskTitleById.get(id) ?? id)
+        .join(", ");
+      return blockedTitles ? `${message} Blocked by: ${blockedTitles}` : message;
+    },
+    [taskTitleById],
+  );
+
   const orderedLiveFeed = useMemo(() => {
     return [...liveFeed].sort((a, b) => {
       const aTime = apiDatetimeToMs(a.created_at) ?? 0;
@@ -2248,9 +2479,38 @@ export default function BoardDetailPage() {
     if (!selectedTask) return false;
     const normalizedTitle = editTitle.trim();
     const normalizedDescription = editDescription.trim();
+    const normalizedEditReviewPacketType = editReviewPacketType || null;
+    const normalizedEditValidationTarget = reviewPacketTypeRequiresValidationTarget(
+      editReviewPacketType,
+    )
+      ? normalizeOptionalText(editValidationTarget)
+      : null;
+    const normalizedEditValidationTargetKind = reviewPacketTypeRequiresValidationTarget(
+      editReviewPacketType,
+    )
+      ? editValidationTargetKind || null
+      : null;
+    const normalizedEditValidationTargetScope = reviewPacketTypeRequiresValidationTarget(
+      editReviewPacketType,
+    )
+      ? editValidationTargetScope || null
+      : null;
+    const normalizedEditOperatorDecisionSummary = editOperatorDecisionRequired
+      ? normalizeOptionalText(editOperatorDecisionSummary)
+      : null;
     const currentDescription = (selectedTask.description ?? "").trim();
     const currentDueDate = toLocalDateInput(selectedTask.due_at);
     const currentAssignee = selectedTask.assigned_agent_id ?? "";
+    const currentReviewPacketType = selectedTask.review_packet_type ?? null;
+    const currentValidationTarget = selectedTask.validation_target ?? null;
+    const currentValidationTargetKind =
+      selectedTask.validation_target_kind ?? null;
+    const currentValidationTargetScope =
+      selectedTask.validation_target_scope ?? null;
+    const currentOperatorDecisionRequired =
+      selectedTask.operator_decision_required ?? false;
+    const currentOperatorDecisionSummary =
+      selectedTask.operator_decision_summary ?? null;
     const currentTags = [...(selectedTask.tag_ids ?? [])].sort().join("|");
     const nextTags = [...editTagIds].sort().join("|");
     const currentDeps = [...(selectedTask.depends_on_task_ids ?? [])]
@@ -2271,6 +2531,12 @@ export default function BoardDetailPage() {
       normalizedDescription !== currentDescription ||
       editStatus !== selectedTask.status ||
       editPriority !== selectedTask.priority ||
+      normalizedEditReviewPacketType !== currentReviewPacketType ||
+      normalizedEditValidationTarget !== currentValidationTarget ||
+      normalizedEditValidationTargetKind !== currentValidationTargetKind ||
+      normalizedEditValidationTargetScope !== currentValidationTargetScope ||
+      editOperatorDecisionRequired !== currentOperatorDecisionRequired ||
+      normalizedEditOperatorDecisionSummary !== currentOperatorDecisionSummary ||
       editDueDate !== currentDueDate ||
       editAssigneeId !== currentAssignee ||
       currentTags !== nextTags ||
@@ -2283,9 +2549,15 @@ export default function BoardDetailPage() {
     editTagIds,
     editDependsOnTaskIds,
     editDescription,
+    editOperatorDecisionRequired,
+    editOperatorDecisionSummary,
     editPriority,
+    editReviewPacketType,
     editStatus,
     editTitle,
+    editValidationTarget,
+    editValidationTargetKind,
+    editValidationTargetScope,
     editCustomFieldValues,
     boardCustomFieldDefinitions,
     selectedTask,
@@ -2635,6 +2907,17 @@ export default function BoardDetailPage() {
       setSaveTaskError("Title is required.");
       return;
     }
+    if (
+      reviewPacketTypeRequiresValidationTarget(editReviewPacketType) &&
+      (!normalizeOptionalText(editValidationTarget) ||
+        !editValidationTargetKind ||
+        !editValidationTargetScope)
+    ) {
+      setSaveTaskError(
+        "Validation target, kind, and scope are required for this review packet.",
+      );
+      return;
+    }
     const currentTaskCustomFieldValues = boardCustomFieldValues(
       boardCustomFieldDefinitions,
       selectedTask.custom_field_values,
@@ -2676,6 +2959,41 @@ export default function BoardDetailPage() {
       const tagsChanged = currentTags !== nextTags;
       const currentDueDate = toLocalDateInput(selectedTask.due_at);
       const dueDateChanged = editDueDate !== currentDueDate;
+      const nextReviewPacketType = editReviewPacketType || null;
+      const currentReviewPacketType = selectedTask.review_packet_type ?? null;
+      const nextValidationTarget = reviewPacketTypeRequiresValidationTarget(
+        editReviewPacketType,
+      )
+        ? normalizeOptionalText(editValidationTarget)
+        : null;
+      const currentValidationTarget = selectedTask.validation_target ?? null;
+      const nextValidationTargetKind = reviewPacketTypeRequiresValidationTarget(
+        editReviewPacketType,
+      )
+        ? editValidationTargetKind || null
+        : null;
+      const currentValidationTargetKind =
+        selectedTask.validation_target_kind ?? null;
+      const nextValidationTargetScope = reviewPacketTypeRequiresValidationTarget(
+        editReviewPacketType,
+      )
+        ? editValidationTargetScope || null
+        : null;
+      const currentValidationTargetScope =
+        selectedTask.validation_target_scope ?? null;
+      const deliveryContractChanged =
+        nextReviewPacketType !== currentReviewPacketType ||
+        nextValidationTarget !== currentValidationTarget ||
+        nextValidationTargetKind !== currentValidationTargetKind ||
+        nextValidationTargetScope !== currentValidationTargetScope;
+      const nextOperatorDecisionSummary = editOperatorDecisionRequired
+        ? normalizeOptionalText(editOperatorDecisionSummary)
+        : null;
+      const operatorDecisionChanged =
+        editOperatorDecisionRequired !==
+          (selectedTask.operator_decision_required ?? false) ||
+        nextOperatorDecisionSummary !==
+          (selectedTask.operator_decision_summary ?? null);
       const customFieldValuesChanged =
         Object.keys(editCustomFieldPatch).length > 0;
 
@@ -2686,6 +3004,16 @@ export default function BoardDetailPage() {
         priority: editPriority,
         assigned_agent_id: editAssigneeId || null,
       };
+      if (deliveryContractChanged) {
+        updatePayload.review_packet_type = nextReviewPacketType;
+        updatePayload.validation_target = nextValidationTarget;
+        updatePayload.validation_target_kind = nextValidationTargetKind;
+        updatePayload.validation_target_scope = nextValidationTargetScope;
+      }
+      if (operatorDecisionChanged) {
+        updatePayload.operator_decision_required = editOperatorDecisionRequired;
+        updatePayload.operator_decision_summary = nextOperatorDecisionSummary;
+      }
 
       if (depsChanged && selectedTask.status !== "done") {
         updatePayload.depends_on_task_ids = editDependsOnTaskIds;
@@ -2709,15 +3037,7 @@ export default function BoardDetailPage() {
         updatePayload,
       );
       if (result.status === 409) {
-        const blockedIds = result.data.detail.blocked_by_task_ids ?? [];
-        const blockedTitles = blockedIds
-          .map((id) => taskTitleById.get(id) ?? id)
-          .join(", ");
-        setSaveTaskError(
-          blockedTitles
-            ? `${result.data.detail.message} Blocked by: ${blockedTitles}`
-            : result.data.detail.message,
-        );
+        setSaveTaskError(formatTaskConflictDetail(result.data.detail));
         return;
       }
       if (result.status === 422) {
@@ -2762,6 +3082,12 @@ export default function BoardDetailPage() {
     setEditDescription(selectedTask.description ?? "");
     setEditStatus(selectedTask.status);
     setEditPriority(selectedTask.priority);
+    setEditReviewPacketType(selectedTask.review_packet_type ?? "");
+    setEditValidationTarget(selectedTask.validation_target ?? "");
+    setEditValidationTargetKind(selectedTask.validation_target_kind ?? "");
+    setEditValidationTargetScope(selectedTask.validation_target_scope ?? "");
+    setEditOperatorDecisionRequired(selectedTask.operator_decision_required ?? false);
+    setEditOperatorDecisionSummary(selectedTask.operator_decision_summary ?? "");
     setEditDueDate(toLocalDateInput(selectedTask.due_at));
     setEditAssigneeId(selectedTask.assigned_agent_id ?? "");
     setEditTagIds(selectedTask.tag_ids ?? []);
@@ -3834,6 +4160,56 @@ export default function BoardDetailPage() {
             </div>
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Delivery contract
+              </p>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <dl className="space-y-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[160px_1fr] sm:gap-3">
+                    <dt className="text-xs font-semibold text-slate-600">
+                      Review packet
+                    </dt>
+                    <dd className="text-xs text-slate-800">
+                      {humanizeReviewPacketType(selectedTask?.review_packet_type)}
+                    </dd>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[160px_1fr] sm:gap-3">
+                    <dt className="text-xs font-semibold text-slate-600">
+                      Validation target
+                    </dt>
+                    <dd className="text-xs text-slate-800">
+                      {selectedTask?.validation_target ?? "Not set"}
+                    </dd>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[160px_1fr] sm:gap-3">
+                    <dt className="text-xs font-semibold text-slate-600">
+                      Target kind / scope
+                    </dt>
+                    <dd className="text-xs text-slate-800">
+                      {selectedTask?.validation_target_kind
+                        ? `${humanizeValidationTargetKind(
+                            selectedTask.validation_target_kind,
+                          )} · ${humanizeValidationTargetScope(
+                            selectedTask.validation_target_scope,
+                          )}`
+                        : "Not set"}
+                    </dd>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[160px_1fr] sm:gap-3">
+                    <dt className="text-xs font-semibold text-slate-600">
+                      Operator decision
+                    </dt>
+                    <dd className="text-xs text-slate-800">
+                      {selectedTask?.operator_decision_required
+                        ? selectedTask.operator_decision_summary ??
+                          "Required before active work."
+                        : "No operator decision gate."}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Tags
               </p>
               {selectedTask?.tags?.length ? (
@@ -4243,6 +4619,139 @@ export default function BoardDetailPage() {
                 disabled={!selectedTask || isSavingTask || !canWrite}
               />
             </div>
+            <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Delivery contract
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Keep the packet and target aligned with the lane reviewers
+                  will use.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Review packet
+                </label>
+                <Select
+                  value={editReviewPacketType || "none"}
+                  onValueChange={(value) => {
+                    const nextValue =
+                      value === "none" ? "" : (value as ReviewPacketType);
+                    setEditReviewPacketType(nextValue);
+                    if (!reviewPacketTypeRequiresValidationTarget(nextValue)) {
+                      setEditValidationTarget("");
+                      setEditValidationTargetKind("");
+                      setEditValidationTargetScope("");
+                    }
+                  }}
+                  disabled={!selectedTask || isSavingTask || !canWrite}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select review packet" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Not set</SelectItem>
+                    {reviewPacketTypeOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {reviewPacketTypeRequiresValidationTarget(editReviewPacketType) ? (
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="space-y-2 md:col-span-3">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      Validation target
+                    </label>
+                    <Input
+                      value={editValidationTarget}
+                      onChange={(event) =>
+                        setEditValidationTarget(event.target.value)
+                      }
+                      placeholder="http://192.168.2.60:3000"
+                      disabled={!selectedTask || isSavingTask || !canWrite}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      Target kind
+                    </label>
+                    <Select
+                      value={editValidationTargetKind}
+                      onValueChange={(value) =>
+                        setEditValidationTargetKind(
+                          value as ValidationTargetKind,
+                        )
+                      }
+                      disabled={!selectedTask || isSavingTask || !canWrite}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Kind" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {validationTargetKindOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      Scope
+                    </label>
+                    <Select
+                      value={editValidationTargetScope}
+                      onValueChange={(value) =>
+                        setEditValidationTargetScope(
+                          value as ValidationTargetScope,
+                        )
+                      }
+                      disabled={!selectedTask || isSavingTask || !canWrite}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Scope" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {validationTargetScopeOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  <input
+                    type="checkbox"
+                    checked={editOperatorDecisionRequired}
+                    onChange={(event) =>
+                      setEditOperatorDecisionRequired(event.target.checked)
+                    }
+                    disabled={!selectedTask || isSavingTask || !canWrite}
+                  />
+                  Operator decision required
+                </label>
+                {editOperatorDecisionRequired ? (
+                  <Textarea
+                    value={editOperatorDecisionSummary}
+                    onChange={(event) =>
+                      setEditOperatorDecisionSummary(event.target.value)
+                    }
+                    placeholder="What operator commitment is missing?"
+                    className="min-h-[84px]"
+                    disabled={!selectedTask || isSavingTask || !canWrite}
+                  />
+                ) : null}
+              </div>
+            </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -4597,6 +5106,146 @@ export default function BoardDetailPage() {
                 isLoading={customFieldDefinitionsQuery.isLoading}
                 disabled={!canWrite || isCreating}
               />
+            </div>
+            <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div>
+                <p className="text-sm font-medium text-strong">
+                  Delivery contract
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Set the review packet and, when needed, the authoritative
+                  validation target before the task leaves inbox.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-strong">
+                  Review packet
+                </label>
+                <Select
+                  value={createReviewPacketType || "none"}
+                  onValueChange={(value) => {
+                    const nextValue =
+                      value === "none" ? "" : (value as ReviewPacketType);
+                    setCreateReviewPacketType(nextValue);
+                    if (!reviewPacketTypeRequiresValidationTarget(nextValue)) {
+                      setCreateValidationTarget("");
+                      setCreateValidationTargetKind("");
+                      setCreateValidationTargetScope("");
+                    }
+                  }}
+                  disabled={!canWrite || isCreating}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select review packet" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Not set</SelectItem>
+                    {reviewPacketTypeOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-slate-500">
+                  {reviewPacketTypeOptions.find(
+                    (option) => option.value === createReviewPacketType,
+                  )?.help ?? "Pick the evidence packet reviewers should expect."}
+                </p>
+              </div>
+              {reviewPacketTypeRequiresValidationTarget(
+                createReviewPacketType,
+              ) ? (
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="space-y-2 md:col-span-3">
+                    <label className="text-sm font-medium text-strong">
+                      Validation target
+                    </label>
+                    <Input
+                      value={createValidationTarget}
+                      onChange={(event) =>
+                        setCreateValidationTarget(event.target.value)
+                      }
+                      placeholder="http://192.168.2.60:3000"
+                      disabled={!canWrite || isCreating}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-strong">
+                      Target kind
+                    </label>
+                    <Select
+                      value={createValidationTargetKind}
+                      onValueChange={(value) =>
+                        setCreateValidationTargetKind(
+                          value as ValidationTargetKind,
+                        )
+                      }
+                      disabled={!canWrite || isCreating}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Kind" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {validationTargetKindOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-strong">
+                      Scope
+                    </label>
+                    <Select
+                      value={createValidationTargetScope}
+                      onValueChange={(value) =>
+                        setCreateValidationTargetScope(
+                          value as ValidationTargetScope,
+                        )
+                      }
+                      disabled={!canWrite || isCreating}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Scope" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {validationTargetScopeOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm font-medium text-strong">
+                  <input
+                    type="checkbox"
+                    checked={createOperatorDecisionRequired}
+                    onChange={(event) =>
+                      setCreateOperatorDecisionRequired(event.target.checked)
+                    }
+                    disabled={!canWrite || isCreating}
+                  />
+                  Operator decision required
+                </label>
+                {createOperatorDecisionRequired ? (
+                  <Textarea
+                    value={createOperatorDecisionSummary}
+                    onChange={(event) =>
+                      setCreateOperatorDecisionSummary(event.target.value)
+                    }
+                    placeholder="What operator commitment is missing?"
+                    className="min-h-[84px]"
+                    disabled={!canWrite || isCreating}
+                  />
+                ) : null}
+              </div>
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-strong">

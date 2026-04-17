@@ -26,9 +26,47 @@ ReviewPacketType = Literal[
 ValidationTargetKind = Literal["live_url", "deploy_env", "workspace", "api_base", "other"]
 ValidationTargetScope = Literal["review", "runtime", "deploy", "all"]
 STATUS_REQUIRED_ERROR = "status is required"
+DELIVERY_CONTRACT_REQUIRED_STATUSES = frozenset({"in_progress", "review", "done"})
+REVIEW_PACKET_TYPES_REQUIRING_VALIDATION_TARGET = frozenset(
+    {"frontend_ui", "backend_api", "infra_ops", "mixed"}
+)
 # Keep these symbols as runtime globals so Pydantic can resolve
 # deferred annotations reliably.
 RUNTIME_ANNOTATION_TYPES = (datetime, UUID, NonEmptyStr, TagRef)
+
+
+def status_requires_delivery_contract(status: TaskStatus | str | None) -> bool:
+    return status in DELIVERY_CONTRACT_REQUIRED_STATUSES
+
+
+def review_packet_type_requires_validation_target(
+    review_packet_type: ReviewPacketType | str | None,
+) -> bool:
+    return review_packet_type in REVIEW_PACKET_TYPES_REQUIRING_VALIDATION_TARGET
+
+
+def delivery_contract_missing_fields(
+    *,
+    status: TaskStatus | str | None,
+    review_packet_type: ReviewPacketType | str | None,
+    validation_target: str | None,
+    validation_target_kind: ValidationTargetKind | str | None,
+    validation_target_scope: ValidationTargetScope | str | None,
+) -> list[str]:
+    if not status_requires_delivery_contract(status):
+        return []
+    missing_fields: list[str] = []
+    if review_packet_type is None:
+        missing_fields.append("review_packet_type")
+        return missing_fields
+    if review_packet_type_requires_validation_target(review_packet_type):
+        if validation_target is None:
+            missing_fields.append("validation_target")
+        if validation_target_kind is None:
+            missing_fields.append("validation_target_kind")
+        if validation_target_scope is None:
+            missing_fields.append("validation_target_scope")
+    return missing_fields
 
 
 class TaskBase(SQLModel):

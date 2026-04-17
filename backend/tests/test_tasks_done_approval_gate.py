@@ -578,6 +578,45 @@ async def test_admin_can_reopen_cancelled_task_to_inbox() -> None:
 
 
 @pytest.mark.asyncio
+async def test_admin_cannot_mark_operator_decision_task_in_progress() -> None:
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            _board, task, _agent = await _seed_board_task_and_agent(
+                session,
+                task_status="inbox",
+                require_approval_for_done=False,
+            )
+            task.assigned_agent_id = None
+            task.operator_decision_required = True
+            task.operator_decision_summary = "Awaiting operator security commitments."
+            session.add(task)
+            await session.commit()
+
+            with pytest.raises(HTTPException) as exc:
+                await tasks_api.update_task(
+                    payload=TaskUpdate(status="in_progress"),
+                    task=task,
+                    session=session,
+                    actor=ActorContext(actor_type="user"),
+                )
+
+            assert exc.value.status_code == 409
+            assert exc.value.detail == {
+                "message": (
+                    "Task is blocked pending operator decision. "
+                    "Awaiting operator security commitments."
+                ),
+                "code": "task_blocked_operator_decision_required",
+                "blocked_by_task_ids": [],
+                "operator_decision_required": True,
+                "operator_decision_summary": "Awaiting operator security commitments.",
+            }
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_cancelling_task_rejects_pending_move_to_done_approval() -> None:
     engine = await _make_engine()
     try:

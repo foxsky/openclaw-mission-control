@@ -50,7 +50,14 @@ from app.schemas.task_custom_fields import (
     TaskCustomFieldValues,
     validate_custom_field_value,
 )
-from app.schemas.tasks import TaskCommentCreate, TaskCommentRead, TaskCreate, TaskRead, TaskUpdate
+from app.schemas.tasks import (
+    TaskCommentCreate,
+    TaskCommentRead,
+    TaskCreate,
+    TaskRead,
+    TaskUpdate,
+    delivery_contract_missing_fields,
+)
 from app.services.activity_log import record_activity
 from app.services.approval_task_links import (
     load_task_ids_by_approval,
@@ -165,6 +172,22 @@ def _operator_decision_block_error(summary: str | None = None) -> HTTPException:
     )
 
 
+def _delivery_contract_incomplete_error(
+    *,
+    status_value: str,
+    missing_fields: Sequence[str],
+) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": f"Task is missing delivery contract metadata required for {status_value}.",
+            "code": "task_delivery_contract_incomplete",
+            "status": status_value,
+            "missing_fields": list(missing_fields),
+        },
+    )
+
+
 def _approval_required_for_done_error() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
@@ -214,6 +237,36 @@ def _task_is_blocked(task: Task, blocked_by_task_ids: Sequence[UUID]) -> bool:
     if _status_clears_blockers(task.status):
         return False
     return bool(blocked_by_task_ids) or _task_has_operator_decision_block(task)
+
+
+def _require_operator_decision_task_not_active(task: Task) -> None:
+    if not task.operator_decision_required:
+        return
+    if task.assigned_agent_id is None and task.status in {"inbox", "done", "cancelled"}:
+        return
+    raise _operator_decision_block_error(task.operator_decision_summary)
+
+
+def _require_delivery_contract_for_task_state(
+    *,
+    status_value: str,
+    review_packet_type: str | None,
+    validation_target: str | None,
+    validation_target_kind: str | None,
+    validation_target_scope: str | None,
+) -> None:
+    missing_fields = delivery_contract_missing_fields(
+        status=status_value,
+        review_packet_type=review_packet_type,
+        validation_target=validation_target,
+        validation_target_kind=validation_target_kind,
+        validation_target_scope=validation_target_scope,
+    )
+    if missing_fields:
+        raise _delivery_contract_incomplete_error(
+            status_value=status_value,
+            missing_fields=missing_fields,
+        )
 
 
 async def _reject_pending_move_to_done_approvals_for_task(
@@ -1601,6 +1654,13 @@ async def create_task(
         raise _blocked_task_error(blocked_by)
     if task.operator_decision_required and (task.assigned_agent_id is not None or task.status != "inbox"):
         raise _operator_decision_block_error(task.operator_decision_summary)
+    _require_delivery_contract_for_task_state(
+        status_value=task.status,
+        review_packet_type=task.review_packet_type,
+        validation_target=task.validation_target,
+        validation_target_kind=task.validation_target_kind,
+        validation_target_scope=task.validation_target_scope,
+    )
     session.add(task)
     # Ensure the task exists in the DB before inserting dependency rows.
     await session.flush()
@@ -2819,6 +2879,27 @@ async def _finalize_updated_task(
 ) -> TaskRead:
     for key, value in update.updates.items():
         setattr(update.task, key, value)
+    if {
+        "status",
+        "assigned_agent_id",
+        "operator_decision_required",
+        "operator_decision_summary",
+    }.intersection(update.updates):
+        _require_operator_decision_task_not_active(update.task)
+    if {
+        "status",
+        "review_packet_type",
+        "validation_target",
+        "validation_target_kind",
+        "validation_target_scope",
+    }.intersection(update.updates):
+        _require_delivery_contract_for_task_state(
+            status_value=update.task.status,
+            review_packet_type=update.task.review_packet_type,
+            validation_target=update.task.validation_target,
+            validation_target_kind=update.task.validation_target_kind,
+            validation_target_scope=update.task.validation_target_scope,
+        )
     await _require_no_pending_approval_for_status_change_when_enabled(
         session,
         board_id=update.board_id,

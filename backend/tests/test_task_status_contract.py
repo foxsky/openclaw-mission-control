@@ -4,7 +4,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import tasks as tasks_api
-from app.schemas.tasks import TaskCreate, TaskRead, TaskUpdate
+from app.schemas.tasks import (
+    TaskCreate,
+    TaskRead,
+    TaskUpdate,
+    delivery_contract_missing_fields,
+)
 
 
 def test_task_update_accepts_rework_status() -> None:
@@ -86,3 +91,40 @@ def test_task_read_exposes_control_plane_metadata() -> None:
     assert model.review_packet_type == "content_copy"
     assert model.validation_target == "pricing operator brief"
     assert model.operator_decision_required is True
+
+
+def test_delivery_contract_requires_review_packet_for_active_status() -> None:
+    assert delivery_contract_missing_fields(
+        status="in_progress",
+        review_packet_type=None,
+        validation_target=None,
+        validation_target_kind=None,
+        validation_target_scope=None,
+    ) == ["review_packet_type"]
+
+
+def test_delivery_contract_requires_validation_target_for_frontend_review() -> None:
+    assert delivery_contract_missing_fields(
+        status="review",
+        review_packet_type="frontend_ui",
+        validation_target=None,
+        validation_target_kind=None,
+        validation_target_scope=None,
+    ) == [
+        "validation_target",
+        "validation_target_kind",
+        "validation_target_scope",
+    ]
+
+
+def test_delivery_contract_allows_content_copy_without_validation_target() -> None:
+    assert (
+        delivery_contract_missing_fields(
+            status="review",
+            review_packet_type="content_copy",
+            validation_target=None,
+            validation_target_kind=None,
+            validation_target_scope=None,
+        )
+        == []
+    )

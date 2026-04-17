@@ -250,6 +250,51 @@ async def test_create_move_to_done_approval_rejects_non_review_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_move_to_done_approval_rejects_review_task_missing_delivery_contract() -> (
+    None
+):
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            board, task_ids = await _seed_board_with_tasks(session, task_count=1)
+            task_id = task_ids[0]
+            task = await session.get(Task, task_id)
+            assert task is not None
+            task.status = "review"
+            session.add(task)
+            await session.commit()
+
+            with pytest.raises(HTTPException) as exc:
+                await approvals_api.create_approval(
+                    payload=ApprovalCreate(
+                        action_type="move_to_done",
+                        task_id=task_id,
+                        payload={"reason": "Close the task."},
+                        confidence=95,
+                        status="approved",
+                    ),
+                    board=board,
+                    session=session,
+                )
+
+            assert exc.value.status_code == 409
+            assert exc.value.detail == {
+                "message": "move_to_done approvals require a complete delivery contract.",
+                "code": "task_delivery_contract_incomplete",
+                "task_ids": [str(task_id)],
+                "task_details": [
+                    {
+                        "task_id": str(task_id),
+                        "status": "review",
+                        "missing_fields": ["review_packet_type"],
+                    }
+                ],
+            }
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_update_move_to_done_approval_rejects_approval_when_task_left_review() -> None:
     engine = await _make_engine()
     try:
@@ -293,6 +338,75 @@ async def test_update_move_to_done_approval_rejects_approval_when_task_left_revi
             assert exc.value.detail == {
                 "message": "move_to_done approvals can only be created for tasks currently in review.",
                 "task_ids": [str(task_id)],
+            }
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_update_move_to_done_approval_rejects_approval_when_review_task_loses_target() -> (
+    None
+):
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            board, task_ids = await _seed_board_with_tasks(session, task_count=1)
+            task_id = task_ids[0]
+            task = await session.get(Task, task_id)
+            assert task is not None
+            task.status = "review"
+            task.review_packet_type = "frontend_ui"
+            task.validation_target = "http://192.168.2.60:3000"
+            task.validation_target_kind = "live_url"
+            task.validation_target_scope = "review"
+            session.add(task)
+            await session.commit()
+
+            actor = _test_actor(session)
+            created = await approvals_api.create_approval(
+                payload=ApprovalCreate(
+                    action_type="move_to_done",
+                    task_id=task_id,
+                    payload={"reason": "Close the task."},
+                    confidence=95,
+                    status="pending",
+                ),
+                board=board,
+                session=session,
+                actor=actor,
+            )
+
+            task.validation_target = None
+            task.validation_target_kind = None
+            task.validation_target_scope = None
+            session.add(task)
+            await session.commit()
+
+            with pytest.raises(HTTPException) as exc:
+                await approvals_api.update_approval(
+                    approval_id=created.id,  # type: ignore[arg-type]
+                    payload=ApprovalUpdate(status="approved"),
+                    board=board,
+                    session=session,
+                    actor=actor,
+                )
+
+            assert exc.value.status_code == 409
+            assert exc.value.detail == {
+                "message": "move_to_done approvals require a complete delivery contract.",
+                "code": "task_delivery_contract_incomplete",
+                "task_ids": [str(task_id)],
+                "task_details": [
+                    {
+                        "task_id": str(task_id),
+                        "status": "review",
+                        "missing_fields": [
+                            "validation_target",
+                            "validation_target_kind",
+                            "validation_target_scope",
+                        ],
+                    }
+                ],
             }
     finally:
         await engine.dispose()

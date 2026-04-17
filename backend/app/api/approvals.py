@@ -37,6 +37,7 @@ from app.schemas.approvals import (
 )
 from app.schemas.common import OkResponse
 from app.schemas.pagination import DefaultLimitOffsetPage
+from app.schemas.tasks import delivery_contract_missing_fields
 from app.services.activity_log import record_activity
 from app.services.approval_task_links import (
     load_task_ids_by_approval,
@@ -222,6 +223,66 @@ async def _ensure_move_to_done_targets_in_review(
             detail={
                 "message": "move_to_done approvals can only be created for tasks currently in review.",
                 "task_ids": invalid_task_ids,
+            },
+        )
+
+
+async def _ensure_move_to_done_targets_have_delivery_contract(
+    session: AsyncSession,
+    *,
+    board_id: UUID,
+    action_type: str,
+    task_ids: Sequence[UUID],
+) -> None:
+    if action_type != "move_to_done" or not task_ids:
+        return
+    rows = await session.exec(
+        select(
+            Task.id,
+            Task.status,
+            Task.review_packet_type,
+            Task.validation_target,
+            Task.validation_target_kind,
+            Task.validation_target_scope,
+        )
+        .where(col(Task.board_id) == board_id)
+        .where(col(Task.id).in_(list(task_ids)))
+    )
+    task_details: list[dict[str, object]] = []
+    invalid_task_ids: list[str] = []
+    for (
+        task_id,
+        status_value,
+        review_packet_type,
+        validation_target,
+        validation_target_kind,
+        validation_target_scope,
+    ) in rows:
+        missing_fields = delivery_contract_missing_fields(
+            status=status_value,
+            review_packet_type=review_packet_type,
+            validation_target=validation_target,
+            validation_target_kind=validation_target_kind,
+            validation_target_scope=validation_target_scope,
+        )
+        if not missing_fields:
+            continue
+        invalid_task_ids.append(str(task_id))
+        task_details.append(
+            {
+                "task_id": str(task_id),
+                "status": status_value,
+                "missing_fields": missing_fields,
+            }
+        )
+    if invalid_task_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "move_to_done approvals require a complete delivery contract.",
+                "code": "task_delivery_contract_incomplete",
+                "task_ids": invalid_task_ids,
+                "task_details": task_details,
             },
         )
 
@@ -586,6 +647,12 @@ async def create_approval(
         action_type=payload.action_type,
         task_ids=task_ids,
     )
+    await _ensure_move_to_done_targets_have_delivery_contract(
+        session,
+        board_id=board.id,
+        action_type=payload.action_type,
+        task_ids=task_ids,
+    )
     # Privileged-state guard (v2 Codex review finding): ``create_approval``
     # is strictly for submitting a NEW pending request. State transitions
     # go through ``PATCH .../approvals/{id}`` or ``POST .../unblock``.
@@ -716,6 +783,12 @@ async def update_approval(
             if not approval_task_ids and approval.task_id is not None:
                 approval_task_ids = [approval.task_id]
             await _ensure_move_to_done_targets_in_review(
+                session,
+                board_id=board.id,
+                action_type=approval.action_type,
+                task_ids=approval_task_ids or [],
+            )
+            await _ensure_move_to_done_targets_have_delivery_contract(
                 session,
                 board_id=board.id,
                 action_type=approval.action_type,
