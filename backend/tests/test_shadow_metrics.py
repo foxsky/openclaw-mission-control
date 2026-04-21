@@ -373,10 +373,72 @@ async def test_classifier_result_exposes_flags_for_activity_event_stamp() -> Non
         packet_type="frontend_ui",
     )
     assert ClassifierFlag.ACK_ONLY in result.flags
+    assert result.classifier_ran is True
     # The stamping contract: flags list length == shadow events list length.
     # Each classifier flag becomes one shadow event AND one entry in the
     # denormalized classifier_flags column on the comment row.
     assert len(result.flags) == len(result.shadow_events)
+
+
+@pytest.mark.asyncio
+async def test_classifier_ran_false_for_user_comment() -> None:
+    """agent_id=None paths return classifier_ran=False — the caller
+    must leave ActivityEvent.classifier_flags as NULL."""
+
+    session = _FakeSession()
+    result = await build_shadow_events_for_comment(
+        session,  # type: ignore[arg-type]
+        task_id=uuid4(),
+        board_id=uuid4(),
+        agent_id=None,
+        source_event_id=uuid4(),
+        message="Acknowledged. Holding there.",
+        packet_type="frontend_ui",
+    )
+    assert result.classifier_ran is False
+    assert result.flags == []
+    assert result.shadow_events == []
+
+
+@pytest.mark.asyncio
+async def test_classifier_ran_false_for_oversized_message() -> None:
+    """Oversized bodies bypass classify() — classifier_ran must be False."""
+
+    import app.services.shadow_metrics as sm
+
+    session = _FakeSession()
+    huge = "x" * (sm.MESSAGE_CLASSIFY_MAX_CHARS + 1)
+    result = await build_shadow_events_for_comment(
+        session,  # type: ignore[arg-type]
+        task_id=uuid4(),
+        board_id=uuid4(),
+        agent_id=uuid4(),
+        source_event_id=uuid4(),
+        message=huge,
+        packet_type="frontend_ui",
+    )
+    assert result.classifier_ran is False
+
+
+@pytest.mark.asyncio
+async def test_classifier_ran_true_for_clean_comment() -> None:
+    """A substantive non-ack comment should run the classifier and
+    produce classifier_ran=True with empty flags — the caller stamps
+    ``[]`` on the DB column as 'observable clean'."""
+
+    session = _FakeSession()
+    result = await build_shadow_events_for_comment(
+        session,  # type: ignore[arg-type]
+        task_id=uuid4(),
+        board_id=uuid4(),
+        agent_id=uuid4(),
+        source_event_id=uuid4(),
+        message="Filed PR #247 against master, tests passing.",
+        packet_type="frontend_ui",
+    )
+    assert result.classifier_ran is True
+    assert result.flags == []
+    assert result.shadow_events == []
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, CheckConstraint, Column
 from sqlmodel import Field
 
 from app.core.time import utcnow
@@ -18,6 +18,16 @@ class Board(TenantScoped, table=True):
     """Primary board entity grouping tasks, agents, and goal metadata."""
 
     __tablename__ = "boards"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        # Defense-in-depth: migration carries the same CHECK, but tests
+        # and any create_all() bootstrap path rely on metadata. Without
+        # the model-level constraint, SQLite tests would silently accept
+        # invalid values.
+        CheckConstraint(
+            "comment_signal_filter IN ('off', 'default_hidden', 'hidden_strict')",
+            name="ck_boards_comment_signal_filter_values",
+        ),
+    )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     organization_id: UUID = Field(foreign_key="organizations.id", index=True)

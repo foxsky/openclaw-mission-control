@@ -2836,6 +2836,49 @@ async def _apply_admin_task_rules(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT)
 
 
+async def _apply_classifier_to_comment_event(
+    session: AsyncSession,
+    *,
+    event: ActivityEvent,
+    task: Task,
+    agent_id: UUID | None,
+    message: str,
+) -> None:
+    """Run the classifier and stamp event.classifier_flags + shadow events.
+
+    Shared by both comment ingress paths (POST /comments, PATCH with
+    comment). Call BEFORE session.add(event) so the prior-lookup can't
+    see the uncommitted row. The caller still owns session.commit().
+
+    Observability failure must never kill the caller's write: outer
+    try/except catches any exception from the shadow pipeline and
+    logs without propagating.
+    """
+
+    try:
+        classifier_result = await build_shadow_events_for_comment(
+            session,
+            task_id=task.id,
+            board_id=task.board_id,
+            agent_id=agent_id,
+            source_event_id=event.id,
+            message=message,
+            packet_type=task.review_packet_type,
+        )
+    except Exception:
+        logger.exception(
+            "shadow_metrics.hook_failed task_id=%s — comment write proceeds",
+            task.id,
+        )
+        return
+    # None column = classifier did not run (skipped or crashed).
+    # classifier_ran=True = stamp the flag list (possibly [] = "clean").
+    if classifier_result.classifier_ran:
+        event.classifier_flags = [flag.value for flag in classifier_result.flags]
+    for shadow in classifier_result.shadow_events:
+        session.add(shadow)
+
+
 async def _record_task_comment_from_update(
     session: AsyncSession,
     *,
@@ -2843,16 +2886,24 @@ async def _record_task_comment_from_update(
 ) -> None:
     if update.comment is None or not update.comment.strip():
         return
+    agent_id = (
+        update.actor.agent.id
+        if update.actor.actor_type == "agent" and update.actor.agent
+        else None
+    )
     event = ActivityEvent(
         event_type="task.comment",
         message=update.comment,
         task_id=update.task.id,
         board_id=update.task.board_id,
-        agent_id=(
-            update.actor.agent.id
-            if update.actor.actor_type == "agent" and update.actor.agent
-            else None
-        ),
+        agent_id=agent_id,
+    )
+    await _apply_classifier_to_comment_event(
+        session,
+        event=event,
+        task=update.task,
+        agent_id=agent_id,
+        message=update.comment,
     )
     session.add(event)
     await session.commit()
@@ -3112,38 +3163,14 @@ async def create_task_comment(
         board_id=task.board_id,
         agent_id=_comment_actor_id(actor),
     )
-    # Classify BEFORE adding the comment to the session so the prior-
-    # lookup doesn't see the uncommitted row. Both the classifier_flags
-    # stamp on the ActivityEvent AND the shadow_metric_events rows
-    # commit atomically with the comment. Outer try/except isolates
-    # the observability path: a dead shadow query must NOT kill the
-    # user-facing POST.
-    try:
-        classifier_result = await build_shadow_events_for_comment(
-            session,
-            task_id=task.id,
-            board_id=task.board_id,
-            agent_id=_comment_actor_id(actor),
-            source_event_id=event.id,
-            message=payload.message,
-            packet_type=task.review_packet_type,
-        )
-    except Exception:
-        logger.exception(
-            "shadow_metrics.hook_failed task_id=%s — comment write proceeds",
-            task.id,
-        )
-        classifier_result = None
-    # None = hook crashed (column stays None = "not classified").
-    # classifier_ran=False = intentionally skipped (user comment / oversized;
-    # column stays None, no signal to lose).
-    # classifier_ran=True = stamp the flag list (possibly empty = "clean").
-    if classifier_result is not None and classifier_result.classifier_ran:
-        event.classifier_flags = [flag.value for flag in classifier_result.flags]
+    await _apply_classifier_to_comment_event(
+        session,
+        event=event,
+        task=task,
+        agent_id=_comment_actor_id(actor),
+        message=payload.message,
+    )
     session.add(event)
-    if classifier_result is not None:
-        for shadow in classifier_result.shadow_events:
-            session.add(shadow)
     await session.commit()
     await session.refresh(event)
     targets, mention_names = await _comment_targets(

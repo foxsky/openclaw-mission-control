@@ -168,11 +168,20 @@ class CommentClassifierResult:
     (long-term observability storage). Both commit atomically via the
     caller's session.
 
-    ``classifier_ran`` distinguishes "skipped" (user comment, oversized
-    body, caller caught an exception from the builder) from "ran and
-    found nothing". The caller stamps ``event.classifier_flags`` as
-    ``[]`` when ran=True + flags=[] (observable "clean") and leaves it
-    ``None`` otherwise (unclassified).
+    ``classifier_ran=True`` means ``classify()`` returned a definitive
+    answer (empty or populated). The caller stamps ``classifier_flags``
+    accordingly: ``[]`` when flags=[] (observable "clean"), the list
+    when flagged.
+
+    ``classifier_ran=False`` collapses every "no definitive answer"
+    case — the comment was skipped because the agent_id was None,
+    skipped because the body exceeded MESSAGE_CLASSIFY_MAX_CHARS, or
+    ``classify()`` itself raised and the builder caught it. All three
+    surface in the DB as ``classifier_flags IS NULL``. Callers that
+    need to distinguish among them grep the ``shadow_metrics.*``
+    log lines. The column itself intentionally does not encode the
+    reason; the operator runbook says NULL means "don't treat this row
+    as classifier evidence either way".
     """
 
     flags: list[ClassifierFlag]
