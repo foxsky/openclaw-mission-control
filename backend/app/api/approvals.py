@@ -37,7 +37,7 @@ from app.schemas.approvals import (
 )
 from app.schemas.common import OkResponse
 from app.schemas.pagination import DefaultLimitOffsetPage
-from app.schemas.tasks import delivery_contract_missing_fields
+from app.schemas.tasks import actionability_missing_fields
 from app.services.activity_log import record_activity
 from app.services.approval_task_links import (
     load_task_ids_by_approval,
@@ -244,6 +244,7 @@ async def _ensure_move_to_done_targets_have_delivery_contract(
             Task.validation_target,
             Task.validation_target_kind,
             Task.validation_target_scope,
+            Task.assigned_agent_id,
         )
         .where(col(Task.board_id) == board_id)
         .where(col(Task.id).in_(list(task_ids)))
@@ -257,13 +258,21 @@ async def _ensure_move_to_done_targets_have_delivery_contract(
         validation_target,
         validation_target_kind,
         validation_target_scope,
+        assigned_agent_id,
     ) in rows:
-        missing_fields = delivery_contract_missing_fields(
+        # Phase IV §I2: ``done`` is an owner-required state, so the
+        # move_to_done approval path must veto tasks with no owner.
+        # In practice the lead-assign side effect (api/tasks.py:3120)
+        # usually fills assigned_agent_id before this gate fires, but
+        # legacy-data and operator auto-approve paths would otherwise
+        # bypass the attribution guarantee.
+        missing_fields = actionability_missing_fields(
             status=status_value,
             review_packet_type=review_packet_type,
             validation_target=validation_target,
             validation_target_kind=validation_target_kind,
             validation_target_scope=validation_target_scope,
+            assigned_agent_id=assigned_agent_id,
         )
         if not missing_fields:
             continue

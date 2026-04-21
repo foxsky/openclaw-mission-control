@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from fastapi import HTTPException
 
 from app.api import tasks as tasks_api
+from app.api.tasks import _delivery_contract_incomplete_error
 from app.schemas.tasks import (
+    OWNER_REQUIRED_STATUSES,
     TaskCreate,
     TaskRead,
     TaskUpdate,
+    actionability_missing_fields,
     delivery_contract_missing_fields,
+    status_requires_assigned_owner,
 )
 
 
@@ -128,3 +134,108 @@ def test_delivery_contract_allows_content_copy_without_validation_target() -> No
         )
         == []
     )
+
+
+# --------------------------------------------------------------------
+# Phase IV §I2: actionability owner check (plan reference at
+# docs/plans/2026-04-16-mc-delivery-enforcement-plan.md §I2).
+# --------------------------------------------------------------------
+
+
+def _actionability(
+    status: str, *, owner: bool
+) -> list[str]:
+    """Call the pure helper with a complete contract triplet so only
+    the owner check matters for the assertion."""
+
+    return actionability_missing_fields(
+        status=status,
+        review_packet_type="review_only",
+        validation_target=None,
+        validation_target_kind=None,
+        validation_target_scope=None,
+        assigned_agent_id=uuid4() if owner else None,
+    )
+
+
+def test_owner_required_statuses_are_in_progress_and_done() -> None:
+    assert OWNER_REQUIRED_STATUSES == {"in_progress", "done"}
+
+
+def test_status_requires_assigned_owner_only_fires_for_those() -> None:
+    for active in ("in_progress", "done"):
+        assert status_requires_assigned_owner(active)
+    for passive in ("inbox", "review", "rework", "cancelled", None):
+        assert not status_requires_assigned_owner(passive)
+
+
+def test_actionability_owner_missing_flags_in_progress() -> None:
+    assert _actionability("in_progress", owner=False) == ["assigned_agent_id"]
+
+
+def test_actionability_owner_missing_flags_done() -> None:
+    assert _actionability("done", owner=False) == ["assigned_agent_id"]
+
+
+def test_actionability_owner_present_does_not_flag() -> None:
+    assert _actionability("in_progress", owner=True) == []
+
+
+def test_actionability_review_does_not_require_owner() -> None:
+    """Review is a queue state where the reviewer picks up after the
+    transition — the handler explicitly unassigns on entry. §I2's
+    owner requirement intentionally carves out this state."""
+
+    assert _actionability("review", owner=False) == []
+
+
+def test_actionability_inbox_and_terminal_states_skip_the_check() -> None:
+    for status in ("inbox", "cancelled", "rework"):
+        assert _actionability(status, owner=False) == []
+
+
+def test_actionability_reports_owner_alongside_contract_triplet() -> None:
+    """When both the owner and the triplet are missing, both surface
+    so the operator can fix everything in one round trip."""
+
+    assert actionability_missing_fields(
+        status="in_progress",
+        review_packet_type="frontend_ui",
+        validation_target=None,
+        validation_target_kind=None,
+        validation_target_scope=None,
+        assigned_agent_id=None,
+    ) == [
+        "assigned_agent_id",
+        "validation_target",
+        "validation_target_kind",
+        "validation_target_scope",
+    ]
+
+
+def test_error_message_surfaces_actionability_when_owner_missing() -> None:
+    """String-branch coverage: owner-missing tips the message wording
+    toward "not actionable" while the wire ``code`` stays stable."""
+
+    exc = _delivery_contract_incomplete_error(
+        status_value="in_progress",
+        missing_fields=["assigned_agent_id", "validation_target"],
+    )
+    detail = exc.detail
+    assert isinstance(detail, dict)
+    assert detail["code"] == "task_delivery_contract_incomplete"
+    assert "not actionable" in detail["message"]
+
+
+def test_error_message_stays_contract_when_owner_present() -> None:
+    """Triplet-only violation keeps the legacy wording for
+    downstream log-matchers that haven't migrated."""
+
+    exc = _delivery_contract_incomplete_error(
+        status_value="review",
+        missing_fields=["validation_target"],
+    )
+    detail = exc.detail
+    assert isinstance(detail, dict)
+    assert "delivery contract metadata" in detail["message"]
+    assert "not actionable" not in detail["message"]

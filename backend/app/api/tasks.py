@@ -57,7 +57,6 @@ from app.schemas.tasks import (
     TaskRead,
     TaskUpdate,
     actionability_missing_fields,
-    delivery_contract_missing_fields,
 )
 from app.services.activity_log import record_activity
 from app.services.approval_task_links import (
@@ -200,18 +199,20 @@ def _delivery_contract_incomplete_error(
     # Phase IV §I2: when the assigned-owner check trips alongside (or
     # instead of) the packet-type triplet, the word "delivery contract"
     # is no longer accurate — surface "actionability" in the message
-    # while keeping the wire code stable for existing clients.
+    # while keeping the wire ``code`` stable for existing clients.
+    # The decision reads off the structural signal "is the owner among
+    # the missing fields?" rather than a string-sniff on the message,
+    # so adding a sibling field later (e.g. ``expected_completion_at``)
+    # won't change the branch by accident.
     fields = list(missing_fields)
-    if "assigned_agent_id" in fields:
-        message = (
-            f"Task is not actionable for {status_value}; missing owner "
-            "and/or delivery contract metadata."
-        )
-    else:
-        message = (
-            f"Task is missing delivery contract metadata required for "
-            f"{status_value}."
-        )
+    owner_missing = "assigned_agent_id" in set(fields)
+    message = (
+        f"Task is not actionable for {status_value}; missing owner "
+        "and/or delivery contract metadata."
+        if owner_missing
+        else f"Task is missing delivery contract metadata required for "
+        f"{status_value}."
+    )
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={
@@ -342,28 +343,6 @@ def _delivery_contract_missing_fields_for_task(task: Task) -> list[str]:
         validation_target_scope=task.validation_target_scope,
         assigned_agent_id=task.assigned_agent_id,
     )
-
-
-def _require_delivery_contract_for_task_state(
-    *,
-    status_value: str,
-    review_packet_type: str | None,
-    validation_target: str | None,
-    validation_target_kind: str | None,
-    validation_target_scope: str | None,
-) -> None:
-    missing_fields = delivery_contract_missing_fields(
-        status=status_value,
-        review_packet_type=review_packet_type,
-        validation_target=validation_target,
-        validation_target_kind=validation_target_kind,
-        validation_target_scope=validation_target_scope,
-    )
-    if missing_fields:
-        raise _delivery_contract_incomplete_error(
-            status_value=status_value,
-            missing_fields=missing_fields,
-        )
 
 
 def _require_delivery_contract_with_metric(
