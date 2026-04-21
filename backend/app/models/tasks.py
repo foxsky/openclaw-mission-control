@@ -33,6 +33,18 @@ class Task(TenantScoped, table=True):
     validation_target: str | None = None
     validation_target_kind: str | None = None
     validation_target_scope: str | None = None
+    # Phase V §I8 deploy-truth metadata. The packet SHA is what the
+    # reviewer claims is (or was) deployed; the build SHA is the
+    # downstream artefact tag when the target produces one distinct
+    # from the source commit. ``supports_build_metadata`` is the
+    # target capability flag — True means the target exposes a
+    # ``GET /__build`` endpoint and SHA comparison is mandatory;
+    # False means the target is deploy-blind and validation is
+    # marked degraded; None means unknown (pre-migration rows or
+    # targets operators haven't classified yet).
+    packet_commit_sha: str | None = None
+    packet_build_sha: str | None = None
+    supports_build_metadata: bool | None = None
     operator_decision_required: bool = Field(default=False, index=True)
     operator_decision_summary: str | None = None
 

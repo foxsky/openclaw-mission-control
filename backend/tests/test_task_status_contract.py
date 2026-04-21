@@ -241,6 +241,68 @@ def test_error_message_stays_contract_when_owner_present() -> None:
     assert "not actionable" not in detail["message"]
 
 
+# --------------------------------------------------------------------
+# Phase V §I8: deploy-truth field validators.
+# --------------------------------------------------------------------
+
+
+def test_packet_commit_sha_accepts_short_and_full_hex() -> None:
+    model = TaskCreate(title="T", packet_commit_sha="abc1234")
+    assert model.packet_commit_sha == "abc1234"
+    model = TaskCreate(title="T", packet_commit_sha="a" * 40)
+    assert model.packet_commit_sha == "a" * 40
+
+
+def test_packet_commit_sha_lowercases_and_trims() -> None:
+    model = TaskCreate(title="T", packet_commit_sha="  ABCDEF9  ")
+    assert model.packet_commit_sha == "abcdef9"
+
+
+def test_packet_commit_sha_rejects_non_hex() -> None:
+    with pytest.raises(ValueError, match="packet_commit_sha"):
+        TaskCreate(title="T", packet_commit_sha="not-a-sha")
+
+
+def test_packet_commit_sha_rejects_too_short() -> None:
+    with pytest.raises(ValueError, match="packet_commit_sha"):
+        TaskCreate(title="T", packet_commit_sha="abc123")  # 6 chars
+
+
+def test_packet_commit_sha_rejects_too_long() -> None:
+    with pytest.raises(ValueError, match="packet_commit_sha"):
+        TaskCreate(title="T", packet_commit_sha="a" * 41)
+
+
+def test_packet_build_sha_independently_validated() -> None:
+    """Build SHA uses the same validator as commit SHA — the two are
+    independently nullable because a target may have a build SHA
+    without a distinct commit SHA (pre-Phase-V data)."""
+
+    with pytest.raises(ValueError, match="packet_build_sha"):
+        TaskCreate(title="T", packet_build_sha="nope")
+
+
+def test_packet_shas_null_by_default() -> None:
+    model = TaskCreate(title="T")
+    assert model.packet_commit_sha is None
+    assert model.packet_build_sha is None
+    assert model.supports_build_metadata is None
+
+
+def test_supports_build_metadata_accepts_tri_state() -> None:
+    for value in (True, False, None):
+        model = TaskCreate(title="T", supports_build_metadata=value)
+        assert model.supports_build_metadata is value
+
+
+def test_task_update_also_validates_sha_shape() -> None:
+    """Update path applies the same SHA format check so a PATCH can't
+    sneak garbage past the create-time validator."""
+
+    with pytest.raises(ValueError, match="packet_commit_sha"):
+        TaskUpdate(packet_commit_sha="not-a-sha")
+
+
 def test_actionability_validates_against_done_when_approval_gates_move_to_done() -> None:
     """move_to_done approval gate must validate against the TARGET
     state (``done``) not the task's current state (``review``).

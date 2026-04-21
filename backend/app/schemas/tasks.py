@@ -26,6 +26,12 @@ ReviewPacketType = Literal[
 ValidationTargetKind = Literal["live_url", "deploy_env", "workspace", "api_base", "other"]
 ValidationTargetScope = Literal["review", "runtime", "deploy", "all"]
 STATUS_REQUIRED_ERROR = "status is required"
+
+# Phase V §I8: hex-SHA shape. Accepts abbreviated SHAs (git's default
+# short form is 7 chars) through full 40-char SHA-1 digests. Rejects
+# non-hex characters and lengths outside the git-plausible range so a
+# fat-fingered branch name doesn't silently land in the packet field.
+_SHA_HEX_PATTERN = r"^[0-9a-f]{7,40}$"
 DELIVERY_CONTRACT_REQUIRED_STATUSES = frozenset({"in_progress", "review", "done"})
 REVIEW_PACKET_TYPES_REQUIRING_VALIDATION_TARGET = frozenset(
     {"frontend_ui", "backend_api", "infra_ops", "mixed"}
@@ -135,6 +141,9 @@ class TaskBase(SQLModel):
     validation_target: str | None = None
     validation_target_kind: ValidationTargetKind | None = None
     validation_target_scope: ValidationTargetScope | None = None
+    packet_commit_sha: str | None = None
+    packet_build_sha: str | None = None
+    supports_build_metadata: bool | None = None
     operator_decision_required: bool = False
     operator_decision_summary: str | None = None
     depends_on_task_ids: list[UUID] = Field(default_factory=list)
@@ -152,6 +161,33 @@ class TaskBase(SQLModel):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("packet_commit_sha", "packet_build_sha", mode="before")
+    @classmethod
+    def normalize_sha(cls, value: object) -> object | None:
+        """Phase V §I8: SHA fields accept 7–40 hex chars (git's short
+        form through full SHA-1). Blank strings collapse to None so a
+        cleared UI field doesn't persist as ``""``. The actual regex
+        check lives on the field itself via ``pattern`` below."""
+
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip().lower()
+            return stripped or None
+        return value
+
+    @model_validator(mode="after")
+    def validate_sha_shape(self) -> Self:
+        import re
+
+        for field_name in ("packet_commit_sha", "packet_build_sha"):
+            value = getattr(self, field_name)
+            if value is not None and not re.match(_SHA_HEX_PATTERN, value):
+                raise ValueError(
+                    f"{field_name} must be 7–40 lowercase hex characters"
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_validation_target_triplet(self) -> Self:
@@ -187,6 +223,9 @@ class TaskUpdate(SQLModel):
     validation_target: str | None = None
     validation_target_kind: ValidationTargetKind | None = None
     validation_target_scope: ValidationTargetScope | None = None
+    packet_commit_sha: str | None = None
+    packet_build_sha: str | None = None
+    supports_build_metadata: bool | None = None
     operator_decision_required: bool | None = None
     operator_decision_summary: str | None = None
     depends_on_task_ids: list[UUID] | None = None
@@ -216,6 +255,28 @@ class TaskUpdate(SQLModel):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("packet_commit_sha", "packet_build_sha", mode="before")
+    @classmethod
+    def normalize_sha(cls, value: object) -> object | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip().lower()
+            return stripped or None
+        return value
+
+    @model_validator(mode="after")
+    def validate_sha_shape(self) -> Self:
+        import re
+
+        for field_name in ("packet_commit_sha", "packet_build_sha"):
+            value = getattr(self, field_name)
+            if value is not None and not re.match(_SHA_HEX_PATTERN, value):
+                raise ValueError(
+                    f"{field_name} must be 7–40 lowercase hex characters"
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_status(self) -> Self:
