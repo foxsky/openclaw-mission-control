@@ -6,6 +6,7 @@ from app.models.agents import Agent
 from app.models.approval_history import ApprovalHistory
 from app.models.approval_task_links import ApprovalTaskLink
 from app.models.approvals import Approval
+from app.models.blockers import Blocker
 from app.models.board_group_memory import BoardGroupMemory
 from app.models.board_groups import BoardGroup
 from app.models.board_memory import BoardMemory
@@ -40,6 +41,7 @@ __all__ = [
     "ApprovalHistory",
     "ApprovalTaskLink",
     "Approval",
+    "Blocker",
     "BoardGroupMemory",
     "BoardWebhook",
     "BoardWebhookPayload",
