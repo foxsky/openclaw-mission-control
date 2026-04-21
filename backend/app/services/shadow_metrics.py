@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -158,6 +159,20 @@ async def _fetch_prior_comment(
     return (await session.exec(statement)).first()
 
 
+@dataclass(frozen=True)
+class CommentClassifierResult:
+    """Output of the comment classifier hook.
+
+    Separates the flag list (used to stamp classifier_flags on the
+    ActivityEvent row for fast GET filtering) from the shadow events
+    (long-term observability storage). Both commit atomically via the
+    caller's session.
+    """
+
+    flags: list[ClassifierFlag]
+    shadow_events: list[ShadowMetricEvent]
+
+
 async def build_shadow_events_for_comment(
     session: AsyncSession,
     *,
@@ -168,18 +183,26 @@ async def build_shadow_events_for_comment(
     message: str,
     packet_type: str | None,
     now: datetime | None = None,
-) -> list[ShadowMetricEvent]:
-    """Classify a new comment and return shadow-metric events for it.
+) -> CommentClassifierResult:
+    """Classify a new comment.
 
     Must be called BEFORE the new comment's ``ActivityEvent`` is added
     to the session so the prior-comment query does not see it.
+
+    Returns a ``CommentClassifierResult`` with:
+    - ``flags``: the list of ClassifierFlag values to stamp on the
+      comment's ActivityEvent.classifier_flags column.
+    - ``shadow_events``: one ShadowMetricEvent per flag for the
+      append-only observability table.
     """
+
+    empty = CommentClassifierResult(flags=[], shadow_events=[])
 
     # User-authored comments (no agent_id) are exempt from ack-theater
     # classification. The observability surface measures agent noise;
     # treating operator acks as data points pollutes the histogram.
     if agent_id is None:
-        return []
+        return empty
 
     # Defensive cap on pathological payloads — see MESSAGE_CLASSIFY_MAX_CHARS.
     if len(message) > MESSAGE_CLASSIFY_MAX_CHARS:
@@ -189,7 +212,7 @@ async def build_shadow_events_for_comment(
             agent_id,
             len(message),
         )
-        return []
+        return empty
 
     reference = now if now is not None else utcnow()
     window_start = reference - timedelta(seconds=NEAR_DUPLICATE_WINDOW_SECONDS)
@@ -222,12 +245,12 @@ async def build_shadow_events_for_comment(
             task_id,
             agent_id,
         )
-        return []
+        return empty
 
     if not flags:
-        return []
+        return empty
 
-    return [
+    shadow_events = [
         ShadowMetricEvent(
             event_type=_flag_to_event_type(flag),
             task_id=task_id,
@@ -241,3 +264,4 @@ async def build_shadow_events_for_comment(
         )
         for flag in flags
     ]
+    return CommentClassifierResult(flags=list(flags), shadow_events=shadow_events)

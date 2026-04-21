@@ -3112,13 +3112,14 @@ async def create_task_comment(
         board_id=task.board_id,
         agent_id=_comment_actor_id(actor),
     )
-    # Build shadow-metric events BEFORE adding the comment to the session
-    # so the prior-comment lookup doesn't see the uncommitted row. These
-    # commit atomically with the comment. Outer try/except isolates the
-    # observability path from the comment write: a dead shadow query
-    # must NOT kill a user-facing POST.
+    # Classify BEFORE adding the comment to the session so the prior-
+    # lookup doesn't see the uncommitted row. Both the classifier_flags
+    # stamp on the ActivityEvent AND the shadow_metric_events rows
+    # commit atomically with the comment. Outer try/except isolates
+    # the observability path: a dead shadow query must NOT kill the
+    # user-facing POST.
     try:
-        shadow_events = await build_shadow_events_for_comment(
+        classifier_result = await build_shadow_events_for_comment(
             session,
             task_id=task.id,
             board_id=task.board_id,
@@ -3132,10 +3133,13 @@ async def create_task_comment(
             "shadow_metrics.hook_failed task_id=%s — comment write proceeds",
             task.id,
         )
-        shadow_events = []
+        classifier_result = None
+    if classifier_result is not None and classifier_result.flags:
+        event.classifier_flags = [flag.value for flag in classifier_result.flags]
     session.add(event)
-    for shadow in shadow_events:
-        session.add(shadow)
+    if classifier_result is not None:
+        for shadow in classifier_result.shadow_events:
+            session.add(shadow)
     await session.commit()
     await session.refresh(event)
     targets, mention_names = await _comment_targets(

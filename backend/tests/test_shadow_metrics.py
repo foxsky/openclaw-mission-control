@@ -50,7 +50,7 @@ async def test_clean_comment_emits_no_events() -> None:
     """Substantive, non-ack comment yields zero shadow events."""
 
     session = _FakeSession()
-    events = await build_shadow_events_for_comment(
+    result = await build_shadow_events_for_comment(
         session,  # type: ignore[arg-type]
         task_id=uuid4(),
         board_id=uuid4(),
@@ -59,7 +59,8 @@ async def test_clean_comment_emits_no_events() -> None:
         message="Filed PR #1 against master, tests passing. Running lighthouse now.",
         packet_type="frontend_ui",
     )
-    assert events == []
+    assert result.shadow_events == []
+    assert result.flags == []
 
 
 @pytest.mark.asyncio
@@ -71,7 +72,7 @@ async def test_ack_only_comment_emits_one_event() -> None:
     task_id = uuid4()
     agent_id = uuid4()
     board_id = uuid4()
-    events = await build_shadow_events_for_comment(
+    result = await build_shadow_events_for_comment(
         session,  # type: ignore[arg-type]
         task_id=task_id,
         board_id=board_id,
@@ -80,8 +81,9 @@ async def test_ack_only_comment_emits_one_event() -> None:
         message="Acknowledged. Holding exactly there. No status change. @lead",
         packet_type="frontend_ui",
     )
-    assert len(events) == 1
-    event = events[0]
+    assert len(result.shadow_events) == 1
+    assert len(result.flags) == 1
+    event = result.shadow_events[0]
     assert isinstance(event, ShadowMetricEvent)
     assert event.event_type == EVENT_COMMENT_ACK_ONLY
     assert event.task_id == task_id
@@ -106,7 +108,7 @@ async def test_near_duplicate_emits_event_when_prior_exists() -> None:
         created_at=now - timedelta(seconds=60),
     )
     session = _FakeSession(prior=prior)
-    events = await build_shadow_events_for_comment(
+    result = await build_shadow_events_for_comment(
         session,  # type: ignore[arg-type]
         task_id=prior.task_id or uuid4(),
         board_id=None,
@@ -116,7 +118,7 @@ async def test_near_duplicate_emits_event_when_prior_exists() -> None:
         packet_type="frontend_ui",
         now=now,
     )
-    event_types = {e.event_type for e in events}
+    event_types = {e.event_type for e in result.shadow_events}
     assert EVENT_COMMENT_ACK_ONLY in event_types
     assert EVENT_COMMENT_NEAR_DUPLICATE in event_types
 
@@ -131,7 +133,7 @@ async def test_user_comments_skip_classifier_entirely() -> None:
 
     session = _FakeSession(prior=None)
     # Ack-shaped message that would flag if an agent posted it:
-    events = await build_shadow_events_for_comment(
+    result = await build_shadow_events_for_comment(
         session,  # type: ignore[arg-type]
         task_id=uuid4(),
         board_id=uuid4(),
@@ -140,7 +142,8 @@ async def test_user_comments_skip_classifier_entirely() -> None:
         message="Acknowledged. Holding exactly there. No status change.",
         packet_type="frontend_ui",
     )
-    assert events == []
+    assert result.shadow_events == []
+    assert result.flags == []
 
 
 @pytest.mark.asyncio
@@ -157,7 +160,7 @@ async def test_prior_outside_window_does_not_trigger_duplicate() -> None:
         created_at=now - timedelta(minutes=6),
     )
     session = _FakeSession(prior=prior)
-    events = await build_shadow_events_for_comment(
+    result = await build_shadow_events_for_comment(
         session,  # type: ignore[arg-type]
         task_id=prior.task_id or uuid4(),
         board_id=None,
@@ -170,7 +173,7 @@ async def test_prior_outside_window_does_not_trigger_duplicate() -> None:
     # Ack-only still fires; near-duplicate does not because the prior
     # is outside the window. The _fake_session returns it anyway, but
     # the classifier's own gap check rejects it.
-    event_types = {e.event_type for e in events}
+    event_types = {e.event_type for e in result.shadow_events}
     assert EVENT_COMMENT_ACK_ONLY in event_types
     assert EVENT_COMMENT_NEAR_DUPLICATE not in event_types
 
@@ -212,7 +215,7 @@ async def test_classifier_exception_returns_empty_and_logs() -> None:
     sm.classify = _explode  # type: ignore[assignment]
     try:
         session = _FakeSession()
-        events = await build_shadow_events_for_comment(
+        result = await build_shadow_events_for_comment(
             session,  # type: ignore[arg-type]
             task_id=uuid4(),
             board_id=uuid4(),
@@ -221,7 +224,8 @@ async def test_classifier_exception_returns_empty_and_logs() -> None:
             message="Filed PR, tests passing.",
             packet_type="frontend_ui",
         )
-        assert events == []
+        assert result.shadow_events == []
+        assert result.flags == []
     finally:
         sm.classify = original  # type: ignore[assignment]
 
@@ -338,7 +342,7 @@ async def test_oversized_message_skips_classifier() -> None:
 
     session = _FakeSession()
     huge = "x" * (sm.MESSAGE_CLASSIFY_MAX_CHARS + 1)
-    events = await build_shadow_events_for_comment(
+    result = await build_shadow_events_for_comment(
         session,  # type: ignore[arg-type]
         task_id=uuid4(),
         board_id=uuid4(),
@@ -347,7 +351,32 @@ async def test_oversized_message_skips_classifier() -> None:
         message=huge,
         packet_type="frontend_ui",
     )
-    assert events == []
+    assert result.shadow_events == []
+    assert result.flags == []
+
+
+@pytest.mark.asyncio
+async def test_classifier_result_exposes_flags_for_activity_event_stamp() -> None:
+    """Phase I: callers need the flag list to stamp ActivityEvent.
+    classifier_flags for fast GET /comments filtering."""
+
+    from app.services.comment_classifier import ClassifierFlag
+
+    session = _FakeSession()
+    result = await build_shadow_events_for_comment(
+        session,  # type: ignore[arg-type]
+        task_id=uuid4(),
+        board_id=uuid4(),
+        agent_id=uuid4(),
+        source_event_id=uuid4(),
+        message="Acknowledged. Holding exactly there. No status change. @lead",
+        packet_type="frontend_ui",
+    )
+    assert ClassifierFlag.ACK_ONLY in result.flags
+    # The stamping contract: flags list length == shadow events list length.
+    # Each classifier flag becomes one shadow event AND one entry in the
+    # denormalized classifier_flags column on the comment row.
+    assert len(result.flags) == len(result.shadow_events)
 
 
 @pytest.mark.asyncio
@@ -355,7 +384,7 @@ async def test_lax_packet_type_suppresses_ack_only() -> None:
     """A short ack on a review_only task is legit, not theater."""
 
     session = _FakeSession()
-    events = await build_shadow_events_for_comment(
+    result = await build_shadow_events_for_comment(
         session,  # type: ignore[arg-type]
         task_id=uuid4(),
         board_id=uuid4(),
@@ -364,4 +393,5 @@ async def test_lax_packet_type_suppresses_ack_only() -> None:
         message="Acknowledged. Reassigning to Architect.",
         packet_type="review_only",
     )
-    assert events == []
+    assert result.shadow_events == []
+    assert result.flags == []

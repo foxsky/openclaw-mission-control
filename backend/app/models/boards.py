@@ -58,5 +58,9 @@ class Board(TenantScoped, table=True):
         default_factory=dict,
         sa_column=Column(JSON, nullable=False),
     )
+    # Phase I classifier filter mode. "off" = no UI filtering (default),
+    # "default_hidden" = GET /comments omits flagged unless include_flagged=true,
+    # "hidden_strict" = omits flagged from agent callers entirely.
+    comment_signal_filter: str = Field(default="off")
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

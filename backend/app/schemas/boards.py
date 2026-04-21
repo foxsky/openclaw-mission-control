@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Self
+from typing import Literal, Self
 from uuid import UUID
 
 from pydantic import StrictBool, model_validator
@@ -28,6 +28,10 @@ ROLLOUT_FLAG_ALLOWLIST = frozenset(
         "heartbeat_watchdog_v1",
     }
 )
+
+# Phase I classifier filter modes. See amendments §1 for graduation rules.
+CommentSignalFilter = Literal["off", "default_hidden", "hidden_strict"]
+COMMENT_SIGNAL_FILTER_VALUES = frozenset({"off", "default_hidden", "hidden_strict"})
 
 
 def partition_rollout_flags(
@@ -74,6 +78,7 @@ class BoardBase(SQLModel):
     show_cancelled_column: bool = False
     max_agents: int = Field(default=1, ge=0)
     rollout_flags: dict[str, StrictBool] = Field(default_factory=dict)
+    comment_signal_filter: CommentSignalFilter = "off"
 
 
 class BoardCreate(BoardBase):
@@ -121,6 +126,7 @@ class BoardUpdate(SQLModel):
     show_cancelled_column: bool | None = None
     max_agents: int | None = Field(default=None, ge=0)
     rollout_flags: dict[str, StrictBool] | None = None
+    comment_signal_filter: CommentSignalFilter | None = None
 
     @model_validator(mode="after")
     def validate_gateway_id(self) -> Self:
