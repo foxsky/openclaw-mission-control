@@ -17,11 +17,17 @@ import pytest
 
 import app.api.tasks as tasks_module
 from app.api.tasks import (
-    _ACTIONABILITY_EMIT_MAX_PENDING,
-    _ACTIONABILITY_EMIT_TASKS,
+    _actionability_emitter,
     _schedule_actionability_violation_emit,
     drain_actionability_emit_tasks,
 )
+
+# Post-extraction the scheduler + backlog live on a shared
+# ``BackgroundEmitter`` instance; the pending set is ``._pending`` and
+# the cap is ``._max_pending``. These are still module-internals the
+# tests assert on to pin the bounded-strong-ref contract.
+_ACTIONABILITY_EMIT_TASKS = _actionability_emitter._pending
+_ACTIONABILITY_EMIT_MAX_PENDING = _actionability_emitter._max_pending
 
 
 @pytest.fixture(autouse=True)
@@ -89,7 +95,7 @@ async def test_backlog_cap_drops_excess_with_warning(
 
     # One more must be dropped + logged.
     overflow_task_id = uuid4()
-    with caplog.at_level("WARNING", logger="app.api.tasks"):
+    with caplog.at_level("WARNING", logger="app.services.background_emitter"):
         _schedule_actionability_violation_emit(
             task_id=overflow_task_id,
             board_id=None,
@@ -98,7 +104,7 @@ async def test_backlog_cap_drops_excess_with_warning(
             missing_fields=["validation_target"],
         )
     assert len(_ACTIONABILITY_EMIT_TASKS) == _ACTIONABILITY_EMIT_MAX_PENDING
-    assert "actionability_emit_dropped_backlog_full" in caplog.text
+    assert "dropped_backlog_full" in caplog.text
 
 
 @pytest.mark.asyncio

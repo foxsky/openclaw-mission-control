@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal, Self
 from uuid import UUID
@@ -31,8 +32,41 @@ STATUS_REQUIRED_ERROR = "status is required"
 # short form is 7 chars) through full 40-char SHA-1 digests. Rejects
 # non-hex characters and lengths outside the git-plausible range so a
 # fat-fingered branch name doesn't silently land in the packet field.
-_SHA_HEX_PATTERN = r"^[0-9a-f]{7,40}$"
-DELIVERY_CONTRACT_REQUIRED_STATUSES = frozenset({"in_progress", "review", "done"})
+# Pre-compiled so the validator doesn't re-parse on every PATCH.
+_SHA_HEX_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _normalise_and_validate_sha(value: object, field_name: str) -> object | None:
+    """Shared by ``TaskBase`` + ``TaskUpdate`` — strips case, collapses
+    blanks to None, and enforces the hex shape. Raising ``ValueError``
+    here lets Pydantic turn the failure into a 422 on the API boundary.
+    Non-string values pass through unchanged so Pydantic's built-in
+    type check raises the canonical "string required" message.
+    """
+
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip().lower()
+    if not stripped:
+        return None
+    if not _SHA_HEX_RE.match(stripped):
+        raise ValueError(f"{field_name} must be 7–40 lowercase hex characters")
+    return stripped
+
+
+# Central status-role registry. Each gate reads its membership set
+# from one place so future phases can add a new key instead of a new
+# module-level frozenset. Keys are referenced by name from api/tasks.py
+# to keep the schema layer independent of handler-layer imports.
+STATUS_GATES: dict[str, frozenset[str]] = {
+    "delivery_contract": frozenset({"in_progress", "review", "done"}),
+    "owner": frozenset({"in_progress", "done"}),
+    "deploy_truth": frozenset({"review", "done"}),
+}
+
+DELIVERY_CONTRACT_REQUIRED_STATUSES = STATUS_GATES["delivery_contract"]
 REVIEW_PACKET_TYPES_REQUIRING_VALIDATION_TARGET = frozenset(
     {"frontend_ui", "backend_api", "infra_ops", "mixed"}
 )
@@ -75,7 +109,7 @@ def delivery_contract_missing_fields(
     return missing_fields
 
 
-OWNER_REQUIRED_STATUSES = frozenset({"in_progress", "done"})
+OWNER_REQUIRED_STATUSES = STATUS_GATES["owner"]
 
 
 def status_requires_assigned_owner(status: TaskStatus | str | None) -> bool:
@@ -162,32 +196,15 @@ class TaskBase(SQLModel):
             return None
         return value
 
-    @field_validator("packet_commit_sha", "packet_build_sha", mode="before")
+    @field_validator("packet_commit_sha", mode="before")
     @classmethod
-    def normalize_sha(cls, value: object) -> object | None:
-        """Phase V §I8: SHA fields accept 7–40 hex chars (git's short
-        form through full SHA-1). Blank strings collapse to None so a
-        cleared UI field doesn't persist as ``""``. The actual regex
-        check lives on the field itself via ``pattern`` below."""
+    def normalize_commit_sha(cls, value: object) -> object | None:
+        return _normalise_and_validate_sha(value, "packet_commit_sha")
 
-        if value is None:
-            return None
-        if isinstance(value, str):
-            stripped = value.strip().lower()
-            return stripped or None
-        return value
-
-    @model_validator(mode="after")
-    def validate_sha_shape(self) -> Self:
-        import re
-
-        for field_name in ("packet_commit_sha", "packet_build_sha"):
-            value = getattr(self, field_name)
-            if value is not None and not re.match(_SHA_HEX_PATTERN, value):
-                raise ValueError(
-                    f"{field_name} must be 7–40 lowercase hex characters"
-                )
-        return self
+    @field_validator("packet_build_sha", mode="before")
+    @classmethod
+    def normalize_build_sha(cls, value: object) -> object | None:
+        return _normalise_and_validate_sha(value, "packet_build_sha")
 
     @model_validator(mode="after")
     def validate_validation_target_triplet(self) -> Self:
@@ -256,27 +273,15 @@ class TaskUpdate(SQLModel):
             return None
         return value
 
-    @field_validator("packet_commit_sha", "packet_build_sha", mode="before")
+    @field_validator("packet_commit_sha", mode="before")
     @classmethod
-    def normalize_sha(cls, value: object) -> object | None:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            stripped = value.strip().lower()
-            return stripped or None
-        return value
+    def normalize_commit_sha(cls, value: object) -> object | None:
+        return _normalise_and_validate_sha(value, "packet_commit_sha")
 
-    @model_validator(mode="after")
-    def validate_sha_shape(self) -> Self:
-        import re
-
-        for field_name in ("packet_commit_sha", "packet_build_sha"):
-            value = getattr(self, field_name)
-            if value is not None and not re.match(_SHA_HEX_PATTERN, value):
-                raise ValueError(
-                    f"{field_name} must be 7–40 lowercase hex characters"
-                )
-        return self
+    @field_validator("packet_build_sha", mode="before")
+    @classmethod
+    def normalize_build_sha(cls, value: object) -> object | None:
+        return _normalise_and_validate_sha(value, "packet_build_sha")
 
     @model_validator(mode="after")
     def validate_status(self) -> Self:

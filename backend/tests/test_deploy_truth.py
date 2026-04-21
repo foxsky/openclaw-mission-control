@@ -47,10 +47,15 @@ def test_short_prefix_matches_full() -> None:
     assert packet_sha_matches_live(packet_sha=short, live_sha=full)
 
 
-def test_full_matches_short_prefix() -> None:
+def test_full_packet_against_short_live_rejected() -> None:
+    """Live SHA is the authority. If the target reports a short SHA
+    while the reviewer claims a full one, the capability is
+    misconfigured — the target should always report at least as much
+    precision as the claim. Fail closed rather than fuzzy-match."""
+
     full = "abcdef1234567890" + "0" * 24
     short = full[:10]
-    assert packet_sha_matches_live(packet_sha=full, live_sha=short)
+    assert not packet_sha_matches_live(packet_sha=full, live_sha=short)
 
 
 def test_different_prefixes_do_not_match() -> None:

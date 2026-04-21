@@ -51,6 +51,7 @@ from app.schemas.task_custom_fields import (
     validate_custom_field_value,
 )
 from app.schemas.tasks import (
+    STATUS_GATES,
     TaskCommentCreate,
     TaskCommentRead,
     TaskCreate,
@@ -71,6 +72,7 @@ from app.services.openclaw.provisioning_db import AgentLifecycleService
 from app.core.logging import get_logger
 from app.services.comment_policy import apply_comment_signal_filter
 from app.services.organizations import require_board_access
+from app.services.background_emitter import BackgroundEmitter
 from app.services.deploy_truth import (
     DeployTruthFetchError,
     fetch_build_metadata,
@@ -407,7 +409,7 @@ def _require_delivery_contract_with_metric(
     )
 
 
-_DEPLOY_TRUTH_REQUIRED_STATUSES = frozenset({"review", "done"})
+_DEPLOY_TRUTH_REQUIRED_STATUSES = STATUS_GATES["deploy_truth"]
 
 
 async def _require_deploy_truth(
@@ -510,14 +512,25 @@ async def _require_deploy_truth(
         )
 
 
-# Hold a strong reference to background emit tasks so asyncio doesn't GC
-# them mid-flight (which would trigger "Task was destroyed but it is
-# pending!" warnings). Completed tasks auto-discard via done callback.
-# Bounded: under a slow-DB storm the caller still gets 422s immediately,
-# but we drop the observability signal rather than pile up unbounded
-# pool-demand (amplifying the original incident).
-_ACTIONABILITY_EMIT_TASKS: set[asyncio.Task[None]] = set()
-_ACTIONABILITY_EMIT_MAX_PENDING = 128
+_actionability_emitter = BackgroundEmitter(
+    name="shadow_metrics.actionability_violation", max_pending=128
+)
+_deploy_degraded_emitter = BackgroundEmitter(
+    name="shadow_metrics.deploy_validation_degraded", max_pending=128
+)
+
+# In-memory dedupe for the degraded-metric emit. Post-migration every
+# task has ``supports_build_metadata=None`` until operators classify
+# targets, so without dedupe every ``review``/``done`` PATCH would
+# write a metric row — flooding ``shadow_metric_events`` against a
+# table that's meant to track rare-ish signals. Dedupe key is
+# ``(task_id, status, reason)``: a genuine re-transition from ``done``
+# back to ``review`` and back to ``done`` still emits two rows (two
+# status values); a chatty PATCH loop against the same state does not.
+# Window is a plain set since process restarts naturally clear it and
+# the signal is eventually-consistent.
+_DEPLOY_DEGRADED_DEDUPE: set[tuple[UUID, str, str]] = set()
+_DEPLOY_DEGRADED_DEDUPE_MAX = 4096
 
 
 def _schedule_actionability_violation_emit(
@@ -528,24 +541,9 @@ def _schedule_actionability_violation_emit(
     status_value: str,
     missing_fields: list[str],
 ) -> None:
-    """Fire-and-forget wrapper for emit_actionability_violation_metric.
+    """Fire-and-forget wrapper for emit_actionability_violation_metric."""
 
-    The emitter must not delay the 422 response the caller is about to
-    raise; scheduling it as a background task gives the client their
-    error immediately while observability persists asynchronously.
-    """
-
-    if len(_ACTIONABILITY_EMIT_TASKS) >= _ACTIONABILITY_EMIT_MAX_PENDING:
-        logger.warning(
-            "shadow_metrics.actionability_emit_dropped_backlog_full "
-            "pending=%d limit=%d task_id=%s",
-            len(_ACTIONABILITY_EMIT_TASKS),
-            _ACTIONABILITY_EMIT_MAX_PENDING,
-            task_id,
-        )
-        return
-
-    task = asyncio.create_task(
+    _actionability_emitter.schedule(
         emit_actionability_violation_metric(
             task_id=task_id,
             board_id=board_id,
@@ -553,32 +551,12 @@ def _schedule_actionability_violation_emit(
             status_value=status_value,
             missing_fields=missing_fields,
         ),
-        name="shadow_metrics.actionability_violation_emit",
+        log_key=str(task_id),
     )
-    _ACTIONABILITY_EMIT_TASKS.add(task)
-    task.add_done_callback(_ACTIONABILITY_EMIT_TASKS.discard)
 
 
 async def drain_actionability_emit_tasks() -> None:
-    """Wait for any in-flight actionability-emit tasks to complete.
-
-    Called from the FastAPI lifespan shutdown path so pending shadow
-    writes finish (or explicitly cancel + log) before the event loop
-    tears down.
-    """
-
-    pending = list(_ACTIONABILITY_EMIT_TASKS)
-    if not pending:
-        return
-    await asyncio.gather(*pending, return_exceptions=True)
-
-
-# Mirror of the actionability backlog for the deploy-truth degraded
-# signal. Shares the same bounded-strong-ref pattern so a slow DB
-# under a busy PATCH storm drops observability instead of piling up
-# unbounded tasks.
-_DEPLOY_DEGRADED_EMIT_TASKS: set[asyncio.Task[None]] = set()
-_DEPLOY_DEGRADED_EMIT_MAX_PENDING = 128
+    await _actionability_emitter.drain()
 
 
 def _schedule_deploy_degraded_emit(
@@ -589,16 +567,16 @@ def _schedule_deploy_degraded_emit(
     status_value: str,
     reason: str,
 ) -> None:
-    if len(_DEPLOY_DEGRADED_EMIT_TASKS) >= _DEPLOY_DEGRADED_EMIT_MAX_PENDING:
-        logger.warning(
-            "shadow_metrics.deploy_degraded_emit_dropped_backlog_full "
-            "pending=%d limit=%d task_id=%s",
-            len(_DEPLOY_DEGRADED_EMIT_TASKS),
-            _DEPLOY_DEGRADED_EMIT_MAX_PENDING,
-            task_id,
-        )
+    key = (task_id, status_value, reason)
+    if key in _DEPLOY_DEGRADED_DEDUPE:
         return
-    task = asyncio.create_task(
+    # Process-lifetime bound so the dedupe set can't grow forever on a
+    # long-running gateway. When full, drop the oldest-added half —
+    # good enough for a signal that operators burn down by hand.
+    if len(_DEPLOY_DEGRADED_DEDUPE) >= _DEPLOY_DEGRADED_DEDUPE_MAX:
+        _DEPLOY_DEGRADED_DEDUPE.clear()
+    _DEPLOY_DEGRADED_DEDUPE.add(key)
+    _deploy_degraded_emitter.schedule(
         emit_deploy_validation_degraded_metric(
             task_id=task_id,
             board_id=board_id,
@@ -606,19 +584,12 @@ def _schedule_deploy_degraded_emit(
             status_value=status_value,
             reason=reason,
         ),
-        name="shadow_metrics.deploy_validation_degraded_emit",
+        log_key=str(task_id),
     )
-    _DEPLOY_DEGRADED_EMIT_TASKS.add(task)
-    task.add_done_callback(_DEPLOY_DEGRADED_EMIT_TASKS.discard)
 
 
 async def drain_deploy_degraded_emit_tasks() -> None:
-    """Mirror of ``drain_actionability_emit_tasks`` for the §I8 emit."""
-
-    pending = list(_DEPLOY_DEGRADED_EMIT_TASKS)
-    if not pending:
-        return
-    await asyncio.gather(*pending, return_exceptions=True)
+    await _deploy_degraded_emitter.drain()
 
 
 async def _reject_pending_move_to_done_approvals_for_task(

@@ -111,14 +111,23 @@ def _as_str(value: object) -> str | None:
 def packet_sha_matches_live(
     *, packet_sha: str, live_sha: str
 ) -> bool:
-    """Compare a packet-claimed SHA against a live-fetched SHA.
+    """Compare a packet-claimed SHA against the live-fetched SHA.
 
-    Both are treated as hex prefixes — a match is established when one
-    is a prefix of the other (case already normalised by the schema
-    validator). Abbreviated packet SHAs (git's default 7-char short)
-    match a full 40-char live SHA, and vice versa. Mismatches below
-    the shorter length fail hard — there's no fuzzy match.
+    The live SHA is the ground truth — the packet is asserting *what
+    the reviewer believes is deployed*. A match requires the packet
+    to be a prefix of the live SHA (case already normalised by the
+    schema validator). Abbreviated packet SHAs (git's default 7-char
+    short) therefore match a full 40-char live SHA; a full packet
+    against a short live SHA is a capability misconfiguration — the
+    live endpoint should always emit at least as much precision as
+    the reviewer is claiming.
+
+    Examples:
+      packet="abcdef1", live="abcdef1234…"  → match (packet is prefix)
+      packet="abcdef1234…", live="abcdef1"  → not match (capability bug)
+      packet="abcde01",  live="abcde99…"    → not match (divergence)
     """
 
-    short, long = sorted((packet_sha, live_sha), key=len)
-    return long.startswith(short)
+    if len(packet_sha) > len(live_sha):
+        return False
+    return live_sha.startswith(packet_sha)
