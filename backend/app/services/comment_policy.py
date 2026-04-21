@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ColumnElement, or_
+from sqlalchemy import JSON, ColumnElement, or_
 from sqlmodel import col
 
 from app.models.activity_events import ActivityEvent
@@ -38,17 +38,19 @@ FILTER_HIDDEN_STRICT: CommentSignalFilter = "hidden_strict"
 def _not_flagged_clause() -> ColumnElement[bool]:
     """SQL predicate: the event is unclassified or classified clean.
 
-    NULL means the classifier did not produce an answer (skipped or
-    crashed — see ``CommentClassifierResult`` docstring); empty list
-    means the classifier ran and found nothing. Both are NOT-flagged.
-    Any non-empty list flags the row.
+    Three equivalent "not flagged" shapes:
+    - SQL NULL (classifier skipped/crashed; the preferred encoding now
+      that the column uses ``JSON(none_as_null=True)``);
+    - JSON ``null`` literal (legacy rows written before the model fix —
+      the plain JSON type serialised Python ``None`` as JSON ``"null"``);
+    - JSON empty array (classifier ran and found nothing).
 
-    JSON equality comparison against ``[]`` works on both PostgreSQL
-    and SQLite via SQLAlchemy's JSON type.
+    Any non-empty list flags the row.
     """
 
     return or_(
         col(ActivityEvent.classifier_flags).is_(None),
+        col(ActivityEvent.classifier_flags) == JSON.NULL,
         col(ActivityEvent.classifier_flags) == [],
     )
 

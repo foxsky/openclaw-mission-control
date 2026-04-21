@@ -29,8 +29,12 @@ class ActivityEvent(QueryModel, table=True):
     # emitter. Populated at write time for comment events; None for
     # historical rows and non-comment event types. Lets GET /comments
     # filter flagged rows without joining to shadow_metric_events.
+    # none_as_null=True so Python ``None`` persists as SQL NULL rather
+    # than the JSON literal ``null``. Without this, ``IS NULL`` never
+    # matches skipped/crashed classifier runs and filter predicates
+    # would treat them as flagged in default_hidden/hidden_strict modes.
     classifier_flags: list[str] | None = Field(
         default=None,
-        sa_column=Column(JSON, nullable=True),
+        sa_column=Column(JSON(none_as_null=True), nullable=True),
     )
     created_at: datetime = Field(default_factory=utcnow)

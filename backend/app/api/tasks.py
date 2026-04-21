@@ -1989,6 +1989,7 @@ INCLUDE_FLAGGED_QUERY = Query(default=False)
     response_model=DefaultLimitOffsetPage[TaskCommentRead],
 )
 async def list_task_comments(
+    board: Board = BOARD_READ_DEP,
     task: Task = TASK_DEP,
     session: AsyncSession = SESSION_DEP,
     actor: ActorContext = ACTOR_DEP,
@@ -2000,12 +2001,7 @@ async def list_task_comments(
     ``app/services/comment_policy.py`` for filter semantics.
     """
 
-    filter_mode = (
-        await session.scalar(
-            select(Board.comment_signal_filter).where(Board.id == task.board_id)
-        )
-        or "off"
-    )
+    filter_mode = board.comment_signal_filter
     statement = (
         select(ActivityEvent)
         .where(col(ActivityEvent.task_id) == task.id)

@@ -14,7 +14,13 @@ the filter's decision tree.
 
 from __future__ import annotations
 
-from sqlmodel import select
+from collections.abc import AsyncIterator
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import JSON, update
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlmodel import SQLModel, select
 
 from app.models.activity_events import ActivityEvent
 from app.services.comment_policy import (
@@ -132,3 +138,95 @@ def test_hidden_strict_filters_non_agent_by_default() -> None:
         include_flagged=False,
     )
     assert _where_filters_on_classifier_flags(result)
+
+
+# --------------------------------------------------------------------
+# DB-backed integration tests. These persist ActivityEvent rows with
+# every "not flagged" encoding (SQL NULL, legacy JSON-null literal,
+# empty list) and one flagged row, then run the filtered SELECT to
+# confirm which rows actually survive the WHERE clause — the part the
+# clause-inspection tests above cannot cover.
+# --------------------------------------------------------------------
+
+
+async def _seed_events(
+    session: AsyncSession,
+) -> tuple[ActivityEvent, ActivityEvent, ActivityEvent, ActivityEvent]:
+    null_evt = ActivityEvent(event_type="task.comment", classifier_flags=None)
+    empty_evt = ActivityEvent(event_type="task.comment", classifier_flags=[])
+    flagged_evt = ActivityEvent(
+        event_type="task.comment", classifier_flags=["ack_only"]
+    )
+    legacy_evt = ActivityEvent(event_type="task.comment", classifier_flags=[])
+    session.add_all([null_evt, empty_evt, flagged_evt, legacy_evt])
+    await session.commit()
+    # Simulate a row written by the pre-fix model (Python None persisted
+    # as the JSON ``null`` literal, not SQL NULL). ``JSON.NULL`` is
+    # SQLAlchemy's sentinel for exactly that encoding.
+    await session.execute(
+        update(ActivityEvent)
+        .where(ActivityEvent.id == legacy_evt.id)
+        .values(classifier_flags=JSON.NULL),
+    )
+    await session.commit()
+    return null_evt, empty_evt, flagged_evt, legacy_evt
+
+
+@pytest_asyncio.fixture
+async def db_session() -> AsyncIterator[AsyncSession]:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+    session = AsyncSession(engine, expire_on_commit=False)
+    try:
+        yield session
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_off_mode_returns_all_rows(db_session: AsyncSession) -> None:
+    null_evt, empty_evt, flagged_evt, legacy_evt = await _seed_events(db_session)
+    stmt = apply_comment_signal_filter(
+        select(ActivityEvent.id),
+        filter_mode=FILTER_OFF,
+        actor_is_agent=True,
+        include_flagged=False,
+    )
+    ids = set((await db_session.execute(stmt)).scalars().all())
+    assert ids == {null_evt.id, empty_evt.id, flagged_evt.id, legacy_evt.id}
+
+
+@pytest.mark.asyncio
+async def test_default_hidden_drops_only_flagged_rows(
+    db_session: AsyncSession,
+) -> None:
+    """All three not-flagged encodings survive; only the populated list is filtered."""
+
+    null_evt, empty_evt, flagged_evt, legacy_evt = await _seed_events(db_session)
+    stmt = apply_comment_signal_filter(
+        select(ActivityEvent.id),
+        filter_mode=FILTER_DEFAULT_HIDDEN,
+        actor_is_agent=False,
+        include_flagged=False,
+    )
+    ids = set((await db_session.execute(stmt)).scalars().all())
+    assert ids == {null_evt.id, empty_evt.id, legacy_evt.id}
+    assert flagged_evt.id not in ids
+
+
+@pytest.mark.asyncio
+async def test_hidden_strict_agent_drops_only_flagged_rows(
+    db_session: AsyncSession,
+) -> None:
+    null_evt, empty_evt, flagged_evt, legacy_evt = await _seed_events(db_session)
+    stmt = apply_comment_signal_filter(
+        select(ActivityEvent.id),
+        filter_mode=FILTER_HIDDEN_STRICT,
+        actor_is_agent=True,
+        include_flagged=True,
+    )
+    ids = set((await db_session.execute(stmt)).scalars().all())
+    assert ids == {null_evt.id, empty_evt.id, legacy_evt.id}
+    assert flagged_evt.id not in ids
