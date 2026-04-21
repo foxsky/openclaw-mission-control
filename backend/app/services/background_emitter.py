@@ -44,12 +44,17 @@ class BackgroundEmitter:
 
     def schedule(
         self, coro: Coroutine[Any, Any, None], *, log_key: str
-    ) -> None:
+    ) -> bool:
         """Schedule ``coro`` to run in the background.
 
         ``log_key`` is any string identifier (task id, board id, etc.)
         that will appear in the "backlog full, dropped" WARN line if
         the emitter is at capacity.
+
+        Returns True when the coroutine is actually queued on the
+        event loop; returns False when the backlog was full and the
+        coroutine was closed (so the caller can suppress any dedupe
+        bookkeeping tied to the emit).
         """
 
         if len(self._pending) >= self._max_pending:
@@ -61,10 +66,14 @@ class BackgroundEmitter:
                 self._max_pending,
                 log_key,
             )
-            return
+            # Close the already-constructed coroutine so asyncio
+            # doesn't later emit "coroutine was never awaited".
+            coro.close()
+            return False
         task = asyncio.create_task(coro, name=f"background_emitter.{self._name}")
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
+        return True
 
     async def drain(self) -> None:
         """Wait for any in-flight tasks to complete.

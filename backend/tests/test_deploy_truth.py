@@ -129,6 +129,23 @@ async def test_fetch_raises_on_non_json_body() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_rejects_malformed_live_sha() -> None:
+    """A target returning ``sha=abcdef1zzz`` would pass
+    ``live.startswith(packet)`` for ``packet=abcdef1`` and silently
+    false-pass the deploy-truth gate. Live SHA must satisfy the same
+    hex shape the packet validator enforces."""
+
+    transport = httpx.MockTransport(
+        lambda r: httpx.Response(200, json={"sha": "abcdef1zzz"})
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(DeployTruthFetchError, match="malformed sha"):
+            await fetch_build_metadata(
+                "https://example.test", client=client
+            )
+
+
+@pytest.mark.asyncio
 async def test_fetch_handles_trailing_slash_target() -> None:
     observed: list[str] = []
 
@@ -284,3 +301,46 @@ async def test_guard_rejects_live_payload_without_sha(
     with pytest.raises(HTTPException) as exc:
         await _require_deploy_truth(_task(), actor_agent_id=None)
     assert exc.value.detail["code"] == ERROR_CODE_DEPLOY_TRUTH_UNREACHABLE  # type: ignore[index]
+
+
+def test_projected_task_applies_only_declared_fields() -> None:
+    """The projection helper copies the fields deploy-truth reads and
+    overlays only the fields the PATCH actually declared. This is the
+    anti-autoflush shape — we check the projected state before
+    mutating the ORM task so the /__build fetch can't hold a row
+    lock while blocked on HTTP."""
+
+    from app.api.tasks import _projected_task
+
+    current = _task(status="in_progress", packet_commit_sha="abcdef1")
+    # PATCH declares a status transition + new SHA.
+    projected = _projected_task(
+        current,
+        {"status": "done", "packet_commit_sha": "9999999"},
+    )
+    # Projected task reflects the declared mutation…
+    assert projected.status == "done"
+    assert projected.packet_commit_sha == "9999999"
+    # …but the source task is untouched.
+    assert current.status == "in_progress"
+    assert current.packet_commit_sha == "abcdef1"
+
+
+def test_projected_task_preserves_unmentioned_fields() -> None:
+    """Fields not mentioned in the PATCH updates dict must read
+    through from the source task."""
+
+    from app.api.tasks import _projected_task
+
+    current = _task(
+        status="in_progress",
+        validation_target="https://example.test",
+        supports_build_metadata=True,
+        packet_commit_sha="abcdef1",
+    )
+    projected = _projected_task(current, {"status": "review"})
+    assert projected.status == "review"
+    # No mutation → inherited from source.
+    assert projected.validation_target == "https://example.test"
+    assert projected.supports_build_metadata is True
+    assert projected.packet_commit_sha == "abcdef1"

@@ -411,6 +411,38 @@ def _require_delivery_contract_with_metric(
 
 _DEPLOY_TRUTH_REQUIRED_STATUSES = STATUS_GATES["deploy_truth"]
 
+_DEPLOY_TRUTH_PROJECTED_FIELDS = (
+    "status",
+    "validation_target",
+    "packet_commit_sha",
+    "supports_build_metadata",
+)
+
+
+def _projected_task(task: Task, updates: dict[str, object]) -> Task:
+    """Return a detached ``Task`` copy with ``updates`` applied.
+
+    Used by the deploy-truth gate so the SHA fetch runs against the
+    PATCH's intended state without mutating the ORM row (which would
+    mark it dirty + risk autoflush during the outbound HTTP call).
+    Only the fields the gate reads are projected — the returned Task
+    is a throwaway, never added to a session.
+    """
+
+    projected = Task(
+        id=task.id,
+        board_id=task.board_id,
+        title=task.title,
+        status=task.status,
+        validation_target=task.validation_target,
+        packet_commit_sha=task.packet_commit_sha,
+        supports_build_metadata=task.supports_build_metadata,
+    )
+    for field in _DEPLOY_TRUTH_PROJECTED_FIELDS:
+        if field in updates:
+            setattr(projected, field, updates[field])
+    return projected
+
 
 async def _require_deploy_truth(
     task: Task,
@@ -573,10 +605,15 @@ def _schedule_deploy_degraded_emit(
     # Process-lifetime bound so the dedupe set can't grow forever on a
     # long-running gateway. When full, drop the oldest-added half —
     # good enough for a signal that operators burn down by hand.
+    #
+    # Known limitation: cross-worker runs share no state, so a task
+    # seen on worker A and again on worker B emits twice. Also a
+    # legitimate re-entry (``done → inbox → done`` with same reason)
+    # emits only once per process. Cross-worker + TTL fixes belong
+    # with the Phase VI dashboard work.
     if len(_DEPLOY_DEGRADED_DEDUPE) >= _DEPLOY_DEGRADED_DEDUPE_MAX:
         _DEPLOY_DEGRADED_DEDUPE.clear()
-    _DEPLOY_DEGRADED_DEDUPE.add(key)
-    _deploy_degraded_emitter.schedule(
+    enqueued = _deploy_degraded_emitter.schedule(
         emit_deploy_validation_degraded_metric(
             task_id=task_id,
             board_id=board_id,
@@ -586,6 +623,11 @@ def _schedule_deploy_degraded_emit(
         ),
         log_key=str(task_id),
     )
+    if enqueued:
+        # Only record the dedupe key when the emit actually ran —
+        # otherwise a backlog-full drop would silently suppress the
+        # next retry for the same (task, status, reason) triple.
+        _DEPLOY_DEGRADED_DEDUPE.add(key)
 
 
 async def drain_deploy_degraded_emit_tasks() -> None:
@@ -3340,6 +3382,25 @@ async def _finalize_updated_task(
     *,
     update: _TaskUpdateInput,
 ) -> TaskRead:
+    # Phase V §I8: run the deploy-truth gate FIRST, before any ORM
+    # mutation or autoflushing DB query. The /__build fetch blocks
+    # for up to 5s; holding that wall-clock window inside an open
+    # transaction would keep flushed row locks live through the
+    # outbound HTTP call. Run the gate against a projected state that
+    # reflects the PATCH's intended mutations without touching the
+    # session.
+    if {
+        "status",
+        "validation_target",
+        "packet_commit_sha",
+        "supports_build_metadata",
+    }.intersection(update.updates):
+        projected = _projected_task(update.task, update.updates)
+        await _require_deploy_truth(
+            projected,
+            actor_agent_id=_comment_actor_id(update.actor),
+        )
+
     for key, value in update.updates.items():
         setattr(update.task, key, value)
     if {
@@ -3364,21 +3425,6 @@ async def _finalize_updated_task(
         # an ownerless active task.
         _require_delivery_contract_with_metric(
             task=update.task,
-            actor_agent_id=_comment_actor_id(update.actor),
-        )
-    # Phase V §I8: run the deploy-truth gate on any mutation that
-    # could affect the outcome — status transition, target change,
-    # packet-SHA edit, or capability-flag flip. The gate itself
-    # short-circuits on non-review/done states so unrelated PATCHes
-    # don't pay the HTTP-fetch cost.
-    if {
-        "status",
-        "validation_target",
-        "packet_commit_sha",
-        "supports_build_metadata",
-    }.intersection(update.updates):
-        await _require_deploy_truth(
-            update.task,
             actor_agent_id=_comment_actor_id(update.actor),
         )
     await _require_no_pending_approval_for_status_change_when_enabled(

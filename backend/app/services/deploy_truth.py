@@ -21,6 +21,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.core.logging import get_logger
+from app.schemas.tasks import _SHA_HEX_RE
 
 logger = get_logger(__name__)
 
@@ -93,8 +94,18 @@ async def fetch_build_metadata(
             )
         raw_sha = payload.get("sha")
         sha = raw_sha.strip().lower() if isinstance(raw_sha, str) else None
+        sha = sha or None
+        if sha is not None and not _SHA_HEX_RE.match(sha):
+            # Without this check a live ``/__build`` that returns
+            # garbage like ``"abcdef1zzz"`` would pass
+            # ``live.startswith(packet)`` for packet ``"abcdef1"``, so
+            # the comparator would false-pass. Reuse the same
+            # 7–40 lowercase-hex validator the packet fields use.
+            raise DeployTruthFetchError(
+                f"{normalised} returned a malformed sha: {sha!r}"
+            )
         return BuildMetadata(
-            sha=sha or None,
+            sha=sha,
             built_at=_as_str(payload.get("built_at")),
             branch=_as_str(payload.get("branch")),
             target=_as_str(payload.get("target")),
