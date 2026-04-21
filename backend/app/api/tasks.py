@@ -87,6 +87,10 @@ from app.services.blockers import (
     task_has_open_blocker,
     task_ids_with_open_blocker,
 )
+from app.services.operator_decisions import (
+    task_has_pending_operator_decision,
+    task_ids_with_pending_operator_decision,
+)
 from app.services.task_dependencies import (
     blocked_by_dependency_ids,
     dependency_ids_by_task_id,
@@ -253,13 +257,18 @@ def _task_is_blocked(
     blocked_by_task_ids: Sequence[UUID],
     *,
     has_open_blocker: bool = False,
+    has_pending_operator_decision: bool = False,
 ) -> bool:
     """True when the task should be treated as blocked.
 
     Sources, in precedence order: a terminal status clears blockers
-    outright; otherwise an unresolved dependency (§I1 graph edge), an
-    unacknowledged operator decision (§I3), or any open ``Blocker``
-    sidecar row (§I1 structured object) flips the flag.
+    outright; otherwise any of:
+    - an unresolved dependency (§I1 graph edge),
+    - the legacy ``Task.operator_decision_required`` flag (§I3
+      compatibility shim, preserved during migration),
+    - an open ``Blocker`` sidecar row (§I1 structured object),
+    - a pending ``OperatorDecision`` entity linked to the task (§I3
+      first-class object).
     """
 
     if _status_clears_blockers(task.status):
@@ -268,6 +277,7 @@ def _task_is_blocked(
         bool(blocked_by_task_ids)
         or _task_has_operator_decision_block(task)
         or has_open_blocker
+        or has_pending_operator_decision
     )
 
 
@@ -1540,6 +1550,9 @@ async def _task_read_page(
     blocked_task_ids = await task_ids_with_open_blocker(
         session, board_id=board_id, task_ids=task_ids
     )
+    pending_decision_task_ids = await task_ids_with_pending_operator_decision(
+        session, board_id=board_id, task_ids=task_ids
+    )
 
     output: list[TaskRead] = []
     for task in tasks:
@@ -1562,6 +1575,9 @@ async def _task_read_page(
                         task,
                         blocked_by,
                         has_open_blocker=task.id in blocked_task_ids,
+                        has_pending_operator_decision=(
+                            task.id in pending_decision_task_ids
+                        ),
                     ),
                     "custom_field_values": custom_field_values_by_task_id.get(task.id, {}),
                 },
@@ -1581,12 +1597,13 @@ async def _stream_task_state(
     dict[UUID, TagState],
     dict[UUID, TaskCustomFieldValues],
     set[UUID],
+    set[UUID],
 ]:
     task_ids = [
         task.id for event, task in rows if task is not None and event.event_type != "task.comment"
     ]
     if not task_ids:
-        return {}, {}, {}, {}, set()
+        return {}, {}, {}, {}, set(), set()
 
     unique_task_ids = list({*task_ids})
     tag_state_by_task_id = await load_tag_state(
@@ -1609,6 +1626,11 @@ async def _stream_task_state(
     blocked_task_ids = await task_ids_with_open_blocker(
         session, board_id=board_id, task_ids=unique_task_ids
     )
+    pending_decision_task_ids = (
+        await task_ids_with_pending_operator_decision(
+            session, board_id=board_id, task_ids=unique_task_ids
+        )
+    )
     dep_status: dict[UUID, str] = {}
     if dep_ids:
         dep_status = await dependency_status_by_id(
@@ -1622,6 +1644,7 @@ async def _stream_task_state(
         tag_state_by_task_id,
         custom_field_values_by_task_id,
         blocked_task_ids,
+        pending_decision_task_ids,
     )
 
 
@@ -1634,6 +1657,7 @@ def _task_event_payload(
     tag_state_by_task_id: dict[UUID, TagState],
     custom_field_values_by_task_id: dict[UUID, TaskCustomFieldValues] | None = None,
     blocked_task_ids: set[UUID] | None = None,
+    pending_decision_task_ids: set[UUID] | None = None,
 ) -> dict[str, object]:
     resolved_custom_field_values_by_task_id = custom_field_values_by_task_id or {}
     payload: dict[str, object] = {
@@ -1673,6 +1697,10 @@ def _task_event_payload(
                         blocked_task_ids is not None
                         and task.id in blocked_task_ids
                     ),
+                    has_pending_operator_decision=(
+                        pending_decision_task_ids is not None
+                        and task.id in pending_decision_task_ids
+                    ),
                 ),
                 "custom_field_values": resolved_custom_field_values_by_task_id.get(
                     task.id,
@@ -1707,6 +1735,7 @@ async def _task_event_generator(
                 tag_state_by_task_id,
                 custom_field_values_by_task_id,
                 blocked_task_ids,
+                pending_decision_task_ids,
             ) = await _stream_task_state(
                 session,
                 board_id=board_id,
@@ -1731,6 +1760,7 @@ async def _task_event_generator(
                 tag_state_by_task_id=tag_state_by_task_id,
                 custom_field_values_by_task_id=custom_field_values_by_task_id,
                 blocked_task_ids=blocked_task_ids,
+                pending_decision_task_ids=pending_decision_task_ids,
             )
             yield {"event": "task", "data": json.dumps(payload)}
         await asyncio.sleep(2)
@@ -2301,6 +2331,9 @@ async def _task_read_response(
     has_open_blocker = await task_has_open_blocker(
         session, board_id=board_id, task_id=task.id
     )
+    has_pending_decision = await task_has_pending_operator_decision(
+        session, board_id=board_id, task_id=task.id
+    )
     return TaskRead.model_validate(task, from_attributes=True).model_copy(
         update={
             "depends_on_task_ids": dep_ids,
@@ -2308,7 +2341,10 @@ async def _task_read_response(
             "tags": tag_state.tags,
             "blocked_by_task_ids": blocked_ids,
             "is_blocked": _task_is_blocked(
-                task, blocked_ids, has_open_blocker=has_open_blocker
+                task,
+                blocked_ids,
+                has_open_blocker=has_open_blocker,
+                has_pending_operator_decision=has_pending_decision,
             ),
             "custom_field_values": custom_field_values_by_task_id.get(task.id, {}),
         },

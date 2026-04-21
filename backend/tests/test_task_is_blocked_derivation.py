@@ -20,8 +20,16 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.tasks import _task_is_blocked
 from app.models.blockers import Blocker
+from app.models.operator_decisions import (
+    OperatorDecision,
+    OperatorDecisionTaskLink,
+)
 from app.models.tasks import Task
 from app.services.blockers import task_has_open_blocker, task_ids_with_open_blocker
+from app.services.operator_decisions import (
+    task_has_pending_operator_decision,
+    task_ids_with_pending_operator_decision,
+)
 
 
 @pytest_asyncio.fixture
@@ -53,6 +61,23 @@ def test_open_blocker_flag_flips_is_blocked_true() -> None:
     task = _task()
     assert not _task_is_blocked(task, [])
     assert _task_is_blocked(task, [], has_open_blocker=True)
+
+
+def test_pending_operator_decision_flips_is_blocked_true() -> None:
+    """The Phase III bridge: a pending OperatorDecision blocks the task
+    even when the legacy flag is False and no Blocker row exists."""
+
+    task = _task()
+    assert not _task_is_blocked(task, [])
+    assert _task_is_blocked(task, [], has_pending_operator_decision=True)
+
+
+def test_legacy_operator_decision_flag_still_blocks() -> None:
+    """Compatibility rule: the legacy bool flag keeps working during
+    migration, regardless of whether the entity table has any rows."""
+
+    task = _task(operator_decision_required=True)
+    assert _task_is_blocked(task, [])
 
 
 def test_terminal_status_still_clears_open_blocker() -> None:
@@ -108,6 +133,51 @@ async def test_scalar_exists_honors_resolved_at(
         db_session, board_id=board_id, task_id=open_task_id
     )
     assert not await task_has_open_blocker(
+        db_session, board_id=board_id, task_id=resolved_task_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_pending_decision_preloader_joins_link_and_filters_pending(
+    db_session: AsyncSession,
+) -> None:
+    """Batch preloader must return only tasks with a PENDING (not
+    resolved, not cancelled) decision linked via the sidecar table."""
+
+    board_id = uuid4()
+    pending_task_id = uuid4()
+    resolved_task_id = uuid4()
+    unlinked_task_id = uuid4()
+    pending = OperatorDecision(board_id=board_id, question="pending?")
+    resolved = OperatorDecision(
+        board_id=board_id, question="resolved?", status="resolved"
+    )
+    db_session.add(pending)
+    db_session.add(resolved)
+    await db_session.commit()
+    db_session.add(
+        OperatorDecisionTaskLink(
+            decision_id=pending.id, task_id=pending_task_id
+        ),
+    )
+    db_session.add(
+        OperatorDecisionTaskLink(
+            decision_id=resolved.id, task_id=resolved_task_id
+        ),
+    )
+    await db_session.commit()
+
+    blocked = await task_ids_with_pending_operator_decision(
+        db_session,
+        board_id=board_id,
+        task_ids=[pending_task_id, resolved_task_id, unlinked_task_id],
+    )
+    assert blocked == {pending_task_id}
+
+    assert await task_has_pending_operator_decision(
+        db_session, board_id=board_id, task_id=pending_task_id
+    )
+    assert not await task_has_pending_operator_decision(
         db_session, board_id=board_id, task_id=resolved_task_id
     )
 

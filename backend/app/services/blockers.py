@@ -30,7 +30,8 @@ async def task_ids_with_open_blocker(
 
     "Open" means ``resolved_at IS NULL``. The board_id filter keeps
     the query tenant-scoped and lets the partial
-    ``ix_blockers_board_id_open`` index do the work on Postgres.
+    ``ix_blockers_board_id_task_id_open`` index drive both the
+    lookup and the IN filter on Postgres.
     """
 
     task_id_list = list(task_ids)
