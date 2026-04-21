@@ -179,6 +179,9 @@ def _operator_decision_block_error(summary: str | None = None) -> HTTPException:
     )
 
 
+ERROR_CODE_DELIVERY_CONTRACT_INCOMPLETE = "task_delivery_contract_incomplete"
+
+
 def _delivery_contract_incomplete_error(
     *,
     status_value: str,
@@ -188,7 +191,7 @@ def _delivery_contract_incomplete_error(
         status_code=status.HTTP_409_CONFLICT,
         detail={
             "message": f"Task is missing delivery contract metadata required for {status_value}.",
-            "code": "task_delivery_contract_incomplete",
+            "code": ERROR_CODE_DELIVERY_CONTRACT_INCOMPLETE,
             "status": status_value,
             "missing_fields": list(missing_fields),
         },
@@ -254,6 +257,19 @@ def _require_operator_decision_task_not_active(task: Task) -> None:
     raise _operator_decision_block_error(task.operator_decision_summary)
 
 
+def _delivery_contract_missing_fields_for_task(task: Task) -> list[str]:
+    """Pure check: return the missing contract fields for the task's current
+    state. Empty list means the task's state is actionable."""
+
+    return delivery_contract_missing_fields(
+        status=task.status,
+        review_packet_type=task.review_packet_type,
+        validation_target=task.validation_target,
+        validation_target_kind=task.validation_target_kind,
+        validation_target_scope=task.validation_target_scope,
+    )
+
+
 def _require_delivery_contract_for_task_state(
     *,
     status_value: str,
@@ -276,47 +292,72 @@ def _require_delivery_contract_for_task_state(
         )
 
 
-async def _require_delivery_contract_with_metric(
+def _require_delivery_contract_with_metric(
     *,
     task: Task,
     actor_agent_id: UUID | None,
-    status_value: str,
-    review_packet_type: str | None,
-    validation_target: str | None,
-    validation_target_kind: str | None,
-    validation_target_scope: str | None,
 ) -> None:
-    """Wrapper that emits an actionability-violation shadow metric when the
-    validator is about to raise, then re-raises. The metric fires from a
-    dedicated short-lived session so it survives the caller's transaction
-    rollback. See amendment §A.5 — instrument the existing raise, don't
-    duplicate the check.
+    """Per amendment §A.5: instrument the existing raise, don't duplicate
+    the check. Reads fields off the task, calls the pure checker, and
+    — if missing fields exist — emits the shadow metric in the
+    background (fire-and-forget so a slow DB doesn't delay the 422)
+    and raises the same HTTPException the validator would have raised.
 
     ``actor_agent_id`` is the agent UUID if the transition was agent-
     initiated, None for user/operator paths. User-initiated violations
-    still emit the metric (the failed transition is worth recording
-    regardless of initiator); the agent_id column stays NULL.
+    still emit (the failed transition is worth recording regardless of
+    initiator); the agent_id column stays NULL.
     """
 
-    try:
-        _require_delivery_contract_for_task_state(
+    missing_fields = _delivery_contract_missing_fields_for_task(task)
+    if not missing_fields:
+        return
+    _schedule_actionability_violation_emit(
+        task_id=task.id,
+        board_id=task.board_id,
+        agent_id=actor_agent_id,
+        status_value=task.status,
+        missing_fields=missing_fields,
+    )
+    raise _delivery_contract_incomplete_error(
+        status_value=task.status,
+        missing_fields=missing_fields,
+    )
+
+
+# Hold a strong reference to background emit tasks so asyncio doesn't GC
+# them mid-flight (which would trigger "Task was destroyed but it is
+# pending!" warnings). Completed tasks auto-discard via done callback.
+_ACTIONABILITY_EMIT_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _schedule_actionability_violation_emit(
+    *,
+    task_id: UUID,
+    board_id: UUID | None,
+    agent_id: UUID | None,
+    status_value: str,
+    missing_fields: list[str],
+) -> None:
+    """Fire-and-forget wrapper for emit_actionability_violation_metric.
+
+    The emitter must not delay the 422 response the caller is about to
+    raise; scheduling it as a background task gives the client their
+    error immediately while observability persists asynchronously.
+    """
+
+    task = asyncio.create_task(
+        emit_actionability_violation_metric(
+            task_id=task_id,
+            board_id=board_id,
+            agent_id=agent_id,
             status_value=status_value,
-            review_packet_type=review_packet_type,
-            validation_target=validation_target,
-            validation_target_kind=validation_target_kind,
-            validation_target_scope=validation_target_scope,
-        )
-    except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, dict) else {}
-        if detail.get("code") == "task_delivery_contract_incomplete":
-            await emit_actionability_violation_metric(
-                task_id=task.id,
-                board_id=task.board_id,
-                agent_id=actor_agent_id,
-                status_value=status_value,
-                missing_fields=list(detail.get("missing_fields", [])),
-            )
-        raise
+            missing_fields=missing_fields,
+        ),
+        name="shadow_metrics.actionability_violation_emit",
+    )
+    _ACTIONABILITY_EMIT_TASKS.add(task)
+    task.add_done_callback(_ACTIONABILITY_EMIT_TASKS.discard)
 
 
 async def _reject_pending_move_to_done_approvals_for_task(
@@ -1704,14 +1745,9 @@ async def create_task(
         raise _blocked_task_error(blocked_by)
     if task.operator_decision_required and (task.assigned_agent_id is not None or task.status != "inbox"):
         raise _operator_decision_block_error(task.operator_decision_summary)
-    await _require_delivery_contract_with_metric(
+    _require_delivery_contract_with_metric(
         task=task,
         actor_agent_id=None,  # create_task is user-initiated (USER_AUTH_DEP)
-        status_value=task.status,
-        review_packet_type=task.review_packet_type,
-        validation_target=task.validation_target,
-        validation_target_kind=task.validation_target_kind,
-        validation_target_scope=task.validation_target_scope,
     )
     session.add(task)
     # Ensure the task exists in the DB before inserting dependency rows.
@@ -2945,14 +2981,9 @@ async def _finalize_updated_task(
         "validation_target_kind",
         "validation_target_scope",
     }.intersection(update.updates):
-        await _require_delivery_contract_with_metric(
+        _require_delivery_contract_with_metric(
             task=update.task,
             actor_agent_id=_comment_actor_id(update.actor),
-            status_value=update.task.status,
-            review_packet_type=update.task.review_packet_type,
-            validation_target=update.task.validation_target,
-            validation_target_kind=update.task.validation_target_kind,
-            validation_target_scope=update.task.validation_target_scope,
         )
     await _require_no_pending_approval_for_status_change_when_enabled(
         session,

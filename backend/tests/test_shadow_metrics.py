@@ -238,6 +238,7 @@ async def test_actionability_violation_emits_with_separate_session() -> None:
     import app.services.shadow_metrics as sm
 
     captured: list[ShadowMetricEvent] = []
+    commits: list[int] = [0]
 
     class _CaptureSession:
         async def __aenter__(self) -> "_CaptureSession":
@@ -251,7 +252,7 @@ async def test_actionability_violation_emits_with_separate_session() -> None:
                 captured.append(value)
 
         async def commit(self) -> None:
-            return None
+            commits[0] += 1
 
     def _maker() -> _CaptureSession:
         return _CaptureSession()
@@ -273,6 +274,7 @@ async def test_actionability_violation_emits_with_separate_session() -> None:
         sm.async_session_maker = original  # type: ignore[assignment]
 
     assert len(captured) == 1
+    assert commits[0] == 1
     event = captured[0]
     assert event.event_type == EVENT_TASK_ACTIONABILITY_VIOLATION
     assert event.task_id == task_id
@@ -287,8 +289,11 @@ async def test_actionability_violation_emits_with_separate_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_actionability_violation_emitter_swallows_errors() -> None:
-    """A broken session must not propagate out of the emitter.
+async def test_actionability_violation_emitter_swallows_errors(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A broken session must not propagate out of the emitter, and the
+    failure must be logged so operators can diagnose it.
 
     The 422 the caller is about to raise must not be delayed by an
     observability-only failure.
@@ -296,8 +301,8 @@ async def test_actionability_violation_emitter_swallows_errors() -> None:
 
     import app.services.shadow_metrics as sm
 
-    class _ExplodingSession:
-        async def __aenter__(self) -> "_ExplodingSession":
+    class _ExplodingAddSession:
+        async def __aenter__(self) -> "_ExplodingAddSession":
             return self
 
         async def __aexit__(self, *_a: Any) -> None:
@@ -310,15 +315,17 @@ async def test_actionability_violation_emitter_swallows_errors() -> None:
             return None
 
     original = sm.async_session_maker
-    sm.async_session_maker = lambda: _ExplodingSession()  # type: ignore[assignment]
+    sm.async_session_maker = lambda: _ExplodingAddSession()  # type: ignore[assignment]
     try:
-        await emit_actionability_violation_metric(
-            task_id=uuid4(),
-            board_id=uuid4(),
-            agent_id=None,
-            status_value="review",
-            missing_fields=["review_packet_type"],
-        )
+        with caplog.at_level("ERROR", logger="app.services.shadow_metrics"):
+            await emit_actionability_violation_metric(
+                task_id=uuid4(),
+                board_id=uuid4(),
+                agent_id=None,
+                status_value="review",
+                missing_fields=["review_packet_type"],
+            )
+        assert "actionability_emit_failed" in caplog.text
     finally:
         sm.async_session_maker = original  # type: ignore[assignment]
 
