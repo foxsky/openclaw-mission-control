@@ -2689,18 +2689,30 @@ async def _apply_lead_task_update(
         )
         if attempted_transition:
             raise _blocked_task_error(blocked_by)
-    if effective_operator_decision_required:
-        attempted_fields = set(update.updates.keys())
-        attempted_transition = (
-            "assigned_agent_id" in attempted_fields or "status" in attempted_fields
+    attempted_fields = set(update.updates.keys())
+    attempted_transition = (
+        "assigned_agent_id" in attempted_fields or "status" in attempted_fields
+    )
+    if effective_operator_decision_required and attempted_transition:
+        raise _operator_decision_block_error(
+            effective_operator_decision_summary
+            if isinstance(effective_operator_decision_summary, str)
+            or effective_operator_decision_summary is None
+            else None
         )
-        if attempted_transition:
-            raise _operator_decision_block_error(
-                effective_operator_decision_summary
-                if isinstance(effective_operator_decision_summary, str)
-                or effective_operator_decision_summary is None
-                else None
-            )
+    # Phase III: the new-entity path has to veto just as the legacy
+    # flag does, otherwise a lead can advance a task blocked only by
+    # a pending OperatorDecision — is_blocked would be advisory-only
+    # on the lead path.
+    if (
+        attempted_transition
+        and not effective_operator_decision_required
+        and update.task.board_id is not None
+        and await task_has_pending_operator_decision(
+            session, board_id=update.task.board_id, task_id=update.task.id
+        )
+    ):
+        raise _operator_decision_block_error()
 
     await _lead_apply_assignment(session, update=update)
     await _lead_apply_status(session, update=update)

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import update as sa_update
 from sqlmodel import col, select
 
 from app.api.deps import (
@@ -168,24 +169,35 @@ async def create_operator_decision(
     link management endpoint covers post-creation updates.
     """
 
-    if payload.dependent_task_ids:
+    # Dedupe dependent_task_ids preserving order. Duplicates would
+    # otherwise hit the ``(decision_id, task_id)`` unique constraint
+    # at commit time and surface as a 500 IntegrityError.
+    seen: set[UUID] = set()
+    unique_task_ids: list[UUID] = []
+    for task_id in payload.dependent_task_ids:
+        if task_id in seen:
+            continue
+        seen.add(task_id)
+        unique_task_ids.append(task_id)
+
+    if unique_task_ids:
         # Tenant-isolation guard: every linked task_id must belong to
         # this board. The FK on ``operator_decision_task_links.task_id``
         # points at ``tasks.id`` globally, so without this check a
-        # write-scoped caller could link cross-board tasks and both
-        # leak their UUIDs back in reads and (post-§I6) silently merge
-        # blocking signal across tenants.
+        # write-scoped caller could link cross-board tasks, leak their
+        # UUIDs back in reads, and (post-§I6) silently merge blocking
+        # signal across tenants.
         resolved = (
             await session.exec(
                 select(col(Task.id))
                 .where(col(Task.board_id) == board.id)
-                .where(col(Task.id).in_(list(payload.dependent_task_ids)))
+                .where(col(Task.id).in_(unique_task_ids))
             )
         ).all()
         resolved_set = set(resolved)
         missing = [
             str(task_id)
-            for task_id in payload.dependent_task_ids
+            for task_id in unique_task_ids
             if task_id not in resolved_set
         ]
         if missing:
@@ -205,14 +217,14 @@ async def create_operator_decision(
         created_by_agent_id=actor.agent.id if actor.agent is not None else None,
     )
     session.add(decision)
-    for task_id in payload.dependent_task_ids:
+    for task_id in unique_task_ids:
         session.add(
             OperatorDecisionTaskLink(
                 decision_id=decision.id, task_id=task_id
             ),
         )
     await session.commit()
-    return _decision_read(decision, list(payload.dependent_task_ids))
+    return _decision_read(decision, unique_task_ids)
 
 
 @router.patch(
@@ -230,7 +242,7 @@ async def update_operator_decision(
     decision = await _load_decision(
         session, board_id=board.id, decision_id=decision_id
     )
-    # Preload the task-id list in the same pass so the response can
+    # Preload the task-id list alongside the load so the response can
     # be synthesised without a post-commit refetch. PATCH never
     # mutates the link set today, so the list is invariant across the
     # handler's body.
@@ -247,32 +259,47 @@ async def update_operator_decision(
             detail=f"cannot update a {decision.status} decision",
         )
 
-    mutated = False
+    # Build the mutation dict up front so the write can CAS on status
+    # in a single statement. Without the CAS, two concurrent PATCHes
+    # can both observe ``pending``, both commit, and the audit trail
+    # shows an already-terminal row accepting a second transition.
+    new_values: dict[str, object] = {}
     if payload.status_transition == "resolve":
-        decision.status = "resolved"
-        decision.resolved_at = utcnow()
-        decision.resolved_value = payload.resolved_value
-        mutated = True
+        new_values["status"] = "resolved"
+        new_values["resolved_at"] = utcnow()
+        new_values["resolved_value"] = payload.resolved_value
     elif payload.status_transition == "cancel":
-        decision.status = "cancelled"
-        decision.resolved_at = utcnow()
+        new_values["status"] = "cancelled"
+        new_values["resolved_at"] = utcnow()
         # Clear any draft answer so the audit trail doesn't read
         # "answered yes then cancelled" — cancel means "moot", not
         # "resolved with <stale draft>".
-        decision.resolved_value = None
-        mutated = True
+        new_values["resolved_value"] = None
     elif "resolved_value" in payload.model_fields_set:
-        # Allow sharpening the pre-resolve value while still pending —
-        # e.g. the operator is drafting their answer.
-        decision.resolved_value = payload.resolved_value
-        mutated = True
-
+        # Draft sharpening while still pending.
+        new_values["resolved_value"] = payload.resolved_value
     for field in ("owner_user_id", "unblock_rule"):
         if field in payload.model_fields_set:
-            setattr(decision, field, getattr(payload, field))
-            mutated = True
+            new_values[field] = getattr(payload, field)
 
-    if mutated:
-        session.add(decision)
+    if new_values:
+        result = await session.exec(
+            sa_update(OperatorDecision)
+            .where(col(OperatorDecision.id) == decision.id)
+            .where(col(OperatorDecision.status) == "pending")
+            .values(**new_values),
+        )
+        if result.rowcount == 0:
+            # The row transitioned out of ``pending`` between load and
+            # write — a concurrent resolve/cancel raced us.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="decision state changed concurrently",
+            )
         await session.commit()
+        # Mirror the write back onto the in-memory instance so the
+        # response reflects the persisted state without a re-read.
+        for key, value in new_values.items():
+            setattr(decision, key, value)
+
     return _decision_read(decision, task_ids)

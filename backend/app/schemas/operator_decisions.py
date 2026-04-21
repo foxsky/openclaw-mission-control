@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from sqlmodel import Field, SQLModel
 
 from app.schemas.common import NonEmptyStr
@@ -44,6 +44,17 @@ class OperatorDecisionUpdate(SQLModel):
     unblock_rule: str | None = None
     resolved_value: str | None = None
     status_transition: Literal["resolve", "cancel"] | None = None
+
+    @field_validator("resolved_value", "unblock_rule", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: object) -> object | None:
+        """Blank / whitespace-only strings collapse to None so the
+        ``resolve_requires_value`` guard below sees a truthful null
+        instead of accepting an effectively-empty answer."""
+
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="after")
     def reject_noop_update(self) -> Self:

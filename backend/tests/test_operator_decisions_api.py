@@ -336,6 +336,46 @@ async def test_cancel_clears_draft_resolved_value(
     assert cancelled.resolved_value is None
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="Phase VI: before_flush hook / DB trigger will reject cross-board OperatorDecisionTaskLink rows",
+)
+@pytest.mark.asyncio
+async def test_orm_path_rejects_cross_board_task_link(
+    seeded: tuple[AsyncSession, Board, Task, _ActorStub],
+) -> None:
+    """API-layer guard now 422s cross-board link payloads, but a
+    direct ORM write can still insert a link whose task_id lives on
+    a different board than the decision. Today this XFAILS — commit
+    succeeds. When the DB-level guard lands, this flips green and
+    becomes the regression bar."""
+
+    from sqlalchemy.exc import IntegrityError
+
+    session, board, _task, _actor = seeded
+    other_board_id = uuid4()
+    session.add(
+        Task(
+            id=(foreign_task_id := uuid4()),
+            board_id=other_board_id,
+            title="Foreign",
+            status="in_progress",
+        ),
+    )
+    decision = OperatorDecision(
+        board_id=board.id, question="cross-board?"
+    )
+    session.add(decision)
+    await session.flush()
+    session.add(
+        OperatorDecisionTaskLink(
+            decision_id=decision.id, task_id=foreign_task_id
+        ),
+    )
+    with pytest.raises(IntegrityError):
+        await session.commit()
+
+
 @pytest.mark.asyncio
 async def test_load_decision_404_cross_board(
     seeded: tuple[AsyncSession, Board, Task, _ActorStub],
