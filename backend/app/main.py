@@ -42,6 +42,7 @@ from app.core.rate_limit_backend import RateLimitBackend
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.db.session import init_db
 from app.schemas.health import HealthStatusResponse
+from app.api.tasks import drain_actionability_emit_tasks
 from app.services.openclaw.heartbeat_sweep import heartbeat_sweep_loop, stop_heartbeat_sweep
 from app.services.openclaw.heartbeat_watchdog import (
     heartbeat_watchdog_loop,
@@ -472,6 +473,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     finally:
         await stop_heartbeat_watchdog(watchdog_task, watchdog_stop_event)
         await stop_heartbeat_sweep(sweep_task, sweep_stop_event)
+        # Flush any pending shadow-metric emits so observability signals
+        # survive deploys. Cancellation is logged (not swallowed) inside
+        # the emitter so gather() can't silently eat the signal.
+        await drain_actionability_emit_tasks()
         logger.info("app.lifecycle.stopped")
 
 

@@ -27,6 +27,7 @@ task row.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -89,11 +90,26 @@ async def emit_actionability_violation_metric(
                 agent_id=agent_id,
                 classifier_metadata={
                     "status_value": status_value,
-                    "missing_fields": missing_fields,
+                    # Defensive copy: the caller may hand us the same list
+                    # that will be handed to the raise's error detail; a
+                    # background task reading from a mutated reference
+                    # would record a different value than the raise.
+                    "missing_fields": list(missing_fields),
                 },
             )
             session.add(event)
             await session.commit()
+    except asyncio.CancelledError:
+        # Shutdown or explicit cancellation. Log separately so operators
+        # can distinguish "shadow backlog dropped at shutdown" from a
+        # real emitter bug, then propagate so the caller's gather()
+        # at lifespan drain sees the correct status.
+        logger.info(
+            "shadow_metrics.actionability_emit_cancelled task_id=%s status=%s",
+            task_id,
+            status_value,
+        )
+        raise
     except Exception:
         logger.exception(
             "shadow_metrics.actionability_emit_failed task_id=%s status=%s",

@@ -848,12 +848,9 @@ async def create_task(
                 "operator_decision_summary": task.operator_decision_summary,
             },
         )
-    tasks_api._require_delivery_contract_for_task_state(
-        status_value=task.status,
-        review_packet_type=task.review_packet_type,
-        validation_target=task.validation_target,
-        validation_target_kind=task.validation_target_kind,
-        validation_target_scope=task.validation_target_scope,
+    tasks_api._require_delivery_contract_with_metric(
+        task=task,
+        actor_agent_id=agent_ctx.agent.id,
     )
     if task.assigned_agent_id:
         agent = await Agent.objects.by_id(task.assigned_agent_id).first(session)

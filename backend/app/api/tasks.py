@@ -328,7 +328,11 @@ def _require_delivery_contract_with_metric(
 # Hold a strong reference to background emit tasks so asyncio doesn't GC
 # them mid-flight (which would trigger "Task was destroyed but it is
 # pending!" warnings). Completed tasks auto-discard via done callback.
+# Bounded: under a slow-DB storm the caller still gets 422s immediately,
+# but we drop the observability signal rather than pile up unbounded
+# pool-demand (amplifying the original incident).
 _ACTIONABILITY_EMIT_TASKS: set[asyncio.Task[None]] = set()
+_ACTIONABILITY_EMIT_MAX_PENDING = 128
 
 
 def _schedule_actionability_violation_emit(
@@ -346,6 +350,16 @@ def _schedule_actionability_violation_emit(
     error immediately while observability persists asynchronously.
     """
 
+    if len(_ACTIONABILITY_EMIT_TASKS) >= _ACTIONABILITY_EMIT_MAX_PENDING:
+        logger.warning(
+            "shadow_metrics.actionability_emit_dropped_backlog_full "
+            "pending=%d limit=%d task_id=%s",
+            len(_ACTIONABILITY_EMIT_TASKS),
+            _ACTIONABILITY_EMIT_MAX_PENDING,
+            task_id,
+        )
+        return
+
     task = asyncio.create_task(
         emit_actionability_violation_metric(
             task_id=task_id,
@@ -358,6 +372,20 @@ def _schedule_actionability_violation_emit(
     )
     _ACTIONABILITY_EMIT_TASKS.add(task)
     task.add_done_callback(_ACTIONABILITY_EMIT_TASKS.discard)
+
+
+async def drain_actionability_emit_tasks() -> None:
+    """Wait for any in-flight actionability-emit tasks to complete.
+
+    Called from the FastAPI lifespan shutdown path so pending shadow
+    writes finish (or explicitly cancel + log) before the event loop
+    tears down.
+    """
+
+    pending = list(_ACTIONABILITY_EMIT_TASKS)
+    if not pending:
+        return
+    await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def _reject_pending_move_to_done_approvals_for_task(
