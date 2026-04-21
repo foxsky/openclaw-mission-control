@@ -83,6 +83,7 @@ from app.services.tags import (
     replace_tags,
     validate_tag_ids,
 )
+from app.services.blockers import task_ids_with_open_blocker
 from app.services.task_dependencies import (
     blocked_by_dependency_ids,
     dependency_ids_by_task_id,
@@ -244,10 +245,27 @@ def _task_has_operator_decision_block(task: Task) -> bool:
     return bool(task.operator_decision_required) and not _status_clears_blockers(task.status)
 
 
-def _task_is_blocked(task: Task, blocked_by_task_ids: Sequence[UUID]) -> bool:
+def _task_is_blocked(
+    task: Task,
+    blocked_by_task_ids: Sequence[UUID],
+    *,
+    has_open_blocker: bool = False,
+) -> bool:
+    """True when the task should be treated as blocked.
+
+    Sources, in precedence order: a terminal status clears blockers
+    outright; otherwise an unresolved dependency (§I1 graph edge), an
+    unacknowledged operator decision (§I3), or any open ``Blocker``
+    sidecar row (§I1 structured object) flips the flag.
+    """
+
     if _status_clears_blockers(task.status):
         return False
-    return bool(blocked_by_task_ids) or _task_has_operator_decision_block(task)
+    return (
+        bool(blocked_by_task_ids)
+        or _task_has_operator_decision_block(task)
+        or has_open_blocker
+    )
 
 
 def _require_operator_decision_task_not_active(task: Task) -> None:
@@ -1516,6 +1534,9 @@ async def _task_read_page(
         board_id=board_id,
         task_ids=task_ids,
     )
+    blocked_task_ids = await task_ids_with_open_blocker(
+        session, board_id=board_id, task_ids=task_ids
+    )
 
     output: list[TaskRead] = []
     for task in tasks:
@@ -1534,7 +1555,11 @@ async def _task_read_page(
                     "tag_ids": tag_state.tag_ids,
                     "tags": tag_state.tags,
                     "blocked_by_task_ids": blocked_by,
-                    "is_blocked": _task_is_blocked(task, blocked_by),
+                    "is_blocked": _task_is_blocked(
+                        task,
+                        blocked_by,
+                        has_open_blocker=task.id in blocked_task_ids,
+                    ),
                     "custom_field_values": custom_field_values_by_task_id.get(task.id, {}),
                 },
             ),
@@ -1552,21 +1577,23 @@ async def _stream_task_state(
     dict[UUID, str],
     dict[UUID, TagState],
     dict[UUID, TaskCustomFieldValues],
+    set[UUID],
 ]:
     task_ids = [
         task.id for event, task in rows if task is not None and event.event_type != "task.comment"
     ]
     if not task_ids:
-        return {}, {}, {}, {}
+        return {}, {}, {}, {}, set()
 
+    unique_task_ids = list({*task_ids})
     tag_state_by_task_id = await load_tag_state(
         session,
-        task_ids=list({*task_ids}),
+        task_ids=unique_task_ids,
     )
     deps_map = await dependency_ids_by_task_id(
         session,
         board_id=board_id,
-        task_ids=list({*task_ids}),
+        task_ids=unique_task_ids,
     )
     dep_ids: list[UUID] = []
     for value in deps_map.values():
@@ -1574,17 +1601,25 @@ async def _stream_task_state(
     custom_field_values_by_task_id = await _task_custom_field_values_by_task_id(
         session,
         board_id=board_id,
-        task_ids=list({*task_ids}),
+        task_ids=unique_task_ids,
     )
-    if not dep_ids:
-        return deps_map, {}, tag_state_by_task_id, custom_field_values_by_task_id
-
-    dep_status = await dependency_status_by_id(
-        session,
-        board_id=board_id,
-        dependency_ids=list({*dep_ids}),
+    blocked_task_ids = await task_ids_with_open_blocker(
+        session, board_id=board_id, task_ids=unique_task_ids
     )
-    return deps_map, dep_status, tag_state_by_task_id, custom_field_values_by_task_id
+    dep_status: dict[UUID, str] = {}
+    if dep_ids:
+        dep_status = await dependency_status_by_id(
+            session,
+            board_id=board_id,
+            dependency_ids=list({*dep_ids}),
+        )
+    return (
+        deps_map,
+        dep_status,
+        tag_state_by_task_id,
+        custom_field_values_by_task_id,
+        blocked_task_ids,
+    )
 
 
 def _task_event_payload(
@@ -1595,6 +1630,7 @@ def _task_event_payload(
     dep_status: dict[UUID, str],
     tag_state_by_task_id: dict[UUID, TagState],
     custom_field_values_by_task_id: dict[UUID, TaskCustomFieldValues] | None = None,
+    blocked_task_ids: set[UUID] | None = None,
 ) -> dict[str, object]:
     resolved_custom_field_values_by_task_id = custom_field_values_by_task_id or {}
     payload: dict[str, object] = {
@@ -1627,7 +1663,14 @@ def _task_event_payload(
                 "tag_ids": tag_state.tag_ids,
                 "tags": tag_state.tags,
                 "blocked_by_task_ids": blocked_by,
-                "is_blocked": _task_is_blocked(task, blocked_by),
+                "is_blocked": _task_is_blocked(
+                    task,
+                    blocked_by,
+                    has_open_blocker=(
+                        blocked_task_ids is not None
+                        and task.id in blocked_task_ids
+                    ),
+                ),
                 "custom_field_values": resolved_custom_field_values_by_task_id.get(
                     task.id,
                     {},
@@ -1655,12 +1698,16 @@ async def _task_event_generator(
 
         async with async_session_maker() as session:
             rows = await _fetch_task_events(session, board_id, last_seen)
-            deps_map, dep_status, tag_state_by_task_id, custom_field_values_by_task_id = (
-                await _stream_task_state(
-                    session,
-                    board_id=board_id,
-                    rows=rows,
-                )
+            (
+                deps_map,
+                dep_status,
+                tag_state_by_task_id,
+                custom_field_values_by_task_id,
+                blocked_task_ids,
+            ) = await _stream_task_state(
+                session,
+                board_id=board_id,
+                rows=rows,
             )
 
         for event, task in rows:
@@ -1680,6 +1727,7 @@ async def _task_event_generator(
                 dep_status=dep_status,
                 tag_state_by_task_id=tag_state_by_task_id,
                 custom_field_values_by_task_id=custom_field_values_by_task_id,
+                blocked_task_ids=blocked_task_ids,
             )
             yield {"event": "task", "data": json.dumps(payload)}
         await asyncio.sleep(2)
@@ -2247,13 +2295,20 @@ async def _task_read_response(
     )
     if _status_clears_blockers(task.status):
         blocked_ids = []
+    has_open_blocker = bool(
+        await task_ids_with_open_blocker(
+            session, board_id=board_id, task_ids=[task.id]
+        )
+    )
     return TaskRead.model_validate(task, from_attributes=True).model_copy(
         update={
             "depends_on_task_ids": dep_ids,
             "tag_ids": tag_state.tag_ids,
             "tags": tag_state.tags,
             "blocked_by_task_ids": blocked_ids,
-            "is_blocked": _task_is_blocked(task, blocked_ids),
+            "is_blocked": _task_is_blocked(
+                task, blocked_ids, has_open_blocker=has_open_blocker
+            ),
             "custom_field_values": custom_field_values_by_task_id.get(task.id, {}),
         },
     )
