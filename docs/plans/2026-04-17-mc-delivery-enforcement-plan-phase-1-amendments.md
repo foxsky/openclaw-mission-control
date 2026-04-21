@@ -334,3 +334,73 @@ No code change required. Purely a routing-and-review protocol clarification. Unl
 2. Ship C.1 in its own commit after the watchdog's existing test suite has one week of baseline data from 4.14 (to measure the false-positive reduction C.1 buys).
 3. Ship C.2 as a one-line protocol update in the Supervisor's routing prompt, synchronized with the 5-layer SOUL template sync process.
 4. Defer complementary 4.15 features to operator runbook; they do not require plan changes.
+
+---
+
+## Part D — OpenClaw 2026.4.20 integration notes (Phase VI feeders)
+
+**Context.** The gateway jumped 2026.4.15 → 2026.4.20 mid-Phase-II. Three changelog deltas introduce capabilities Phase VI (§I6 lane quieting + §I1 free-text-blocker enforcement + §I7 heartbeat deadline surfacing) can lean on without any Phase II or Phase III code change. This section pre-stages them so Phase VI does not have to re-discover the integration points.
+
+All three are **additive and deferred** — none blocks Phase III (operator-decision bridge) or earlier merges. They land when Phase VI consumes them.
+
+### D.1 Auto-file `Blocker` from subagent-failure payloads
+
+**Rationale.** 4.19-beta.1 routed cross-agent subagent spawns through the target agent's bound channel account; 4.20 extended subagent failure payloads with requested role + runtime timing (changelog: *"Agents/subagents: include requested role and runtime timing on subagent failure payloads so parent agents can correlate failed or timed-out child work"*). Today §I1's "no blocked work without a blocker object" invariant depends on humans or reviewer agents filing structured rows. Runtime failures fall through as free-text "blocked on timeout" comments — exactly the footgun the invariant exists to prevent.
+
+**Amendment.** In Phase VI, add a `subagent_failure` sidecar hook:
+
+1. Gateway emits a `subagent_failure` activity event with `{requested_role, runtime_ms, error_class, parent_turn_id}`.
+2. MC's activity ingest path (new service method in `app/services/blockers.py::auto_file_from_subagent_failure`) maps the payload to a `Blocker` row:
+   - `category = "runtime"`
+   - `owner_role = requested_role`
+   - `required_artifact = None`
+   - `citation = f"subagent {requested_role} failed after {runtime_ms}ms: {error_class}"`
+   - `created_by_agent_id = <parent agent id>`
+3. Gated by the board's `structured_blockers_v1` rollout flag (already reserved in the allowlist at `backend/app/schemas/boards.py:23`). Boards not yet graduated continue to see the free-text comment path.
+
+**Gate.** Requires gateway 4.20+. On older gateways the failure payload lacks `requested_role`/`runtime_ms`; the hook degrades to a no-op WARN log. Before enabling on a board, confirm the gateway version via `openclaw health` or `models.authStatus`.
+
+**Bounds.** Do **not** auto-resolve the filed blocker when the retry succeeds — that's an operator decision (audit preservation). Do **not** supersede existing same-task open blockers automatically; the reviewer-or-operator judgement stays in the loop.
+
+### D.2 Handle stale-agent-session rejection as operator-category `Blocker`
+
+**Rationale.** 4.20 gateway sessions reject stale agent-scoped sessions after an agent is removed from config (changelog: *"Gateway/sessions: reject stale agent-scoped sessions after an agent is removed from config while preserving legacy default-agent main-session aliases"*). MC's dispatch path currently treats this as an ambient HTTP error. For a task assigned to the stale agent, the correct surface is a structured blocker the operator can route, not a transient 404.
+
+**Amendment.** In Phase VI, extend the gateway-dispatch error classifier:
+
+1. On `PAIRING_REQUIRED` or stale-agent-session rejection, the dispatcher files a `Blocker` with:
+   - `category = "operator"`
+   - `owner_role = "operator"`
+   - `required_artifact = f"agent `{agent_name}` missing from gateway config"`
+   - `reopen_condition = "re-add agent to openclaw.json and confirm provision"`
+2. The task's `is_blocked` derivation (already wired in Phase II, commit `db72a6a2`) reflects the new row on the next read — no additional plumbing needed.
+3. `doctor`-surface: 4.20's reason-specific `PAIRING_REQUIRED` details (changelog: *"Gateway/pairing: return reason-specific `PAIRING_REQUIRED` details, remediation hints, and request ids"*) flow into the `citation` field so the operator gets remediation text at the row level.
+
+**Gate.** Same `structured_blockers_v1` per-board flag as D.1. Requires gateway 4.20+ for the reason-specific remediation hints; 4.19 and below file a generic citation.
+
+**Compatibility rule.** The legacy default-agent main-session aliases still work (per 4.20 changelog); do not file a blocker on alias-resolvable sessions, only on genuinely-removed agents. The classifier must distinguish.
+
+### D.3 Verify MC WebSocket subscription scope is `operator.read+`
+
+**Rationale.** 4.20 narrowed WebSocket broadcast authorization (changelog: *"Gateway/websocket broadcasts: require `operator.read` (or higher) for chat, agent, and tool-result event frames so pairing-scoped and node-role sessions no longer passively receive session chat content"*). If MC subscribes with a pairing-scoped device token, it will silently stop receiving `chat`/`agent`/`tool-result` frames after the gateway upgrade. Phase 2F's activity ingest, Phase 0's shadow-metric comment classifier, and Phase VI's lane-quieting observability all depend on this channel.
+
+**Amendment.** This is a pre-flight operational verification, not a code change:
+
+1. Before each gateway upgrade past 4.19, confirm MC's active auth method uses a shared-secret operator token or a paired device with `operator.read+` scope.
+2. If MC is running on a narrower-scope token (pairing-only, node-role), upgrade the pairing scope first via `openclaw devices` or rotate the token.
+3. Ship a one-time observability check — an SSE heartbeat on `GET /api/v1/gateways/{gateway_id}/activity/stream` — that flags "no frames received in N minutes while gateway reports traffic" as a health regression. This lives in Phase VI alongside the other observability wires.
+
+**Why not auto-heal.** The correct response to a scope regression is an operator action (re-pair, rotate token). Silently retrying or promoting scope would mask misconfiguration. The check surfaces the problem; the operator fixes it.
+
+### D.4 What Part D does not do
+
+- Does not change Phase II's Blocker/Review schemas or endpoints. All three enhancements reuse the existing `Blocker` row shape.
+- Does not block Phase III. D.1 and D.2 ride on top of the Phase III operator-decision bridge; D.3 is purely operational.
+- Does not require a new `rollout_flags` key. Both D.1 and D.2 gate on `structured_blockers_v1`, which is already in the allowlist.
+- Does not alter the §I1 invariant (*"no blocked work without a blocker object"*) — it mechanizes the invariant in two new sources rather than changing its statement.
+
+### D.5 Sequencing
+
+1. Complete Phase III (operator-decision bridge) before D.1 or D.2. Their auto-filed rows interact with the operator-decision routing layer.
+2. Land D.3 operational check as a standalone commit during Phase IV or V prep, tied to the next gateway upgrade.
+3. D.1 + D.2 ship together in Phase VI, gated per-board by `structured_blockers_v1`. Graduate the Dev Squad board first for one week of shadow data before widening.
