@@ -3279,9 +3279,9 @@ async def _record_task_comment_from_update(
 ) -> None:
     if update.comment is None or not update.comment.strip():
         return
-    await _require_lane_quieting_allows_comment(
-        session, task=update.task, actor=update.actor
-    )
+    # Gate is already enforced pre-commit in ``_finalize_updated_task``
+    # so the whole PATCH (task mutation + comment) commits atomically
+    # or rejects atomically. No second gate call here.
     agent_id = (
         update.actor.agent.id
         if update.actor.actor_type == "agent" and update.actor.agent
@@ -3457,6 +3457,21 @@ async def _finalize_updated_task(
         await _require_deploy_truth(
             projected,
             actor_agent_id=_comment_actor_id(update.actor),
+        )
+
+    # Phase VI §I6: the inline-comment path (PATCH with ``comment``)
+    # commits the task mutation first and calls the gate in
+    # ``_record_task_comment_from_update`` afterwards. If the gate
+    # rejects the comment, the task mutation would already be
+    # persisted while the caller sees a 403. Check the gate here,
+    # pre-commit, so the whole PATCH either lands atomically or
+    # rejects atomically.
+    if (
+        update.comment is not None
+        and update.comment.strip()
+    ):
+        await _require_lane_quieting_allows_comment(
+            session, task=update.task, actor=update.actor
         )
 
     for key, value in update.updates.items():

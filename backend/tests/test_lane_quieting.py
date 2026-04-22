@@ -180,3 +180,73 @@ async def test_task_without_blockers_is_open(
         task=bare_task,
         author_agent_id=uuid4(),
     )
+
+
+# --------------------------------------------------------------------
+# H1 regression from Codex review: PATCH with both a task mutation
+# AND a blocked-lane comment must be atomic — reject the whole PATCH
+# at the gate instead of committing the mutation then 403'ing the
+# comment.
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_patch_lane_gate_runs_before_task_mutation_commits(
+    seeded: tuple[AsyncSession, Board, Task, Blocker],
+) -> None:
+    """Compose a ``_TaskUpdateInput`` that carries both a real mutation
+    and a comment, then run ``_finalize_updated_task`` — the gate
+    should raise 403 BEFORE the task mutation lands, so a re-read of
+    the task shows the original status.
+
+    This locks the Codex-flagged partial-commit bug: prior to the fix,
+    the task mutation committed at line 3558 and the gate raised
+    afterwards in ``_record_task_comment_from_update``.
+    """
+
+    from dataclasses import dataclass
+
+    from fastapi import HTTPException
+
+    from app.api import tasks as tasks_module
+
+    session, board, task, _blocker = seeded
+
+    # Build a minimal ``ActorContext`` + ``_TaskUpdateInput`` shape.
+    @dataclass
+    class _ActorStub:
+        agent: object
+        actor_type: str = "agent"
+        user: object | None = None
+
+    @dataclass
+    class _AgentStub:
+        id: object
+
+    # Non-owner agent (the lane quieting is directed at them).
+    other_agent_id = uuid4()
+    actor = _ActorStub(agent=_AgentStub(id=other_agent_id))
+
+    original_status = task.status
+    update = tasks_module._TaskUpdateInput(
+        task=task,
+        actor=actor,  # type: ignore[arg-type]
+        board_id=board.id,
+        previous_status=original_status,
+        previous_assigned=task.assigned_agent_id,
+        status_requested=True,
+        updates={"status": "review"},
+        comment="trying to slip a comment in",
+        depends_on_task_ids=None,
+        tag_ids=None,
+        custom_field_values={},
+        custom_field_values_set=False,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await tasks_module._finalize_updated_task(session, update=update)
+    assert exc.value.status_code == 403
+    # Re-read the task — status should be unchanged.
+    await session.rollback()
+    await session.refresh(task)
+    assert task.status == original_status
