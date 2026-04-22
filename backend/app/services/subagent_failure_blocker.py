@@ -1,26 +1,10 @@
-"""Part D.1: auto-file runtime Blocker from a subagent-failure payload.
+"""Auto-file a ``runtime``-category ``Blocker`` from a 4.20+
+subagent-failure payload (Part D.1).
 
-4.20 extended subagent failure payloads with ``requested_role`` and
-``runtime_ms`` so parent agents can correlate failed/timed-out child
-work (changelog: *"Agents/subagents: include requested role and
-runtime timing on subagent failure payloads so parent agents can
-correlate failed or timed-out child work"*). §I1's "no blocked work
-without a blocker object" invariant depends on structured rows;
-runtime failures today fall through as free-text "blocked on timeout"
-comments — exactly the footgun the invariant exists to prevent.
-
-This service maps a validated payload into a ``Blocker`` row so the
-Supervisor sees the routable runtime-category object instead of
-reading prose.
-
-Ingest wiring follow-up: as of this commit MC has no client
-subscription to the gateway's activity stream, so nothing calls this
-filer yet. When a push/subscribe path lands (agent POST webhook or
-outbound SSE subscription), wire through ``parse_subagent_failure_payload``
-+ ``file_subagent_failure_blocker_if_configured``.
-
-See docs/plans/2026-04-17-mc-delivery-enforcement-plan-phase-1-amendments.md
-Part D.1 for the plan.
+Dedupe is check-then-insert; relies on MC's single-worker ingest.
+Concurrent failure events for the same (task, role) can double-
+insert — Phase VI follow-up: partial unique index + IntegrityError
+handling. Same constraint the Part D.2 stale-agent filer inherits.
 """
 
 from __future__ import annotations
@@ -28,12 +12,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+from sqlalchemy import exists as sql_exists
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.blockers import Blocker
 from app.models.boards import Board
+from app.schemas.blockers import BlockerCategory
 from app.schemas.boards import (
     STRUCTURED_BLOCKERS_V1_FLAG,
     board_rollout_flag_enabled,
@@ -41,15 +27,12 @@ from app.schemas.boards import (
 
 logger = get_logger(__name__)
 
+_CATEGORY_RUNTIME: BlockerCategory = "runtime"
+
 
 @dataclass(frozen=True, slots=True)
 class SubagentFailurePayload:
-    """Validated subagent-failure payload from gateway 4.20+.
-
-    ``parent_turn_id`` is optional — the plan lists it but older 4.20
-    builds may omit it; treat it as metadata, not a load-bearing
-    routing key.
-    """
+    """Validated subagent-failure payload from gateway 4.20+."""
 
     requested_role: str
     runtime_ms: int
@@ -62,11 +45,12 @@ def parse_subagent_failure_payload(
 ) -> SubagentFailurePayload | None:
     """Validate a gateway payload into :class:`SubagentFailurePayload`.
 
-    Return None (and WARN-log) when required fields are missing or
-    mistyped. Older gateways (4.19 and earlier) emit subagent-failure
-    events without ``requested_role``/``runtime_ms`` — the correct
-    behaviour per the plan is to degrade to a no-op, not to file a
-    half-populated blocker the operator can't route.
+    Returns None (and WARN-logs) on missing/mistyped fields so events
+    from 4.19 or earlier (missing ``requested_role``/``runtime_ms``)
+    degrade to a no-op rather than filing a half-populated row the
+    operator can't route. The per-field WARN prefixes are deliberately
+    granular — operator debugging of gateway-version skew keys off
+    them.
     """
 
     if not isinstance(raw, dict):
@@ -123,26 +107,22 @@ async def _open_subagent_runtime_blocker_exists(
     task_id: UUID,
     requested_role: str,
 ) -> bool:
-    """Dedupe key: open ``runtime`` blocker for the same (task,
-    requested_role). A retry storm for the same child-agent class must
-    not stamp a new row on every attempt — the existing open row is
-    still the operator's routable surface.
+    """Key on ``owner_role == requested_role`` so retries with wording
+    drift (different runtime_ms, different error_class) collapse onto
+    one row."""
 
-    We key on ``owner_role == requested_role`` rather than the free-
-    form citation string so the dedupe survives minor wording drift
-    (different runtime_ms, different error_class) on retries.
-    """
-
-    existing = await session.scalar(
-        select(Blocker.id)
-        .where(col(Blocker.board_id) == board_id)
-        .where(col(Blocker.task_id) == task_id)
-        .where(col(Blocker.category) == "runtime")
-        .where(col(Blocker.owner_role) == requested_role)
-        .where(col(Blocker.resolved_at).is_(None))
-        .limit(1)
+    return bool(
+        await session.scalar(
+            select(
+                sql_exists()
+                .where(col(Blocker.board_id) == board_id)
+                .where(col(Blocker.task_id) == task_id)
+                .where(col(Blocker.category) == _CATEGORY_RUNTIME)
+                .where(col(Blocker.owner_role) == requested_role)
+                .where(col(Blocker.resolved_at).is_(None))
+            )
+        )
     )
-    return existing is not None
 
 
 async def file_subagent_failure_blocker_if_configured(
@@ -157,11 +137,8 @@ async def file_subagent_failure_blocker_if_configured(
     into structured blockers AND no open runtime blocker already
     exists for this (task, requested_role) pair.
 
-    Returns the Blocker id on a fresh file, None if gated out or
-    already open.
-
-    **Commits the session.** The caller must not invoke this inside
-    an outer transaction with other uncommitted state — the embedded
+    **Commits the session.** The caller must not invoke this inside an
+    outer transaction with other uncommitted state — the embedded
     commit would prematurely persist it. Mirrors
     :func:`file_stale_agent_blocker_if_configured`'s contract.
     """
@@ -182,7 +159,7 @@ async def file_subagent_failure_blocker_if_configured(
     blocker = Blocker(
         board_id=board.id,
         task_id=task_id,
-        category="runtime",
+        category=_CATEGORY_RUNTIME,
         owner_role=payload.requested_role,
         required_artifact=None,
         citation=_citation_for(payload),

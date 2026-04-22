@@ -25,6 +25,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.logging import get_logger
 from app.models.blockers import Blocker
 from app.models.boards import Board
+from app.schemas.blockers import BlockerCategory
 from app.schemas.boards import (
     STRUCTURED_BLOCKERS_V1_FLAG,
     board_rollout_flag_enabled,
@@ -32,6 +33,8 @@ from app.schemas.boards import (
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 
 logger = get_logger(__name__)
+
+_CATEGORY_OPERATOR: BlockerCategory = "operator"
 
 
 class StaleAgentGatewayReason(StrEnum):
@@ -104,7 +107,7 @@ async def _open_stale_agent_blocker_exists(
         select(Blocker.id)
         .where(col(Blocker.board_id) == board_id)
         .where(col(Blocker.task_id) == task_id)
-        .where(col(Blocker.category) == "operator")
+        .where(col(Blocker.category) == _CATEGORY_OPERATOR)
         .where(col(Blocker.required_artifact) == required_artifact)
         .where(col(Blocker.resolved_at).is_(None))
         .limit(1)
@@ -158,7 +161,7 @@ async def file_stale_agent_blocker_if_configured(
     blocker = Blocker(
         board_id=board.id,
         task_id=task_id,
-        category="operator",
+        category=_CATEGORY_OPERATOR,
         owner_role="operator",
         required_artifact=_required_artifact_for(agent_name),
         reopen_condition=(

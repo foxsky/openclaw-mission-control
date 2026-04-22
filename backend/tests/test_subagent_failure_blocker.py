@@ -71,9 +71,6 @@ def test_parser_accepts_full_payload() -> None:
 
 
 def test_parser_accepts_missing_parent_turn_id() -> None:
-    """Older 4.20 builds may omit ``parent_turn_id`` — it's metadata,
-    not load-bearing. Parser must still accept the payload."""
-
     payload = parse_subagent_failure_payload(
         {
             "requested_role": "codex",
@@ -99,10 +96,6 @@ def test_parser_trims_whitespace() -> None:
 
 
 def test_parser_returns_none_for_older_gateway_missing_role() -> None:
-    """4.19 and earlier emit subagent-failure events without
-    ``requested_role``. Parser must return None so the hook degrades
-    to a no-op WARN log rather than filing a half-populated row."""
-
     assert (
         parse_subagent_failure_payload(
             {"runtime_ms": 100, "error_class": "Boom"}
@@ -210,10 +203,8 @@ async def test_skips_when_board_flag_off(
 async def test_dedupes_on_same_task_role(
     seeded: tuple[AsyncSession, Board, Task],
 ) -> None:
-    """Retry storms for the same child-agent class must not multiply
-    rows. Wording drift (different runtime_ms, different error_class)
-    still dedupes — the key is (task, requested_role), not the
-    citation string."""
+    """Retry with different runtime_ms/error_class still dedupes —
+    the key is (task, requested_role), not the citation string."""
 
     session, board, task = seeded
     parent = uuid4()
@@ -253,9 +244,8 @@ async def test_dedupes_on_same_task_role(
 async def test_different_role_files_separate_blocker(
     seeded: tuple[AsyncSession, Board, Task],
 ) -> None:
-    """A second failure for a DIFFERENT child-agent class on the same
-    task is its own routing problem — file a new row, don't collapse
-    two distinct owner lanes into one."""
+    """Distinct child-agent classes get distinct rows — separate
+    routing lanes."""
 
     session, board, task = seeded
     parent = uuid4()
@@ -290,9 +280,7 @@ async def test_different_role_files_separate_blocker(
 async def test_resolved_blocker_does_not_block_new_file(
     seeded: tuple[AsyncSession, Board, Task],
 ) -> None:
-    """Once the operator resolves the previous runtime blocker, a
-    recurrence of the same child-agent failure files fresh — the
-    resolved row is audit, the new row is the current state."""
+    """Resolved row is audit; a recurrence files a fresh current-state row."""
 
     from app.core.time import utcnow
 
