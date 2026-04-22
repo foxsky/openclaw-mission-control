@@ -51,6 +51,10 @@ from app.api.tasks import (
     drain_lane_quieting_emit_tasks,
 )
 from app.services.openclaw.heartbeat_sweep import heartbeat_sweep_loop, stop_heartbeat_sweep
+from app.services.openclaw.lead_scoring_sweep import (
+    lead_scoring_sweep_loop,
+    stop_lead_scoring_sweep,
+)
 from app.services.openclaw.heartbeat_watchdog import (
     heartbeat_watchdog_loop,
     stop_heartbeat_watchdog,
@@ -483,10 +487,18 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         ),
         name="retention-purge-loop",
     )
+    lead_scoring_stop_event = asyncio.Event()
+    lead_scoring_task = asyncio.create_task(
+        lead_scoring_sweep_loop(lead_scoring_stop_event),
+        name="lead-scoring-sweep-loop",
+    )
     logger.info("app.lifecycle.started")
     try:
         yield
     finally:
+        await stop_lead_scoring_sweep(
+            lead_scoring_task, lead_scoring_stop_event
+        )
         await stop_retention_purge(retention_task, retention_stop_event)
         await stop_heartbeat_watchdog(watchdog_task, watchdog_stop_event)
         await stop_heartbeat_sweep(sweep_task, sweep_stop_event)

@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     # Purge job itself is TODO — see services/shadow_metrics.py.
     shadow_metric_retention_days: int = 90
 
+    # Phase VI §I5 lead heartbeat no-op scoring sweep interval.
+    # 5 min pairs with typical lead-heartbeat cadence — two consecutive
+    # no-op sweeps (≈10 min of inactivity) triggers the operator alert.
+    lead_scoring_sweep_interval_seconds: int = 300
+
     # RQ queueing / dispatch
     rq_redis_url: str = "redis://localhost:6379/0"
     rq_queue_name: str = "default"

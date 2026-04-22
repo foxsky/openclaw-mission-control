@@ -26,6 +26,7 @@ ROLLOUT_FLAG_ALLOWLIST = frozenset(
         "operator_decisions_v1",
         "deploy_truth_v1",
         "heartbeat_watchdog_v1",
+        "lead_scoring_v1",
     }
 )
 

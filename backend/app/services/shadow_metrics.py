@@ -72,6 +72,82 @@ EVENT_TASK_DEPLOY_VALIDATION_DEGRADED = "task.deploy_validation_degraded"
 # operators can see whether graduated boards are actually producing
 # quieter activity feeds.
 EVENT_COMMENT_LANE_QUIETING_SUPPRESSED = "comment.lane_quieting_suppressed"
+# Phase VI §I5: emitted per scored window where a lead agent produced
+# zero real actions (blocker created / task state changed / task
+# reassigned). Pure commentary doesn't count. Streak alert fires when
+# a lead emits two consecutive candidates — this is the operator-
+# alert signal §I5 requires.
+EVENT_SUPERVISOR_HEARTBEAT_NOOP_CANDIDATE = "supervisor.heartbeat_noop_candidate"
+EVENT_SUPERVISOR_HEARTBEAT_NOOP_STREAK_ALERT = (
+    "supervisor.heartbeat_noop_streak_alert"
+)
+
+
+async def emit_supervisor_heartbeat_noop_candidate(
+    *,
+    agent_id: UUID,
+    board_id: UUID | None,
+    window_started_at: datetime,
+) -> None:
+    """Record a lead heartbeat window that scored zero real actions."""
+
+    try:
+        async with async_session_maker() as session:
+            event = ShadowMetricEvent(
+                event_type=EVENT_SUPERVISOR_HEARTBEAT_NOOP_CANDIDATE,
+                board_id=board_id,
+                agent_id=agent_id,
+                classifier_metadata={
+                    "window_started_at": window_started_at.isoformat(),
+                },
+            )
+            session.add(event)
+            await session.commit()
+    except asyncio.CancelledError:
+        logger.info(
+            "shadow_metrics.supervisor_noop_candidate_emit_cancelled agent_id=%s",
+            agent_id,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "shadow_metrics.supervisor_noop_candidate_emit_failed agent_id=%s",
+            agent_id,
+        )
+
+
+async def emit_supervisor_heartbeat_noop_streak_alert(
+    *,
+    agent_id: UUID,
+    board_id: UUID | None,
+    previous_candidate_at: datetime,
+) -> None:
+    """Fire when a lead produces two consecutive no-op candidates —
+    the operator-alert signal §I5 requires."""
+
+    try:
+        async with async_session_maker() as session:
+            event = ShadowMetricEvent(
+                event_type=EVENT_SUPERVISOR_HEARTBEAT_NOOP_STREAK_ALERT,
+                board_id=board_id,
+                agent_id=agent_id,
+                classifier_metadata={
+                    "previous_candidate_at": previous_candidate_at.isoformat(),
+                },
+            )
+            session.add(event)
+            await session.commit()
+    except asyncio.CancelledError:
+        logger.info(
+            "shadow_metrics.supervisor_noop_streak_emit_cancelled agent_id=%s",
+            agent_id,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "shadow_metrics.supervisor_noop_streak_emit_failed agent_id=%s",
+            agent_id,
+        )
 
 
 async def emit_actionability_violation_metric(
