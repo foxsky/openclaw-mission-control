@@ -79,6 +79,7 @@ async def test_non_lead_agent_can_update_status_for_assigned_task() -> None:
                     description="",
                     status="inbox",
                     assigned_agent_id=worker_id,
+                    review_packet_type="review_only",
                 ),
             )
             await session.commit()
@@ -222,6 +223,7 @@ async def test_non_lead_agent_can_update_status_for_unassigned_task() -> None:
                     description="",
                     status="inbox",
                     assigned_agent_id=None,
+                    review_packet_type="review_only",
                 ),
             )
             await session.commit()
@@ -616,6 +618,7 @@ async def test_non_lead_agent_moves_task_to_review_and_reassigns_to_lead() -> No
                     status="in_progress",
                     assigned_agent_id=worker_id,
                     in_progress_at=in_progress_at,
+                    review_packet_type="review_only",
                 ),
             )
             await session.commit()
@@ -708,6 +711,7 @@ async def test_non_lead_agent_move_to_review_reassigns_to_lead_and_sends_review_
                     status="in_progress",
                     assigned_agent_id=worker_id,
                     in_progress_at=utcnow(),
+                    review_packet_type="review_only",
                 ),
             )
             await session.commit()
@@ -825,6 +829,7 @@ async def test_lead_moves_review_task_to_inbox_unassigns_by_default_for_reroute(
                     status="in_progress",
                     assigned_agent_id=worker_id,
                     in_progress_at=utcnow(),
+                    review_packet_type="review_only",
                 ),
             )
             await session.commit()
@@ -978,6 +983,7 @@ async def test_lead_moves_review_task_to_inbox_and_preserves_explicit_reroute_as
                     status="in_progress",
                     assigned_agent_id=worker_id,
                     in_progress_at=utcnow(),
+                    review_packet_type="review_only",
                 ),
             )
             await session.commit()
@@ -1115,6 +1121,7 @@ async def test_lead_moves_review_task_to_rework_and_reassigns_last_worker_with_r
                     status="in_progress",
                     assigned_agent_id=worker_id,
                     in_progress_at=utcnow(),
+                    review_packet_type="review_only",
                 ),
             )
             await session.commit()
@@ -1338,6 +1345,7 @@ async def test_non_lead_agent_moves_to_review_without_comment_when_rule_disabled
                     status="in_progress",
                     assigned_agent_id=worker_id,
                     in_progress_at=utcnow(),
+                    review_packet_type="review_only",
                 ),
             )
             await session.commit()
@@ -1411,6 +1419,7 @@ async def test_non_lead_agent_moves_to_review_without_comment_or_recent_comment_
                     status="in_progress",
                     assigned_agent_id=worker_id,
                     in_progress_at=utcnow(),
+                    review_packet_type="review_only",
                 ),
             )
             await session.commit()
@@ -1596,6 +1605,7 @@ async def test_entering_in_progress_with_existing_assignee_wakes_assignee(
                     description="",
                     status="inbox",
                     assigned_agent_id=worker_id,
+                    review_packet_type="review_only",
                 ),
             )
             await session.commit()

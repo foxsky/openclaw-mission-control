@@ -28,7 +28,6 @@ task row.
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -37,6 +36,7 @@ from sqlalchemy import and_
 from sqlmodel import col, desc, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db.session import async_session_maker
 from app.models.activity_events import ActivityEvent
@@ -53,7 +53,7 @@ from app.services.comment_classifier.patterns import (
 # stores the full text — the cap is classifier-only.
 MESSAGE_CLASSIFY_MAX_CHARS = 32 * 1024
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Canonical event type constants. Keep these in sync with downstream
 # operator dashboards — changing a value rewrites history from the

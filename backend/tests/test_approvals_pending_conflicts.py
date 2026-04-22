@@ -311,6 +311,12 @@ async def test_update_move_to_done_approval_rejects_approval_when_task_left_revi
             task = await session.get(Task, task_id)
             assert task is not None
             task.status = "review"
+            # Phase V delivery-contract + Phase IV owner-gate: satisfy
+            # both so the setup create_approval call doesn't 409 on a
+            # contract check before we can exercise the task-left-review
+            # invariant.
+            task.review_packet_type = "review_only"
+            task.assigned_agent_id = uuid4()
             session.add(task)
             await session.commit()
 

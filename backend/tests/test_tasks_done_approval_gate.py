@@ -75,6 +75,12 @@ async def _seed_board_task_and_agent(
         title="Task",
         status=task_status,
         assigned_agent_id=agent.id,
+        # Phase V delivery-contract gate requires these on
+        # in_progress/review/done transitions. Default to a packet type
+        # whose validation surface is independently satisfiable so the
+        # approval-gate + review-toggle tests can exercise their own
+        # invariants without tripping the contract 409.
+        review_packet_type="review_only",
     )
 
     session.add(Organization(id=organization_id, name=f"org-{organization_id}"))
