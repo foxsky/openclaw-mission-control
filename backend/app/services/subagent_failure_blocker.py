@@ -10,7 +10,10 @@ Dedupe is enforced in two layers:
    the race window between EXISTS and INSERT. If two workers race
    past step 1, the second INSERT fails with ``IntegrityError`` and
    the filer rolls back + returns None so the caller sees the same
-   "already filed" answer the pre-check would have produced.
+   "already filed" answer the pre-check would have produced. The
+   IntegrityError catch is scoped to THIS index's constraint name so
+   a regression on some other constraint (FK, NOT NULL, a future
+   CHECK) doesn't get silently swallowed.
 """
 
 from __future__ import annotations
@@ -35,6 +38,23 @@ from app.schemas.boards import (
 logger = get_logger(__name__)
 
 _CATEGORY_RUNTIME: BlockerCategory = "runtime"
+# Signatures that identify the (board_id, task_id, owner_role) dedupe
+# partial unique index on ``blockers``. The IntegrityError handler
+# scopes its rollback to this specific constraint — any other
+# integrity violation (FK miss, NOT NULL, future CHECK) is a real bug
+# and must re-raise.
+#
+# Postgres surfaces the index name via asyncpg ``constraint_name``;
+# SQLite's error message is column-shaped. Match either.
+_DEDUPE_SIGNATURES: tuple[str, ...] = (
+    "uq_blockers_runtime_owner_open",
+    "blockers.board_id, blockers.task_id, blockers.owner_role",
+)
+
+
+def _is_dedupe_integrity_error(exc: IntegrityError) -> bool:
+    combined = f"{exc} {exc.orig}"
+    return any(sig in combined for sig in _DEDUPE_SIGNATURES)
 
 # ``Blocker.owner_role`` is ``VARCHAR(64)`` in Postgres; cap parser
 # output below that to fail closed on payload-level malformation rather
@@ -213,12 +233,15 @@ async def file_subagent_failure_blocker_if_configured(
     session.add(blocker)
     try:
         await session.commit()
-    except IntegrityError:
-        # Lost the race against another worker — the unique index
-        # ``uq_blockers_runtime_owner_open`` caught it. Roll back the
-        # failed insert and return None: the other worker's row is
-        # already the open state the caller wanted.
+    except IntegrityError as exc:
+        # Partial unique index caught the race — roll back + return
+        # None so the caller gets the same answer the EXISTS pre-check
+        # would have produced. Anything OTHER than the dedupe index
+        # is a real bug (FK miss, NOT NULL, new CHECK) and must
+        # re-raise after cleaning the session.
         await session.rollback()
+        if not _is_dedupe_integrity_error(exc):
+            raise
         logger.info(
             "subagent_failure_blocker.dedupe_lost_race task_id=%s role=%s",
             task_id,

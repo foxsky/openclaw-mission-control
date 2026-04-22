@@ -253,6 +253,30 @@ async def test_integrity_error_from_partial_unique_index_returns_none(
 
 
 @pytest.mark.asyncio
+async def test_non_dedupe_integrity_error_reraises(
+    seeded: tuple[AsyncSession, Board, Task],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-dedupe constraint violations must re-raise so real bugs
+    surface — only the specific partial unique index may be silenced."""
+
+    from app.services import stale_agent_blocker as module
+
+    session, board, task = seeded
+    monkeypatch.setattr(module, "_CATEGORY_OPERATOR", "not_a_valid_category")
+
+    with pytest.raises(Exception) as exc_info:
+        await file_stale_agent_blocker_if_configured(
+            session,
+            board=board,
+            task_id=task.id,
+            agent_name="frontend-dev",
+            exc=OpenClawGatewayError("Stale agent session"),
+        )
+    assert "constraint" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
 async def test_resolved_blocker_does_not_block_new_file(
     seeded: tuple[AsyncSession, Board, Task],
 ) -> None:

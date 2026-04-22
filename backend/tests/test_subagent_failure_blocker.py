@@ -469,6 +469,40 @@ async def test_integrity_error_from_partial_unique_index_returns_none(
 
 
 @pytest.mark.asyncio
+async def test_non_dedupe_integrity_error_reraises(
+    seeded: tuple[AsyncSession, Board, Task],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``blockers.category`` that slips past the type-checker would
+    violate the CHECK constraint. Confirm the filer re-raises instead
+    of swallowing — only the specific dedupe index may be silenced."""
+
+    from app.services import subagent_failure_blocker as module
+
+    session, board, task = seeded
+    payload = SubagentFailurePayload(
+        requested_role="codex",
+        runtime_ms=1,
+        error_class="E",
+    )
+    # Force a non-dedupe IntegrityError by poisoning the category to a
+    # value the CHECK constraint rejects. Bypass parse/filer gating
+    # and hit the commit path directly.
+    monkeypatch.setattr(module, "_CATEGORY_RUNTIME", "not_a_valid_category")
+
+    with pytest.raises(Exception) as exc_info:
+        await file_subagent_failure_blocker_if_configured(
+            session,
+            board=board,
+            task_id=task.id,
+            parent_agent_id=None,
+            payload=payload,
+        )
+    # Ensure what bubbled up is a constraint error, not silently None.
+    assert "constraint" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
 async def test_citation_is_truncated_at_max_length(
     seeded: tuple[AsyncSession, Board, Task],
 ) -> None:

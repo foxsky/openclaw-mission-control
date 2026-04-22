@@ -331,3 +331,93 @@ def test_actionability_validates_against_done_when_approval_gates_move_to_done()
         validation_target_scope=None,
         assigned_agent_id=None,
     ) == []
+
+
+# --------------------------------------------------------------------
+# SSRF guard on validation_target (Phase V §I8 deploy-truth fetch
+# target — applies only when ``validation_target_kind`` is a URL
+# shape, i.e. ``live_url`` or ``api_base``).
+# --------------------------------------------------------------------
+
+
+def _url_target_update(url: str) -> TaskUpdate:
+    return TaskUpdate(
+        validation_target=url,
+        validation_target_kind="live_url",
+        validation_target_scope="review",
+    )
+
+
+def test_validation_target_accepts_private_lan_url() -> None:
+    """MC deploys on a private LAN — RFC1918 hosts must remain legal
+    (prod uses ``192.168.2.64``, tests use ``192.168.2.60``)."""
+
+    model = _url_target_update("http://192.168.2.60:3000")
+    assert model.validation_target == "http://192.168.2.60:3000"
+
+
+def test_validation_target_accepts_public_https() -> None:
+    model = _url_target_update("https://example.com/build")
+    assert model.validation_target == "https://example.com/build"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "ftp://example.com/",
+        "gopher://attacker.tld/",
+        "javascript:alert(1)",
+    ],
+)
+def test_validation_target_rejects_non_http_schemes(url: str) -> None:
+    with pytest.raises(Exception) as exc:  # ValidationError wraps ValueError
+        _url_target_update(url)
+    assert "http://" in str(exc.value) or "https://" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:5432/healthz",
+        "http://localhost/",
+        "http://169.254.169.254/latest/meta-data",
+        "http://metadata.google.internal/computeMetadata/v1",
+        "http://[::1]/",
+        "http://0.0.0.0/",
+    ],
+)
+def test_validation_target_rejects_ssrf_hosts(url: str) -> None:
+    with pytest.raises(Exception) as exc:
+        _url_target_update(url)
+    assert "blocked" in str(exc.value).lower()
+
+
+def test_validation_target_rejects_length_bomb() -> None:
+    with pytest.raises(Exception) as exc:
+        _url_target_update("http://example.com/" + ("a" * 3000))
+    assert "exceeds" in str(exc.value)
+
+
+def test_validation_target_url_guard_skipped_for_workspace_kind() -> None:
+    """``workspace`` kind is a filesystem path, not a URL — the SSRF
+    guard must not apply. Lock the carve-out so a well-meaning audit
+    doesn't later tighten it into breaking legitimate workspace targets."""
+
+    model = TaskUpdate(
+        validation_target="/shared/worktree",
+        validation_target_kind="workspace",
+        validation_target_scope="runtime",
+    )
+    assert model.validation_target == "/shared/worktree"
+
+
+def test_validation_target_url_guard_skipped_for_other_kind() -> None:
+    """``other`` kind carries freeform text — no URL validation."""
+
+    model = TaskUpdate(
+        validation_target="prod-cluster-v2",
+        validation_target_kind="other",
+        validation_target_scope="deploy",
+    )
+    assert model.validation_target == "prod-cluster-v2"

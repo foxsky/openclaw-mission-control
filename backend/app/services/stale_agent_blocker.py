@@ -36,6 +36,18 @@ from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 logger = get_logger(__name__)
 
 _CATEGORY_OPERATOR: BlockerCategory = "operator"
+# Signatures for the (board_id, task_id, required_artifact) partial
+# unique index — Postgres asyncpg exposes the index name, SQLite
+# reports the column list. Cross-driver match.
+_DEDUPE_SIGNATURES: tuple[str, ...] = (
+    "uq_blockers_operator_artifact_open",
+    "blockers.board_id, blockers.task_id, blockers.required_artifact",
+)
+
+
+def _is_dedupe_integrity_error(exc: IntegrityError) -> bool:
+    combined = f"{exc} {exc.orig}"
+    return any(sig in combined for sig in _DEDUPE_SIGNATURES)
 
 
 class StaleAgentGatewayReason(StrEnum):
@@ -176,12 +188,13 @@ async def file_stale_agent_blocker_if_configured(
     session.add(blocker)
     try:
         await session.commit()
-    except IntegrityError:
-        # Lost the race against another worker — the unique index
-        # ``uq_blockers_operator_artifact_open`` caught it. Roll back
-        # and return None: the other worker's row is already the open
-        # state the caller wanted.
+    except IntegrityError as integrity_exc:
+        # Partial unique index caught the race — roll back + return
+        # None. Anything OTHER than the dedupe index is a real bug
+        # and must re-raise after cleaning the session.
         await session.rollback()
+        if not _is_dedupe_integrity_error(integrity_exc):
+            raise
         logger.info(
             "stale_agent_blocker.dedupe_lost_race task_id=%s agent=%s",
             task_id,
