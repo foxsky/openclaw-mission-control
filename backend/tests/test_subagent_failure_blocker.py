@@ -11,8 +11,10 @@ import pytest_asyncio
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.models.agents import Agent
 from app.models.blockers import Blocker
 from app.models.boards import Board
+from app.models.gateways import Gateway
 from app.models.organizations import Organization
 from app.models.tasks import Task
 from app.services.subagent_failure_blocker import (
@@ -126,6 +128,69 @@ def test_parser_returns_none_for_negative_runtime_ms() -> None:
     )
 
 
+def test_parser_returns_none_for_bool_runtime_ms() -> None:
+    """``bool`` is an ``int`` subclass — a gateway payload that encodes
+    True/False for runtime_ms is wrong and must not silently become
+    runtime_ms=1."""
+
+    assert (
+        parse_subagent_failure_payload(
+            {
+                "requested_role": "codex",
+                "runtime_ms": True,
+                "error_class": "Boom",
+            }
+        )
+        is None
+    )
+
+
+def test_parser_returns_none_for_runtime_ms_over_cap() -> None:
+    """Guards ``str(runtime_ms)`` against CPython's 4300-digit int→str
+    limit and anchors the citation string's max length."""
+
+    huge = 7 * 24 * 60 * 60 * 1000 + 1  # 1ms past the one-week cap
+    assert (
+        parse_subagent_failure_payload(
+            {
+                "requested_role": "codex",
+                "runtime_ms": huge,
+                "error_class": "Boom",
+            }
+        )
+        is None
+    )
+
+
+def test_parser_returns_none_for_overlong_role() -> None:
+    """``Blocker.owner_role`` is VARCHAR(64) in Postgres — reject at
+    payload parse time rather than commit time."""
+
+    assert (
+        parse_subagent_failure_payload(
+            {
+                "requested_role": "x" * 65,
+                "runtime_ms": 10,
+                "error_class": "Boom",
+            }
+        )
+        is None
+    )
+
+
+def test_parser_warn_path_tolerates_mixed_type_keys() -> None:
+    """A malformed dict with mixed-type keys (e.g. ``{2: "b", "a": 1}``)
+    must degrade cleanly — the WARN path must not itself raise
+    ``TypeError`` from ``sorted()`` on uncomparable keys."""
+
+    assert (
+        parse_subagent_failure_payload(
+            {2: "not-a-role", "runtime_ms": 10, "error_class": "Boom"}
+        )
+        is None
+    )
+
+
 def test_parser_returns_none_for_missing_error_class() -> None:
     assert (
         parse_subagent_failure_payload(
@@ -151,12 +216,32 @@ async def test_files_runtime_blocker_when_flag_enabled(
     seeded: tuple[AsyncSession, Board, Task],
 ) -> None:
     session, board, task = seeded
-    parent_agent_id = uuid4()
+    # Seed a real parent Agent so ``created_by_agent_id`` exercises the
+    # actual FK path rather than relying on SQLite's default FK-off
+    # behaviour to paper over a missing row.
+    gateway = Gateway(
+        id=uuid4(),
+        organization_id=board.organization_id,
+        name="gw",
+        url="https://gw.local",
+        workspace_root="/tmp/w",
+    )
+    session.add(gateway)
+    parent_agent = Agent(
+        id=uuid4(),
+        board_id=board.id,
+        gateway_id=gateway.id,
+        name="parent",
+        status="online",
+    )
+    session.add(parent_agent)
+    await session.commit()
+
     blocker_id = await file_subagent_failure_blocker_if_configured(
         session,
         board=board,
         task_id=task.id,
-        parent_agent_id=parent_agent_id,
+        parent_agent_id=parent_agent.id,
         payload=SubagentFailurePayload(
             requested_role="codex",
             runtime_ms=5123,
@@ -173,7 +258,7 @@ async def test_files_runtime_blocker_when_flag_enabled(
     assert blocker.category == "runtime"
     assert blocker.owner_role == "codex"
     assert blocker.required_artifact is None
-    assert blocker.created_by_agent_id == parent_agent_id
+    assert blocker.created_by_agent_id == parent_agent.id
     assert blocker.citation == "subagent codex failed after 5123ms: TimeoutError"
 
 
@@ -197,6 +282,14 @@ async def test_skips_when_board_flag_off(
         ),
     )
     assert blocker_id is None
+    # Lock "gate-off leaks no state" — returning None isn't enough, the
+    # table must also be empty.
+    rows = (
+        await session.exec(
+            select(Blocker).where(col(Blocker.task_id) == task.id)
+        )
+    ).all()
+    assert rows == []
 
 
 @pytest.mark.asyncio
@@ -317,3 +410,30 @@ async def test_resolved_blocker_does_not_block_new_file(
     )
     assert second is not None
     assert second != first
+
+
+@pytest.mark.asyncio
+async def test_citation_is_truncated_at_max_length(
+    seeded: tuple[AsyncSession, Board, Task],
+) -> None:
+    """Operator dashboards expect one bounded citation shape across
+    feeders — parity with D.2's 512-char cap."""
+
+    session, board, task = seeded
+    blocker_id = await file_subagent_failure_blocker_if_configured(
+        session,
+        board=board,
+        task_id=task.id,
+        parent_agent_id=None,
+        payload=SubagentFailurePayload(
+            requested_role="codex",
+            runtime_ms=1,
+            error_class="E" * 1000,
+        ),
+    )
+    assert blocker_id is not None
+    blocker = await session.get(Blocker, blocker_id)
+    assert blocker is not None
+    assert blocker.citation is not None
+    assert len(blocker.citation) <= 512
+    assert blocker.citation.endswith("…")
