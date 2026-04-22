@@ -68,6 +68,9 @@ from app.services.mentions import extract_mentions, matches_agent_mention
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
+from app.services.stale_agent_blocker import (
+    file_stale_agent_blocker_if_configured,
+)
 from app.services.openclaw.provisioning_db import AgentLifecycleService
 from app.core.logging import get_logger
 from app.services.comment_policy import apply_comment_signal_filter
@@ -1290,6 +1293,20 @@ async def _notify_agent_on_task_assign(
             board_id=board.id,
         )
         await session.commit()
+        # Part D.2: if the dispatch failed because the agent's gateway
+        # session is stale or pairing was revoked, materialise that
+        # as a structured operator Blocker (per the board's
+        # ``structured_blockers_v1`` rollout flag). The ambient
+        # activity event above still records the failure; this adds
+        # the routable structured state §I1 wants.
+        if task.board_id is not None:
+            await file_stale_agent_blocker_if_configured(
+                session,
+                board_id=task.board_id,
+                task_id=task.id,
+                agent_name=agent.name,
+                exc=error,
+            )
 
 
 async def _notify_agent_on_task_rework(
