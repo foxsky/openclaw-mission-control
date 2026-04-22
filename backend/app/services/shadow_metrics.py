@@ -67,6 +67,11 @@ EVENT_TASK_ACTIONABILITY_VIOLATION = "task.actionability_violation_candidate"
 # Operators should burn these down by graduating targets to
 # capability=True or marking them explicitly blind.
 EVENT_TASK_DEPLOY_VALIDATION_DEGRADED = "task.deploy_validation_degraded"
+# Phase VI §I6: emitted when a non-owner agent's comment is rejected
+# by the lane-quieting gate. Tracks the noise-suppression signal so
+# operators can see whether graduated boards are actually producing
+# quieter activity feeds.
+EVENT_COMMENT_LANE_QUIETING_SUPPRESSED = "comment.lane_quieting_suppressed"
 
 
 async def emit_actionability_violation_metric(
@@ -122,6 +127,40 @@ async def emit_actionability_violation_metric(
             "shadow_metrics.actionability_emit_failed task_id=%s status=%s",
             task_id,
             status_value,
+        )
+
+
+async def emit_lane_quieting_suppressed_metric(
+    *,
+    task_id: UUID | None,
+    board_id: UUID | None,
+    agent_id: UUID | None,
+) -> None:
+    """Record a non-owner comment rejected by the §I6 lane-quieting
+    gate. Same fire-and-forget contract as the actionability +
+    deploy-degraded emitters.
+    """
+
+    try:
+        async with async_session_maker() as session:
+            event = ShadowMetricEvent(
+                event_type=EVENT_COMMENT_LANE_QUIETING_SUPPRESSED,
+                task_id=task_id,
+                board_id=board_id,
+                agent_id=agent_id,
+            )
+            session.add(event)
+            await session.commit()
+    except asyncio.CancelledError:
+        logger.info(
+            "shadow_metrics.lane_quieting_emit_cancelled task_id=%s",
+            task_id,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "shadow_metrics.lane_quieting_emit_failed task_id=%s",
+            task_id,
         )
 
 

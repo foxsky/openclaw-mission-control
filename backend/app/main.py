@@ -48,6 +48,7 @@ from app.schemas.health import HealthStatusResponse
 from app.api.tasks import (
     drain_actionability_emit_tasks,
     drain_deploy_degraded_emit_tasks,
+    drain_lane_quieting_emit_tasks,
 )
 from app.services.openclaw.heartbeat_sweep import heartbeat_sweep_loop, stop_heartbeat_sweep
 from app.services.openclaw.heartbeat_watchdog import (
@@ -494,6 +495,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         # the emitter so gather() can't silently eat the signal.
         await drain_actionability_emit_tasks()
         await drain_deploy_degraded_emit_tasks()
+        await drain_lane_quieting_emit_tasks()
         logger.info("app.lifecycle.stopped")
 
 

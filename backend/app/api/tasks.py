@@ -78,10 +78,12 @@ from app.services.deploy_truth import (
     fetch_build_metadata,
     packet_sha_matches_live,
 )
+from app.services.lane_quieting import should_suppress_comment_for_blocked_lane
 from app.services.shadow_metrics import (
     build_shadow_events_for_comment,
     emit_actionability_violation_metric,
     emit_deploy_validation_degraded_metric,
+    emit_lane_quieting_suppressed_metric,
 )
 
 logger = get_logger(__name__)
@@ -197,6 +199,49 @@ def _operator_decision_block_error(summary: str | None = None) -> HTTPException:
 
 
 ERROR_CODE_DELIVERY_CONTRACT_INCOMPLETE = "task_delivery_contract_incomplete"
+ERROR_CODE_COMMENT_SUPPRESSED_BLOCKED_LANE = "comment_suppressed_blocked_lane"
+
+
+def _lane_quieting_suppressed_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": (
+                "Task has an acknowledged blocker; only the owner or a "
+                "human operator can comment until it's resolved."
+            ),
+            "code": ERROR_CODE_COMMENT_SUPPRESSED_BLOCKED_LANE,
+        },
+    )
+
+
+async def _require_lane_quieting_allows_comment(
+    session: "AsyncSession",
+    *,
+    task: Task,
+    actor: "ActorContext",
+) -> None:
+    """Phase VI §I6: reject non-owner agent comments on a task with
+    any open acknowledged blocker, per the board's rollout flag."""
+
+    if actor.actor_type != "agent":
+        return
+    suppressed = await should_suppress_comment_for_blocked_lane(
+        session,
+        task=task,
+        author_agent_id=_comment_actor_id(actor),
+    )
+    if not suppressed:
+        return
+    _lane_quieting_emitter.schedule(
+        emit_lane_quieting_suppressed_metric(
+            task_id=task.id,
+            board_id=task.board_id,
+            agent_id=_comment_actor_id(actor),
+        ),
+        log_key=str(task.id),
+    )
+    raise _lane_quieting_suppressed_error()
 ERROR_CODE_DEPLOY_TRUTH_SHA_MISMATCH = "task_deploy_truth_sha_mismatch"
 ERROR_CODE_DEPLOY_TRUTH_MISSING_PACKET_SHA = "task_deploy_truth_missing_packet_sha"
 ERROR_CODE_DEPLOY_TRUTH_UNREACHABLE = "task_deploy_truth_target_unreachable"
@@ -550,6 +595,9 @@ _actionability_emitter = BackgroundEmitter(
 _deploy_degraded_emitter = BackgroundEmitter(
     name="shadow_metrics.deploy_validation_degraded", max_pending=128
 )
+_lane_quieting_emitter = BackgroundEmitter(
+    name="shadow_metrics.comment_lane_quieting_suppressed", max_pending=128
+)
 
 # In-memory dedupe for the degraded-metric emit. Post-migration every
 # task has ``supports_build_metadata=None`` until operators classify
@@ -632,6 +680,10 @@ def _schedule_deploy_degraded_emit(
 
 async def drain_deploy_degraded_emit_tasks() -> None:
     await _deploy_degraded_emitter.drain()
+
+
+async def drain_lane_quieting_emit_tasks() -> None:
+    await _lane_quieting_emitter.drain()
 
 
 async def _reject_pending_move_to_done_approvals_for_task(
@@ -3224,6 +3276,9 @@ async def _record_task_comment_from_update(
 ) -> None:
     if update.comment is None or not update.comment.strip():
         return
+    await _require_lane_quieting_allows_comment(
+        session, task=update.task, actor=update.actor
+    )
     agent_id = (
         update.actor.agent.id
         if update.actor.actor_type == "agent" and update.actor.agent
@@ -3519,6 +3574,9 @@ async def create_task_comment(
 ) -> ActivityEvent:
     """Create a task comment and notify relevant agents."""
     await _validate_task_comment_access(session, task=task, actor=actor)
+    await _require_lane_quieting_allows_comment(
+        session, task=task, actor=actor
+    )
     event = ActivityEvent(
         event_type="task.comment",
         message=payload.message,
