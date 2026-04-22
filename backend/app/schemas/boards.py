@@ -69,6 +69,22 @@ def partition_rollout_flags(
     return known, unknown
 
 
+def board_rollout_flag_enabled(
+    flags: dict[str, bool] | None,
+    flag: str,
+) -> bool:
+    """Return True when ``flag`` is present and truthy in ``flags``.
+
+    Accepts both a raw column read (``select(Board.rollout_flags)``
+    returns ``dict | None``) and the attribute form
+    (``board.rollout_flags`` can be ``None`` on unpersisted rows). Keep
+    every gated feature reading through this helper so a typo in a
+    single call site can't silently disable the gate.
+    """
+
+    return bool(flags and flags.get(flag))
+
+
 class BoardBase(SQLModel):
     """Shared board fields used across create and read payloads."""
 

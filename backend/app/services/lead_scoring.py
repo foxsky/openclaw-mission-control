@@ -43,7 +43,7 @@ from app.models.blockers import Blocker
 from app.models.boards import Board
 from app.models.activity_events import ActivityEvent
 from app.models.shadow_metric_events import ShadowMetricEvent
-from app.schemas.boards import LEAD_SCORING_V1_FLAG
+from app.schemas.boards import LEAD_SCORING_V1_FLAG, board_rollout_flag_enabled
 from app.services.shadow_metrics import (
     EVENT_SUPERVISOR_HEARTBEAT_NOOP_CANDIDATE,
     EVENT_SUPERVISOR_HEARTBEAT_NOOP_STREAK_ALERT,
@@ -262,7 +262,7 @@ async def score_all_leads_once(
     rows = (await session.exec(stmt)).all()
     emitted = 0
     for agent, board_id, board_flags in rows:
-        if not board_flags or not board_flags.get(LEAD_SCORING_V1_FLAG):
+        if not board_rollout_flag_enabled(board_flags, LEAD_SCORING_V1_FLAG):
             continue
         try:
             fired = await score_lead_once(

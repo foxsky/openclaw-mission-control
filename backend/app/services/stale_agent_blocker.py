@@ -25,7 +25,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.logging import get_logger
 from app.models.blockers import Blocker
 from app.models.boards import Board
-from app.schemas.boards import STRUCTURED_BLOCKERS_V1_FLAG
+from app.schemas.boards import (
+    STRUCTURED_BLOCKERS_V1_FLAG,
+    board_rollout_flag_enabled,
+)
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 
 logger = get_logger(__name__)
@@ -139,8 +142,9 @@ async def file_stale_agent_blocker_if_configured(
     if reason is None:
         return None
 
-    flags = board.rollout_flags or {}
-    if not flags.get(STRUCTURED_BLOCKERS_V1_FLAG):
+    if not board_rollout_flag_enabled(
+        board.rollout_flags, STRUCTURED_BLOCKERS_V1_FLAG
+    ):
         return None
 
     if await _open_stale_agent_blocker_exists(
