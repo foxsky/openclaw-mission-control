@@ -10,8 +10,8 @@ from uuid import uuid4
 import pytest
 from fastapi import APIRouter, FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
-from sqlmodel import SQLModel, col, select
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.deps import require_org_admin
@@ -28,13 +28,6 @@ from app.models.organization_members import OrganizationMember
 from app.models.organizations import Organization
 from app.models.skills import GatewayInstalledSkill, MarketplaceSkill, SkillPack
 from app.services.organizations import OrganizationContext
-
-
-async def _make_engine() -> AsyncEngine:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.connect() as conn, conn.begin():
-        await conn.run_sync(SQLModel.metadata.create_all)
-    return engine
 
 
 def _build_test_app(
@@ -89,311 +82,303 @@ async def _seed_base(
 @pytest.mark.asyncio
 async def test_install_skill_dispatches_instruction_and_persists_installation(
     monkeypatch: pytest.MonkeyPatch,
+    sqlite_engine: AsyncEngine,
 ) -> None:
-    engine = await _make_engine()
     session_maker = async_sessionmaker(
-        engine,
+        sqlite_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    try:
-        async with session_maker() as session:
-            organization, gateway = await _seed_base(session)
-            skill = MarketplaceSkill(
-                organization_id=organization.id,
-                name="Deploy Helper",
-                source_url="https://example.com/skills/deploy-helper.git",
-                description="Handles deploy workflow checks.",
-            )
-            session.add(skill)
-            await session.commit()
-            await session.refresh(skill)
+    async with session_maker() as session:
+        organization, gateway = await _seed_base(session)
+        skill = MarketplaceSkill(
+            organization_id=organization.id,
+            name="Deploy Helper",
+            source_url="https://example.com/skills/deploy-helper.git",
+            description="Handles deploy workflow checks.",
+        )
+        session.add(skill)
+        await session.commit()
+        await session.refresh(skill)
 
-        app = _build_test_app(session_maker, organization=organization)
-        sent_messages: list[dict[str, str | bool]] = []
+    app = _build_test_app(session_maker, organization=organization)
+    sent_messages: list[dict[str, str | bool]] = []
 
-        async def _fake_send_agent_message(
-            _self: object,
-            *,
-            session_key: str,
-            config: object,
-            agent_name: str,
-            message: str,
-            deliver: bool = False,
-        ) -> None:
-            del config
-            sent_messages.append(
-                {
-                    "session_key": session_key,
-                    "agent_name": agent_name,
-                    "message": message,
-                    "deliver": deliver,
-                },
-            )
-
-        monkeypatch.setattr(
-            "app.api.skills_marketplace.GatewayDispatchService.send_agent_message",
-            _fake_send_agent_message,
+    async def _fake_send_agent_message(
+        _self: object,
+        *,
+        session_key: str,
+        config: object,
+        agent_name: str,
+        message: str,
+        deliver: bool = False,
+    ) -> None:
+        del config
+        sent_messages.append(
+            {
+                "session_key": session_key,
+                "agent_name": agent_name,
+                "message": message,
+                "deliver": deliver,
+            },
         )
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.post(
-                f"/api/v1/skills/marketplace/{skill.id}/install",
-                params={"gateway_id": str(gateway.id)},
-            )
-
-        assert response.status_code == 200
-        body = response.json()
-        assert body["installed"] is True
-        assert body["gateway_id"] == str(gateway.id)
-        assert len(sent_messages) == 1
-        assert sent_messages[0]["agent_name"] == "Gateway Agent"
-        assert sent_messages[0]["deliver"] is True
-        assert sent_messages[0]["session_key"] == f"agent:mc-gateway-{gateway.id}:main"
-        message = str(sent_messages[0]["message"])
-        assert "SKILL INSTALL REQUEST" in message
-        assert str(skill.source_url) in message
-        assert "/workspace/openclaw/skills" in message
-
-        async with session_maker() as session:
-            installed_rows = (
-                await session.exec(
-                    select(GatewayInstalledSkill).where(
-                        col(GatewayInstalledSkill.gateway_id) == gateway.id,
-                        col(GatewayInstalledSkill.skill_id) == skill.id,
-                    ),
-                )
-            ).all()
-            assert len(installed_rows) == 1
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_delete_gateway_removes_installed_skill_rows() -> None:
-    engine = await _make_engine()
-    session_maker = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
+    monkeypatch.setattr(
+        "app.api.skills_marketplace.GatewayDispatchService.send_agent_message",
+        _fake_send_agent_message,
     )
-    try:
-        async with session_maker() as session:
-            organization, gateway = await _seed_base(session)
-            skill = MarketplaceSkill(
-                organization_id=organization.id,
-                name="Deploy Helper",
-                source_url="https://example.com/skills/deploy-helper.git",
-            )
-            session.add(skill)
-            await session.commit()
-            await session.refresh(skill)
-            session.add(
-                GatewayInstalledSkill(
-                    gateway_id=gateway.id,
-                    skill_id=skill.id,
-                ),
-            )
-            await session.commit()
 
-        app = _build_test_app(session_maker, organization=organization)
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.delete(f"/api/v1/gateways/{gateway.id}")
-
-        assert response.status_code == 200
-        assert response.json() == {"ok": True}
-
-        async with session_maker() as session:
-            deleted_gateway = await session.get(Gateway, gateway.id)
-            assert deleted_gateway is None
-            remaining_installs = (
-                await session.exec(
-                    select(GatewayInstalledSkill).where(
-                        col(GatewayInstalledSkill.gateway_id) == gateway.id,
-                    ),
-                )
-            ).all()
-            assert remaining_installs == []
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_list_marketplace_skills_marks_installed_cards() -> None:
-    engine = await _make_engine()
-    session_maker = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    try:
-        async with session_maker() as session:
-            organization, gateway = await _seed_base(session)
-            first = MarketplaceSkill(
-                organization_id=organization.id,
-                name="First Skill",
-                source_url="https://example.com/skills/first",
-            )
-            second = MarketplaceSkill(
-                organization_id=organization.id,
-                name="Second Skill",
-                source_url="https://example.com/skills/second",
-            )
-            session.add(first)
-            session.add(second)
-            await session.commit()
-            await session.refresh(first)
-            await session.refresh(second)
-
-            session.add(
-                GatewayInstalledSkill(
-                    gateway_id=gateway.id,
-                    skill_id=first.id,
-                ),
-            )
-            await session.commit()
-
-        app = _build_test_app(session_maker, organization=organization)
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.get(
-                "/api/v1/skills/marketplace",
-                params={"gateway_id": str(gateway.id)},
-            )
-
-        assert response.status_code == 200
-        cards = response.json()
-        assert len(cards) == 2
-        cards_by_id = {item["id"]: item for item in cards}
-        assert cards_by_id[str(first.id)]["installed"] is True
-        assert cards_by_id[str(first.id)]["installed_at"] is not None
-        assert cards_by_id[str(second.id)]["installed"] is False
-        assert cards_by_id[str(second.id)]["installed_at"] is None
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_sync_pack_clones_and_upserts_skills(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine = await _make_engine()
-    session_maker = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    try:
-        async with session_maker() as session:
-            organization, _gateway = await _seed_base(session)
-            pack = SkillPack(
-                organization_id=organization.id,
-                name="Antigravity Awesome Skills",
-                source_url="https://github.com/sickn33/antigravity-awesome-skills",
-            )
-            session.add(pack)
-            await session.commit()
-            await session.refresh(pack)
-
-        app = _build_test_app(session_maker, organization=organization)
-
-        collected = [
-            PackSkillCandidate(
-                name="Skill Alpha",
-                description="Alpha description",
-                source_url="https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/alpha",
-                category="testing",
-                risk="low",
-                source="skills/alpha",
-            ),
-            PackSkillCandidate(
-                name="Skill Beta",
-                description="Beta description",
-                source_url="https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/beta",
-                category="automation",
-                risk="medium",
-                source="skills/beta",
-            ),
-        ]
-
-        def _fake_collect_pack_skills(source_url: str) -> list[PackSkillCandidate]:
-            assert source_url == "https://github.com/sickn33/antigravity-awesome-skills"
-            return collected
-
-        monkeypatch.setattr(
-            "app.api.skills_marketplace._collect_pack_skills",
-            _fake_collect_pack_skills,
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/v1/skills/marketplace/{skill.id}/install",
+            params={"gateway_id": str(gateway.id)},
         )
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            first_sync = await client.post(f"/api/v1/skills/packs/{pack.id}/sync")
-            second_sync = await client.post(f"/api/v1/skills/packs/{pack.id}/sync")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["installed"] is True
+    assert body["gateway_id"] == str(gateway.id)
+    assert len(sent_messages) == 1
+    assert sent_messages[0]["agent_name"] == "Gateway Agent"
+    assert sent_messages[0]["deliver"] is True
+    assert sent_messages[0]["session_key"] == f"agent:mc-gateway-{gateway.id}:main"
+    message = str(sent_messages[0]["message"])
+    assert "SKILL INSTALL REQUEST" in message
+    assert str(skill.source_url) in message
+    assert "/workspace/openclaw/skills" in message
 
-        assert first_sync.status_code == 200
-        first_body = first_sync.json()
-        assert first_body["pack_id"] == str(pack.id)
-        assert first_body["synced"] == 2
-        assert first_body["created"] == 2
-        assert first_body["updated"] == 0
+    async with session_maker() as session:
+        installed_rows = (
+            await session.exec(
+                select(GatewayInstalledSkill).where(
+                    col(GatewayInstalledSkill.gateway_id) == gateway.id,
+                    col(GatewayInstalledSkill.skill_id) == skill.id,
+                ),
+            )
+        ).all()
+        assert len(installed_rows) == 1
 
-        assert second_sync.status_code == 200
-        second_body = second_sync.json()
-        assert second_body["pack_id"] == str(pack.id)
-        assert second_body["synced"] == 2
-        assert second_body["created"] == 0
-        assert second_body["updated"] == 0
 
-        async with session_maker() as session:
-            synced_skills = (
-                await session.exec(
-                    select(MarketplaceSkill).where(
-                        col(MarketplaceSkill.organization_id) == organization.id,
-                    ),
-                )
-            ).all()
-            assert len(synced_skills) == 2
-            by_source = {skill.source_url: skill for skill in synced_skills}
-            assert (
-                by_source[
-                    "https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/alpha"
-                ].name
-                == "Skill Alpha"
+@pytest.mark.asyncio
+async def test_delete_gateway_removes_installed_skill_rows(
+    sqlite_engine: AsyncEngine,
+) -> None:
+    session_maker = async_sessionmaker(
+        sqlite_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    async with session_maker() as session:
+        organization, gateway = await _seed_base(session)
+        skill = MarketplaceSkill(
+            organization_id=organization.id,
+            name="Deploy Helper",
+            source_url="https://example.com/skills/deploy-helper.git",
+        )
+        session.add(skill)
+        await session.commit()
+        await session.refresh(skill)
+        session.add(
+            GatewayInstalledSkill(
+                gateway_id=gateway.id,
+                skill_id=skill.id,
+            ),
+        )
+        await session.commit()
+
+    app = _build_test_app(session_maker, organization=organization)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.delete(f"/api/v1/gateways/{gateway.id}")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+    async with session_maker() as session:
+        deleted_gateway = await session.get(Gateway, gateway.id)
+        assert deleted_gateway is None
+        remaining_installs = (
+            await session.exec(
+                select(GatewayInstalledSkill).where(
+                    col(GatewayInstalledSkill.gateway_id) == gateway.id,
+                ),
             )
-            assert (
-                by_source[
-                    "https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/alpha"
-                ].category
-                == "testing"
+        ).all()
+        assert remaining_installs == []
+
+
+@pytest.mark.asyncio
+async def test_list_marketplace_skills_marks_installed_cards(
+    sqlite_engine: AsyncEngine,
+) -> None:
+    session_maker = async_sessionmaker(
+        sqlite_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    async with session_maker() as session:
+        organization, gateway = await _seed_base(session)
+        first = MarketplaceSkill(
+            organization_id=organization.id,
+            name="First Skill",
+            source_url="https://example.com/skills/first",
+        )
+        second = MarketplaceSkill(
+            organization_id=organization.id,
+            name="Second Skill",
+            source_url="https://example.com/skills/second",
+        )
+        session.add(first)
+        session.add(second)
+        await session.commit()
+        await session.refresh(first)
+        await session.refresh(second)
+
+        session.add(
+            GatewayInstalledSkill(
+                gateway_id=gateway.id,
+                skill_id=first.id,
+            ),
+        )
+        await session.commit()
+
+    app = _build_test_app(session_maker, organization=organization)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(
+            "/api/v1/skills/marketplace",
+            params={"gateway_id": str(gateway.id)},
+        )
+
+    assert response.status_code == 200
+    cards = response.json()
+    assert len(cards) == 2
+    cards_by_id = {item["id"]: item for item in cards}
+    assert cards_by_id[str(first.id)]["installed"] is True
+    assert cards_by_id[str(first.id)]["installed_at"] is not None
+    assert cards_by_id[str(second.id)]["installed"] is False
+    assert cards_by_id[str(second.id)]["installed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_sync_pack_clones_and_upserts_skills(
+    monkeypatch: pytest.MonkeyPatch,
+    sqlite_engine: AsyncEngine,
+) -> None:
+    session_maker = async_sessionmaker(
+        sqlite_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    async with session_maker() as session:
+        organization, _gateway = await _seed_base(session)
+        pack = SkillPack(
+            organization_id=organization.id,
+            name="Antigravity Awesome Skills",
+            source_url="https://github.com/sickn33/antigravity-awesome-skills",
+        )
+        session.add(pack)
+        await session.commit()
+        await session.refresh(pack)
+
+    app = _build_test_app(session_maker, organization=organization)
+
+    collected = [
+        PackSkillCandidate(
+            name="Skill Alpha",
+            description="Alpha description",
+            source_url="https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/alpha",
+            category="testing",
+            risk="low",
+            source="skills/alpha",
+        ),
+        PackSkillCandidate(
+            name="Skill Beta",
+            description="Beta description",
+            source_url="https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/beta",
+            category="automation",
+            risk="medium",
+            source="skills/beta",
+        ),
+    ]
+
+    def _fake_collect_pack_skills(source_url: str) -> list[PackSkillCandidate]:
+        assert source_url == "https://github.com/sickn33/antigravity-awesome-skills"
+        return collected
+
+    monkeypatch.setattr(
+        "app.api.skills_marketplace._collect_pack_skills",
+        _fake_collect_pack_skills,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        first_sync = await client.post(f"/api/v1/skills/packs/{pack.id}/sync")
+        second_sync = await client.post(f"/api/v1/skills/packs/{pack.id}/sync")
+
+    assert first_sync.status_code == 200
+    first_body = first_sync.json()
+    assert first_body["pack_id"] == str(pack.id)
+    assert first_body["synced"] == 2
+    assert first_body["created"] == 2
+    assert first_body["updated"] == 0
+
+    assert second_sync.status_code == 200
+    second_body = second_sync.json()
+    assert second_body["pack_id"] == str(pack.id)
+    assert second_body["synced"] == 2
+    assert second_body["created"] == 0
+    assert second_body["updated"] == 0
+
+    async with session_maker() as session:
+        synced_skills = (
+            await session.exec(
+                select(MarketplaceSkill).where(
+                    col(MarketplaceSkill.organization_id) == organization.id,
+                ),
             )
-            assert (
-                by_source[
-                    "https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/alpha"
-                ].risk
-                == "low"
-            )
-            assert (
-                by_source[
-                    "https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/beta"
-                ].description
-                == "Beta description"
-            )
-            assert (
-                by_source[
-                    "https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/beta"
-                ].source
-                == "skills/beta"
-            )
-    finally:
-        await engine.dispose()
+        ).all()
+        assert len(synced_skills) == 2
+        by_source = {skill.source_url: skill for skill in synced_skills}
+        assert (
+            by_source[
+                "https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/alpha"
+            ].name
+            == "Skill Alpha"
+        )
+        assert (
+            by_source[
+                "https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/alpha"
+            ].category
+            == "testing"
+        )
+        assert (
+            by_source[
+                "https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/alpha"
+            ].risk
+            == "low"
+        )
+        assert (
+            by_source[
+                "https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/beta"
+            ].description
+            == "Beta description"
+        )
+        assert (
+            by_source[
+                "https://github.com/sickn33/antigravity-awesome-skills/tree/main/skills/beta"
+            ].source
+            == "skills/beta"
+        )
 
 
 def test_validate_pack_source_url_allows_https_github_repo_with_optional_dot_git() -> None:
@@ -424,290 +409,278 @@ def test_validate_pack_source_url_rejects_git_ssh_scp_like_syntax() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_skill_pack_rejects_non_https_source_url() -> None:
-    engine = await _make_engine()
+async def test_create_skill_pack_rejects_non_https_source_url(
+    sqlite_engine: AsyncEngine,
+) -> None:
     session_maker = async_sessionmaker(
-        engine,
+        sqlite_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    try:
-        async with session_maker() as session:
-            organization, _gateway = await _seed_base(session)
-            await session.commit()
+    async with session_maker() as session:
+        organization, _gateway = await _seed_base(session)
+        await session.commit()
 
-        app = _build_test_app(session_maker, organization=organization)
+    app = _build_test_app(session_maker, organization=organization)
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.post(
-                "/api/v1/skills/packs",
-                json={"source_url": "http://github.com/sickn33/antigravity-awesome-skills"},
-            )
-
-        assert response.status_code == 400
-        assert (
-            "scheme" in response.json()["detail"].lower()
-            or "https" in response.json()["detail"].lower()
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/skills/packs",
+            json={"source_url": "http://github.com/sickn33/antigravity-awesome-skills"},
         )
-    finally:
-        await engine.dispose()
+
+    assert response.status_code == 400
+    assert (
+        "scheme" in response.json()["detail"].lower()
+        or "https" in response.json()["detail"].lower()
+    )
 
 
 @pytest.mark.asyncio
-async def test_create_skill_pack_rejects_localhost_source_url() -> None:
-    engine = await _make_engine()
+async def test_create_skill_pack_rejects_localhost_source_url(
+    sqlite_engine: AsyncEngine,
+) -> None:
     session_maker = async_sessionmaker(
-        engine,
+        sqlite_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    try:
-        async with session_maker() as session:
-            organization, _gateway = await _seed_base(session)
-            await session.commit()
+    async with session_maker() as session:
+        organization, _gateway = await _seed_base(session)
+        await session.commit()
 
-        app = _build_test_app(session_maker, organization=organization)
+    app = _build_test_app(session_maker, organization=organization)
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.post(
-                "/api/v1/skills/packs",
-                json={"source_url": "https://localhost/skills-pack"},
-            )
-
-        assert response.status_code == 400
-        assert (
-            "hostname" in response.json()["detail"].lower()
-            or "not allowed" in response.json()["detail"].lower()
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/skills/packs",
+            json={"source_url": "https://localhost/skills-pack"},
         )
-    finally:
-        await engine.dispose()
+
+    assert response.status_code == 400
+    assert (
+        "hostname" in response.json()["detail"].lower()
+        or "not allowed" in response.json()["detail"].lower()
+    )
 
 
 @pytest.mark.asyncio
-async def test_create_skill_pack_is_unique_by_normalized_source_url() -> None:
-    engine = await _make_engine()
+async def test_create_skill_pack_is_unique_by_normalized_source_url(
+    sqlite_engine: AsyncEngine,
+) -> None:
     session_maker = async_sessionmaker(
-        engine,
+        sqlite_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    try:
-        async with session_maker() as session:
-            organization, _gateway = await _seed_base(session)
-            await session.commit()
+    async with session_maker() as session:
+        organization, _gateway = await _seed_base(session)
+        await session.commit()
 
-        app = _build_test_app(session_maker, organization=organization)
+    app = _build_test_app(session_maker, organization=organization)
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            first = await client.post(
-                "/api/v1/skills/packs",
-                json={"source_url": "https://github.com/org/repo"},
-            )
-            spaced = await client.post(
-                "/api/v1/skills/packs",
-                json={"source_url": " https://github.com/org/repo.git  "},
-            )
-            second = await client.post(
-                "/api/v1/skills/packs",
-                json={"source_url": "https://github.com/org/repo/"},
-            )
-            third = await client.post(
-                "/api/v1/skills/packs",
-                json={"source_url": "https://github.com/org/repo.git"},
-            )
-            packs = await client.get("/api/v1/skills/packs")
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        first = await client.post(
+            "/api/v1/skills/packs",
+            json={"source_url": "https://github.com/org/repo"},
+        )
+        spaced = await client.post(
+            "/api/v1/skills/packs",
+            json={"source_url": " https://github.com/org/repo.git  "},
+        )
+        second = await client.post(
+            "/api/v1/skills/packs",
+            json={"source_url": "https://github.com/org/repo/"},
+        )
+        third = await client.post(
+            "/api/v1/skills/packs",
+            json={"source_url": "https://github.com/org/repo.git"},
+        )
+        packs = await client.get("/api/v1/skills/packs")
 
-        assert first.status_code == 200
-        assert spaced.status_code == 200
-        assert second.status_code == 200
-        assert third.status_code == 200
-        assert spaced.json()["id"] == first.json()["id"]
-        assert spaced.json()["source_url"] == first.json()["source_url"]
-        assert second.json()["id"] == first.json()["id"]
-        assert second.json()["source_url"] == first.json()["source_url"]
-        assert third.json()["id"] == first.json()["id"]
-        assert third.json()["source_url"] == first.json()["source_url"]
-        assert packs.status_code == 200
-        pack_items = packs.json()
-        assert len(pack_items) == 1
-        assert pack_items[0]["source_url"] == "https://github.com/org/repo"
-    finally:
-        await engine.dispose()
+    assert first.status_code == 200
+    assert spaced.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 200
+    assert spaced.json()["id"] == first.json()["id"]
+    assert spaced.json()["source_url"] == first.json()["source_url"]
+    assert second.json()["id"] == first.json()["id"]
+    assert second.json()["source_url"] == first.json()["source_url"]
+    assert third.json()["id"] == first.json()["id"]
+    assert third.json()["source_url"] == first.json()["source_url"]
+    assert packs.status_code == 200
+    pack_items = packs.json()
+    assert len(pack_items) == 1
+    assert pack_items[0]["source_url"] == "https://github.com/org/repo"
 
 
 @pytest.mark.asyncio
-async def test_list_skill_packs_includes_skill_count() -> None:
-    engine = await _make_engine()
+async def test_list_skill_packs_includes_skill_count(
+    sqlite_engine: AsyncEngine,
+) -> None:
     session_maker = async_sessionmaker(
-        engine,
+        sqlite_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    try:
-        async with session_maker() as session:
-            organization, _gateway = await _seed_base(session)
-            pack = SkillPack(
+    async with session_maker() as session:
+        organization, _gateway = await _seed_base(session)
+        pack = SkillPack(
+            organization_id=organization.id,
+            name="Pack One",
+            source_url="https://github.com/sickn33/antigravity-awesome-skills",
+        )
+        session.add(pack)
+        session.add(
+            MarketplaceSkill(
                 organization_id=organization.id,
-                name="Pack One",
-                source_url="https://github.com/sickn33/antigravity-awesome-skills",
+                name="Skill One",
+                source_url=(
+                    "https://github.com/sickn33/antigravity-awesome-skills"
+                    "/tree/main/skills/alpha"
+                ),
             )
-            session.add(pack)
-            session.add(
-                MarketplaceSkill(
-                    organization_id=organization.id,
-                    name="Skill One",
-                    source_url=(
-                        "https://github.com/sickn33/antigravity-awesome-skills"
-                        "/tree/main/skills/alpha"
-                    ),
-                )
+        )
+        session.add(
+            MarketplaceSkill(
+                organization_id=organization.id,
+                name="Skill Two",
+                source_url=(
+                    "https://github.com/sickn33/antigravity-awesome-skills"
+                    "/tree/main/skills/beta"
+                ),
             )
-            session.add(
-                MarketplaceSkill(
-                    organization_id=organization.id,
-                    name="Skill Two",
-                    source_url=(
-                        "https://github.com/sickn33/antigravity-awesome-skills"
-                        "/tree/main/skills/beta"
-                    ),
-                )
+        )
+        session.add(
+            MarketplaceSkill(
+                organization_id=organization.id,
+                name="Other Repo Skill",
+                source_url="https://github.com/other/repo/tree/main/skills/other",
             )
-            session.add(
-                MarketplaceSkill(
-                    organization_id=organization.id,
-                    name="Other Repo Skill",
-                    source_url="https://github.com/other/repo/tree/main/skills/other",
-                )
-            )
-            await session.commit()
+        )
+        await session.commit()
 
-        app = _build_test_app(session_maker, organization=organization)
+    app = _build_test_app(session_maker, organization=organization)
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.get("/api/v1/skills/packs")
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/v1/skills/packs")
 
-        assert response.status_code == 200
-        items = response.json()
-        assert len(items) == 1
-        assert items[0]["name"] == "Pack One"
-        assert items[0]["skill_count"] == 2
-    finally:
-        await engine.dispose()
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) == 1
+    assert items[0]["name"] == "Pack One"
+    assert items[0]["skill_count"] == 2
 
 
 @pytest.mark.asyncio
-async def test_update_skill_pack_rejects_duplicate_normalized_source_url() -> None:
-    engine = await _make_engine()
+async def test_update_skill_pack_rejects_duplicate_normalized_source_url(
+    sqlite_engine: AsyncEngine,
+) -> None:
     session_maker = async_sessionmaker(
-        engine,
+        sqlite_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    try:
-        async with session_maker() as session:
-            organization, _gateway = await _seed_base(session)
-            pack_a = SkillPack(
-                organization_id=organization.id,
-                source_url="https://github.com/org/repo",
-                name="Pack A",
+    async with session_maker() as session:
+        organization, _gateway = await _seed_base(session)
+        pack_a = SkillPack(
+            organization_id=organization.id,
+            source_url="https://github.com/org/repo",
+            name="Pack A",
+        )
+        pack_b = SkillPack(
+            organization_id=organization.id,
+            source_url="https://github.com/org/other-repo",
+            name="Pack B",
+        )
+        session.add(pack_a)
+        session.add(pack_b)
+        await session.commit()
+        await session.refresh(pack_a)
+        await session.refresh(pack_b)
+
+    app = _build_test_app(session_maker, organization=organization)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.patch(
+            f"/api/v1/skills/packs/{pack_b.id}",
+            json={"source_url": "https://github.com/org/repo/"},
+        )
+
+    assert response.status_code == 409
+    assert "already exists" in response.json()["detail"].lower()
+
+    async with session_maker() as session:
+        pack_rows = (
+            await session.exec(
+                select(SkillPack)
+                .where(col(SkillPack.organization_id) == organization.id)
+                .order_by(col(SkillPack.created_at).asc())
             )
-            pack_b = SkillPack(
-                organization_id=organization.id,
-                source_url="https://github.com/org/other-repo",
-                name="Pack B",
-            )
-            session.add(pack_a)
-            session.add(pack_b)
-            await session.commit()
-            await session.refresh(pack_a)
-            await session.refresh(pack_b)
-
-        app = _build_test_app(session_maker, organization=organization)
-
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.patch(
-                f"/api/v1/skills/packs/{pack_b.id}",
-                json={"source_url": "https://github.com/org/repo/"},
-            )
-
-        assert response.status_code == 409
-        assert "already exists" in response.json()["detail"].lower()
-
-        async with session_maker() as session:
-            pack_rows = (
-                await session.exec(
-                    select(SkillPack)
-                    .where(col(SkillPack.organization_id) == organization.id)
-                    .order_by(col(SkillPack.created_at).asc())
-                )
-            ).all()
-        assert len(pack_rows) == 2
-        assert {str(pack.source_url) for pack in pack_rows} == {
-            "https://github.com/org/repo",
-            "https://github.com/org/other-repo",
-        }
-    finally:
-        await engine.dispose()
+        ).all()
+    assert len(pack_rows) == 2
+    assert {str(pack.source_url) for pack in pack_rows} == {
+        "https://github.com/org/repo",
+        "https://github.com/org/other-repo",
+    }
 
 
 @pytest.mark.asyncio
-async def test_update_skill_pack_normalizes_source_url_on_update() -> None:
-    engine = await _make_engine()
+async def test_update_skill_pack_normalizes_source_url_on_update(
+    sqlite_engine: AsyncEngine,
+) -> None:
     session_maker = async_sessionmaker(
-        engine,
+        sqlite_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    try:
-        async with session_maker() as session:
-            organization, _gateway = await _seed_base(session)
-            pack = SkillPack(
-                organization_id=organization.id,
-                source_url="https://github.com/org/old",
-                name="Initial",
+    async with session_maker() as session:
+        organization, _gateway = await _seed_base(session)
+        pack = SkillPack(
+            organization_id=organization.id,
+            source_url="https://github.com/org/old",
+            name="Initial",
+        )
+        session.add(pack)
+        await session.commit()
+        await session.refresh(pack)
+
+    app = _build_test_app(session_maker, organization=organization)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.patch(
+            f"/api/v1/skills/packs/{pack.id}",
+            json={"source_url": " https://github.com/org/new.git/ "},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["source_url"] == "https://github.com/org/new"
+
+    async with session_maker() as session:
+        updated = (
+            await session.exec(
+                select(SkillPack).where(col(SkillPack.id) == pack.id),
             )
-            session.add(pack)
-            await session.commit()
-            await session.refresh(pack)
-
-        app = _build_test_app(session_maker, organization=organization)
-
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.patch(
-                f"/api/v1/skills/packs/{pack.id}",
-                json={"source_url": " https://github.com/org/new.git/ "},
-            )
-
-        assert response.status_code == 200
-        assert response.json()["source_url"] == "https://github.com/org/new"
-
-        async with session_maker() as session:
-            updated = (
-                await session.exec(
-                    select(SkillPack).where(col(SkillPack.id) == pack.id),
-                )
-            ).one()
-            assert str(updated.source_url) == "https://github.com/org/new"
-    finally:
-        await engine.dispose()
+        ).one()
+        assert str(updated.source_url) == "https://github.com/org/new"
 
 
 def test_collect_pack_skills_from_repo_uses_root_index_when_present(tmp_path: Path) -> None:

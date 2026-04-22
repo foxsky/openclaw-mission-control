@@ -3,8 +3,6 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.approval_task_links import ApprovalTaskLink
@@ -17,17 +15,6 @@ from app.services.approval_task_links import (
     normalize_task_ids,
     task_counts_for_board,
 )
-
-
-async def _make_engine() -> AsyncEngine:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.connect() as conn, conn.begin():
-        await conn.run_sync(SQLModel.metadata.create_all)
-    return engine
-
-
-async def _make_session(engine: AsyncEngine) -> AsyncSession:
-    return AsyncSession(engine, expire_on_commit=False)
 
 
 async def _seed_board(session: AsyncSession) -> tuple[UUID, UUID, UUID, UUID]:
@@ -66,88 +53,82 @@ def test_normalize_task_ids_dedupes_and_merges_sources() -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_counts_for_board_supports_multi_task_links_and_legacy_rows() -> None:
-    engine = await _make_engine()
-    try:
-        async with await _make_session(engine) as session:
-            board_id, task_a, task_b, task_c = await _seed_board(session)
+async def test_task_counts_for_board_supports_multi_task_links_and_legacy_rows(
+    sqlite_session: AsyncSession,
+) -> None:
+    board_id, task_a, task_b, task_c = await _seed_board(sqlite_session)
 
-            approval_pending_multi = Approval(
-                board_id=board_id,
-                task_id=task_a,
-                action_type="task.update",
-                confidence=80,
-                status="pending",
-            )
-            approval_approved = Approval(
-                board_id=board_id,
-                task_id=task_a,
-                action_type="task.complete",
-                confidence=90,
-                status="approved",
-            )
-            approval_pending_two = Approval(
-                board_id=board_id,
-                task_id=task_b,
-                action_type="task.assign",
-                confidence=75,
-                status="pending",
-            )
-            approval_legacy = Approval(
-                board_id=board_id,
-                task_id=task_c,
-                action_type="task.comment",
-                confidence=65,
-                status="pending",
-            )
-            session.add(approval_pending_multi)
-            session.add(approval_approved)
-            session.add(approval_pending_two)
-            session.add(approval_legacy)
-            await session.flush()
+    approval_pending_multi = Approval(
+        board_id=board_id,
+        task_id=task_a,
+        action_type="task.update",
+        confidence=80,
+        status="pending",
+    )
+    approval_approved = Approval(
+        board_id=board_id,
+        task_id=task_a,
+        action_type="task.complete",
+        confidence=90,
+        status="approved",
+    )
+    approval_pending_two = Approval(
+        board_id=board_id,
+        task_id=task_b,
+        action_type="task.assign",
+        confidence=75,
+        status="pending",
+    )
+    approval_legacy = Approval(
+        board_id=board_id,
+        task_id=task_c,
+        action_type="task.comment",
+        confidence=65,
+        status="pending",
+    )
+    sqlite_session.add(approval_pending_multi)
+    sqlite_session.add(approval_approved)
+    sqlite_session.add(approval_pending_two)
+    sqlite_session.add(approval_legacy)
+    await sqlite_session.flush()
 
-            session.add(
-                ApprovalTaskLink(approval_id=approval_pending_multi.id, task_id=task_a),
-            )
-            session.add(
-                ApprovalTaskLink(approval_id=approval_pending_multi.id, task_id=task_b),
-            )
-            session.add(ApprovalTaskLink(approval_id=approval_approved.id, task_id=task_a))
-            session.add(ApprovalTaskLink(approval_id=approval_pending_two.id, task_id=task_b))
-            session.add(ApprovalTaskLink(approval_id=approval_pending_two.id, task_id=task_c))
-            await session.commit()
+    sqlite_session.add(
+        ApprovalTaskLink(approval_id=approval_pending_multi.id, task_id=task_a),
+    )
+    sqlite_session.add(
+        ApprovalTaskLink(approval_id=approval_pending_multi.id, task_id=task_b),
+    )
+    sqlite_session.add(ApprovalTaskLink(approval_id=approval_approved.id, task_id=task_a))
+    sqlite_session.add(ApprovalTaskLink(approval_id=approval_pending_two.id, task_id=task_b))
+    sqlite_session.add(ApprovalTaskLink(approval_id=approval_pending_two.id, task_id=task_c))
+    await sqlite_session.commit()
 
-            counts = await task_counts_for_board(session, board_id=board_id)
+    counts = await task_counts_for_board(sqlite_session, board_id=board_id)
 
-            assert counts[task_a] == (2, 1)
-            assert counts[task_b] == (2, 2)
-            assert counts[task_c] == (2, 2)
-    finally:
-        await engine.dispose()
+    assert counts[task_a] == (2, 1)
+    assert counts[task_b] == (2, 2)
+    assert counts[task_c] == (2, 2)
 
 
 @pytest.mark.asyncio
-async def test_load_task_ids_by_approval_preserves_insert_order() -> None:
-    engine = await _make_engine()
-    try:
-        async with await _make_session(engine) as session:
-            board_id, task_a, task_b, task_c = await _seed_board(session)
+async def test_load_task_ids_by_approval_preserves_insert_order(
+    sqlite_session: AsyncSession,
+) -> None:
+    board_id, task_a, task_b, task_c = await _seed_board(sqlite_session)
 
-            approval = Approval(
-                board_id=board_id,
-                task_id=task_a,
-                action_type="task.update",
-                confidence=88,
-                status="pending",
-            )
-            session.add(approval)
-            await session.flush()
-            session.add(ApprovalTaskLink(approval_id=approval.id, task_id=task_a))
-            session.add(ApprovalTaskLink(approval_id=approval.id, task_id=task_b))
-            session.add(ApprovalTaskLink(approval_id=approval.id, task_id=task_c))
-            await session.commit()
+    approval = Approval(
+        board_id=board_id,
+        task_id=task_a,
+        action_type="task.update",
+        confidence=88,
+        status="pending",
+    )
+    sqlite_session.add(approval)
+    await sqlite_session.flush()
+    sqlite_session.add(ApprovalTaskLink(approval_id=approval.id, task_id=task_a))
+    sqlite_session.add(ApprovalTaskLink(approval_id=approval.id, task_id=task_b))
+    sqlite_session.add(ApprovalTaskLink(approval_id=approval.id, task_id=task_c))
+    await sqlite_session.commit()
 
-            mapping = await load_task_ids_by_approval(session, approval_ids=[approval.id])
-            assert mapping[approval.id] == [task_a, task_b, task_c]
-    finally:
-        await engine.dispose()
+    mapping = await load_task_ids_by_approval(sqlite_session, approval_ids=[approval.id])
+    assert mapping[approval.id] == [task_a, task_b, task_c]

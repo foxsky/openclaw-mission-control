@@ -7,30 +7,15 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import board_memory
 from app.models.agents import Agent
-from app.models.board_memory import BoardMemory
 from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.organizations import Organization
-import app.services.openclaw.heartbeat_sweep as heartbeat_sweep
 import app.services.openclaw.provisioning as provisioning
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
-
-
-async def _make_engine() -> AsyncEngine:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.connect() as conn, conn.begin():
-        await conn.run_sync(SQLModel.metadata.create_all)
-    return engine
-
-
-async def _make_session(engine: AsyncEngine) -> AsyncSession:
-    return AsyncSession(engine, expire_on_commit=False)
 
 
 def _seed_org_gateway_board(
@@ -59,6 +44,7 @@ def _seed_org_gateway_board(
 @pytest.mark.asyncio
 async def test_board_memory_pause_resume_sends_single_global_set_heartbeats(
     monkeypatch: pytest.MonkeyPatch,
+    sqlite_session: AsyncSession,
 ) -> None:
     sent_messages: list[str] = []
     rpc_calls: list[tuple[str, dict]] = []
@@ -78,43 +64,42 @@ async def test_board_memory_pause_resume_sends_single_global_set_heartbeats(
     )
     monkeypatch.setattr(board_memory, "openclaw_call", _fake_openclaw_call, raising=False)
 
-    engine = await _make_engine()
-    async with await _make_session(engine) as session:
-        org, gateway, board = _seed_org_gateway_board()
-        agents = [
-            Agent(
-                id=uuid4(), board_id=board.id, gateway_id=gateway.id,
-                name="Worker 1", openclaw_session_id="session:w1",
-                heartbeat_config={"every": "30m"},
-            ),
-            Agent(
-                id=uuid4(), board_id=board.id, gateway_id=gateway.id,
-                name="Worker 2", openclaw_session_id="session:w2",
-                heartbeat_config={"every": "30m"},
-            ),
-        ]
-        session.add(org)
-        session.add(gateway)
-        session.add(board)
-        for a in agents:
-            session.add(a)
-        await session.commit()
+    session = sqlite_session
+    org, gateway, board = _seed_org_gateway_board()
+    agents = [
+        Agent(
+            id=uuid4(), board_id=board.id, gateway_id=gateway.id,
+            name="Worker 1", openclaw_session_id="session:w1",
+            heartbeat_config={"every": "30m"},
+        ),
+        Agent(
+            id=uuid4(), board_id=board.id, gateway_id=gateway.id,
+            name="Worker 2", openclaw_session_id="session:w2",
+            heartbeat_config={"every": "30m"},
+        ),
+    ]
+    session.add(org)
+    session.add(gateway)
+    session.add(board)
+    for a in agents:
+        session.add(a)
+    await session.commit()
 
-        actor = board_memory.ActorContext(actor_type="user", user=None, agent=None)
-        dispatch = board_memory.GatewayDispatchService(session)
-        config = GatewayClientConfig(
-            url=gateway.url, token=gateway.token,
-            allow_insecure_tls=True, disable_device_pairing=True,
-        )
+    actor = board_memory.ActorContext(actor_type="user", user=None, agent=None)
+    dispatch = board_memory.GatewayDispatchService(session)
+    config = GatewayClientConfig(
+        url=gateway.url, token=gateway.token,
+        allow_insecure_tls=True, disable_device_pairing=True,
+    )
 
-        await board_memory._send_control_command(
-            session=session, board=board, actor=actor,
-            dispatch=dispatch, config=config, command="/pause",
-        )
-        await board_memory._send_control_command(
-            session=session, board=board, actor=actor,
-            dispatch=dispatch, config=config, command="/resume",
-        )
+    await board_memory._send_control_command(
+        session=session, board=board, actor=actor,
+        dispatch=dispatch, config=config, command="/pause",
+    )
+    await board_memory._send_control_command(
+        session=session, board=board, actor=actor,
+        dispatch=dispatch, config=config, command="/resume",
+    )
 
     # Two agents → two chat messages per command = 4 total
     assert sent_messages == ["/pause", "/pause", "/resume", "/resume"]

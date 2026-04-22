@@ -9,13 +9,9 @@ derivation contract without spinning up the whole task stack.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.tasks import _task_is_blocked
@@ -30,19 +26,6 @@ from app.services.operator_decisions import (
     task_has_pending_operator_decision,
     task_ids_with_pending_operator_decision,
 )
-
-
-@pytest_asyncio.fixture
-async def db_session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    session = AsyncSession(engine, expire_on_commit=False)
-    try:
-        yield session
-    finally:
-        await session.close()
-        await engine.dispose()
 
 
 def _task(**overrides: object) -> Task:
@@ -90,26 +73,26 @@ def test_terminal_status_still_clears_open_blocker() -> None:
 
 @pytest.mark.asyncio
 async def test_scalar_exists_returns_false_on_empty_table(
-    db_session: AsyncSession,
+    sqlite_session: AsyncSession,
 ) -> None:
     """task_has_open_blocker on a task with no rows must be False —
     guards against a ``Row``-truthiness false positive."""
 
     assert not await task_has_open_blocker(
-        db_session, board_id=uuid4(), task_id=uuid4()
+        sqlite_session, board_id=uuid4(), task_id=uuid4()
     )
 
 
 @pytest.mark.asyncio
 async def test_scalar_exists_honors_resolved_at(
-    db_session: AsyncSession,
+    sqlite_session: AsyncSession,
 ) -> None:
     """Resolved blockers must not satisfy the EXISTS clause."""
 
     board_id = uuid4()
     open_task_id = uuid4()
     resolved_task_id = uuid4()
-    db_session.add(
+    sqlite_session.add(
         Blocker(
             board_id=board_id,
             task_id=open_task_id,
@@ -123,23 +106,23 @@ async def test_scalar_exists_honors_resolved_at(
         category="source",
         owner_role="dev",
     )
-    db_session.add(resolved)
-    await db_session.commit()
+    sqlite_session.add(resolved)
+    await sqlite_session.commit()
     resolved.resolved_at = resolved.created_at
-    db_session.add(resolved)
-    await db_session.commit()
+    sqlite_session.add(resolved)
+    await sqlite_session.commit()
 
     assert await task_has_open_blocker(
-        db_session, board_id=board_id, task_id=open_task_id
+        sqlite_session, board_id=board_id, task_id=open_task_id
     )
     assert not await task_has_open_blocker(
-        db_session, board_id=board_id, task_id=resolved_task_id
+        sqlite_session, board_id=board_id, task_id=resolved_task_id
     )
 
 
 @pytest.mark.asyncio
 async def test_pending_decision_preloader_joins_link_and_filters_pending(
-    db_session: AsyncSession,
+    sqlite_session: AsyncSession,
 ) -> None:
     """Batch preloader must return only tasks with a PENDING (not
     resolved, not cancelled) decision linked via the sidecar table."""
@@ -152,39 +135,39 @@ async def test_pending_decision_preloader_joins_link_and_filters_pending(
     resolved = OperatorDecision(
         board_id=board_id, question="resolved?", status="resolved"
     )
-    db_session.add(pending)
-    db_session.add(resolved)
-    await db_session.commit()
-    db_session.add(
+    sqlite_session.add(pending)
+    sqlite_session.add(resolved)
+    await sqlite_session.commit()
+    sqlite_session.add(
         OperatorDecisionTaskLink(
             decision_id=pending.id, task_id=pending_task_id
         ),
     )
-    db_session.add(
+    sqlite_session.add(
         OperatorDecisionTaskLink(
             decision_id=resolved.id, task_id=resolved_task_id
         ),
     )
-    await db_session.commit()
+    await sqlite_session.commit()
 
     blocked = await task_ids_with_pending_operator_decision(
-        db_session,
+        sqlite_session,
         board_id=board_id,
         task_ids=[pending_task_id, resolved_task_id, unlinked_task_id],
     )
     assert blocked == {pending_task_id}
 
     assert await task_has_pending_operator_decision(
-        db_session, board_id=board_id, task_id=pending_task_id
+        sqlite_session, board_id=board_id, task_id=pending_task_id
     )
     assert not await task_has_pending_operator_decision(
-        db_session, board_id=board_id, task_id=resolved_task_id
+        sqlite_session, board_id=board_id, task_id=resolved_task_id
     )
 
 
 @pytest.mark.asyncio
 async def test_batch_preloader_returns_only_open_blocker_task_ids(
-    db_session: AsyncSession,
+    sqlite_session: AsyncSession,
 ) -> None:
     """``task_ids_with_open_blocker`` must exclude resolved rows."""
 
@@ -192,7 +175,7 @@ async def test_batch_preloader_returns_only_open_blocker_task_ids(
     open_task_id = uuid4()
     resolved_task_id = uuid4()
     no_blocker_task_id = uuid4()
-    db_session.add(
+    sqlite_session.add(
         Blocker(
             board_id=board_id,
             task_id=open_task_id,
@@ -206,14 +189,14 @@ async def test_batch_preloader_returns_only_open_blocker_task_ids(
         category="source",
         owner_role="frontend-dev",
     )
-    db_session.add(resolved)
-    await db_session.commit()
+    sqlite_session.add(resolved)
+    await sqlite_session.commit()
     resolved.resolved_at = resolved.created_at
-    db_session.add(resolved)
-    await db_session.commit()
+    sqlite_session.add(resolved)
+    await sqlite_session.commit()
 
     blocked = await task_ids_with_open_blocker(
-        db_session,
+        sqlite_session,
         board_id=board_id,
         task_ids=[open_task_id, resolved_task_id, no_blocker_task_id],
     )

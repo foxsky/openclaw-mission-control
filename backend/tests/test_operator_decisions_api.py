@@ -11,8 +11,7 @@ import pytest
 import pytest_asyncio
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel, col, select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.operator_decisions import (
@@ -42,21 +41,16 @@ class _ActorStub:
 
 
 @pytest_asyncio.fixture
-async def seeded() -> AsyncIterator[
-    tuple[AsyncSession, Board, Task, _ActorStub]
-]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    session = AsyncSession(engine, expire_on_commit=False)
-
+async def seeded(
+    sqlite_session: AsyncSession,
+) -> AsyncIterator[tuple[AsyncSession, Board, Task, _ActorStub]]:
     org_id = uuid4()
     gateway_id = uuid4()
     board_id = uuid4()
     agent_id = uuid4()
     task_id = uuid4()
-    session.add(Organization(id=org_id, name=f"org-{org_id}"))
-    session.add(
+    sqlite_session.add(Organization(id=org_id, name=f"org-{org_id}"))
+    sqlite_session.add(
         Gateway(
             id=gateway_id,
             organization_id=org_id,
@@ -73,7 +67,7 @@ async def seeded() -> AsyncIterator[
         slug="phase-iii-test",
         description="Seeded for operator-decision API tests.",
     )
-    session.add(board)
+    sqlite_session.add(board)
     agent = Agent(
         id=agent_id,
         board_id=board_id,
@@ -82,21 +76,17 @@ async def seeded() -> AsyncIterator[
         status="online",
         openclaw_session_id="escalator:session",
     )
-    session.add(agent)
+    sqlite_session.add(agent)
     task = Task(
         id=task_id,
         board_id=board_id,
         title="Decision target",
         status="in_progress",
     )
-    session.add(task)
-    await session.commit()
-    await session.refresh(task)
-    try:
-        yield session, board, task, _ActorStub(agent=agent)
-    finally:
-        await session.close()
-        await engine.dispose()
+    sqlite_session.add(task)
+    await sqlite_session.commit()
+    await sqlite_session.refresh(task)
+    yield sqlite_session, board, task, _ActorStub(agent=agent)
 
 
 @pytest.mark.asyncio

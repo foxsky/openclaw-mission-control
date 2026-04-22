@@ -16,8 +16,6 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.blockers import create_task_blocker, update_task_blocker
@@ -38,20 +36,17 @@ class _ActorStub:
 
 
 @pytest_asyncio.fixture
-async def seeded() -> AsyncIterator[tuple[AsyncSession, Board, Task, _ActorStub]]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    session = AsyncSession(engine, expire_on_commit=False)
-
+async def seeded(
+    sqlite_session: AsyncSession,
+) -> AsyncIterator[tuple[AsyncSession, Board, Task, _ActorStub]]:
     org_id = uuid4()
     gateway_id = uuid4()
     board_id = uuid4()
     agent_id = uuid4()
     task_id = uuid4()
 
-    session.add(Organization(id=org_id, name=f"org-{org_id}"))
-    session.add(
+    sqlite_session.add(Organization(id=org_id, name=f"org-{org_id}"))
+    sqlite_session.add(
         Gateway(
             id=gateway_id,
             organization_id=org_id,
@@ -68,7 +63,7 @@ async def seeded() -> AsyncIterator[tuple[AsyncSession, Board, Task, _ActorStub]
         slug="phase-ii-test",
         description="Seeded for blocker API tests.",
     )
-    session.add(board)
+    sqlite_session.add(board)
     agent = Agent(
         id=agent_id,
         board_id=board_id,
@@ -77,22 +72,18 @@ async def seeded() -> AsyncIterator[tuple[AsyncSession, Board, Task, _ActorStub]
         status="online",
         openclaw_session_id="filer:session",
     )
-    session.add(agent)
+    sqlite_session.add(agent)
     task = Task(
         id=task_id,
         board_id=board_id,
         title="Test task",
         status="in_progress",
     )
-    session.add(task)
-    await session.commit()
-    await session.refresh(task)
+    sqlite_session.add(task)
+    await sqlite_session.commit()
+    await sqlite_session.refresh(task)
     actor = _ActorStub(agent=agent)
-    try:
-        yield session, board, task, actor
-    finally:
-        await session.close()
-        await engine.dispose()
+    yield sqlite_session, board, task, actor
 
 
 def _create_payload(**overrides: object) -> BlockerCreate:

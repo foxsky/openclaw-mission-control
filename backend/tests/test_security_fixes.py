@@ -10,8 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
-from sqlmodel import SQLModel
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import board_webhooks
@@ -29,13 +28,6 @@ from app.services.admin_access import require_user_actor
 # ---------------------------------------------------------------------------
 # Shared test infrastructure
 # ---------------------------------------------------------------------------
-
-
-async def _make_engine() -> AsyncEngine:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.connect() as conn, conn.begin():
-        await conn.run_sync(SQLModel.metadata.create_all)
-    return engine
 
 
 def _build_webhook_test_app(
@@ -169,10 +161,10 @@ class TestWebhookHmacVerification:
     async def test_webhook_with_secret_rejects_missing_signature(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        sqlite_engine: AsyncEngine,
     ) -> None:
         """A webhook with a secret configured should reject requests without a signature."""
-        engine = await _make_engine()
-        session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        session_maker = async_sessionmaker(sqlite_engine, class_=AsyncSession, expire_on_commit=False)
         app = _build_webhook_test_app(session_maker)
 
         monkeypatch.setattr(board_webhooks, "enqueue_webhook_delivery", lambda p: True)
@@ -186,28 +178,25 @@ class TestWebhookHmacVerification:
         async with session_maker() as session:
             board, webhook = await _seed_webhook_with_secret(session, secret="my-secret-key")
 
-        try:
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://testserver",
-            ) as client:
-                response = await client.post(
-                    f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
-                    json={"event": "test"},
-                )
-            assert response.status_code == 403
-            assert "Missing webhook signature" in response.json()["detail"]
-        finally:
-            await engine.dispose()
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
+                json={"event": "test"},
+            )
+        assert response.status_code == 403
+        assert "Missing webhook signature" in response.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_webhook_with_secret_rejects_invalid_signature(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        sqlite_engine: AsyncEngine,
     ) -> None:
         """A webhook with a secret should reject requests with an incorrect signature."""
-        engine = await _make_engine()
-        session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        session_maker = async_sessionmaker(sqlite_engine, class_=AsyncSession, expire_on_commit=False)
         app = _build_webhook_test_app(session_maker)
 
         monkeypatch.setattr(board_webhooks, "enqueue_webhook_delivery", lambda p: True)
@@ -220,29 +209,26 @@ class TestWebhookHmacVerification:
         async with session_maker() as session:
             board, webhook = await _seed_webhook_with_secret(session, secret="my-secret-key")
 
-        try:
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://testserver",
-            ) as client:
-                response = await client.post(
-                    f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
-                    json={"event": "test"},
-                    headers={"X-Hub-Signature-256": "sha256=invalid"},
-                )
-            assert response.status_code == 403
-            assert "Invalid webhook signature" in response.json()["detail"]
-        finally:
-            await engine.dispose()
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
+                json={"event": "test"},
+                headers={"X-Hub-Signature-256": "sha256=invalid"},
+            )
+        assert response.status_code == 403
+        assert "Invalid webhook signature" in response.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_webhook_with_secret_accepts_valid_signature(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        sqlite_engine: AsyncEngine,
     ) -> None:
         """A valid HMAC-SHA256 signature should be accepted."""
-        engine = await _make_engine()
-        session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        session_maker = async_sessionmaker(sqlite_engine, class_=AsyncSession, expire_on_commit=False)
         app = _build_webhook_test_app(session_maker)
 
         monkeypatch.setattr(board_webhooks, "enqueue_webhook_delivery", lambda p: True)
@@ -259,31 +245,28 @@ class TestWebhookHmacVerification:
         body = b'{"event": "test"}'
         sig = hmac_mod.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
-        try:
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://testserver",
-            ) as client:
-                response = await client.post(
-                    f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
-                    content=body,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-Hub-Signature-256": f"sha256={sig}",
-                    },
-                )
-            assert response.status_code == 202
-        finally:
-            await engine.dispose()
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": f"sha256={sig}",
+                },
+            )
+        assert response.status_code == 202
 
     @pytest.mark.asyncio
     async def test_webhook_without_secret_allows_unsigned_request(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        sqlite_engine: AsyncEngine,
     ) -> None:
         """A webhook without a secret should accept unsigned requests (backward compat)."""
-        engine = await _make_engine()
-        session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        session_maker = async_sessionmaker(sqlite_engine, class_=AsyncSession, expire_on_commit=False)
         app = _build_webhook_test_app(session_maker)
 
         monkeypatch.setattr(board_webhooks, "enqueue_webhook_delivery", lambda p: True)
@@ -296,27 +279,24 @@ class TestWebhookHmacVerification:
         async with session_maker() as session:
             board, webhook = await _seed_webhook_with_secret(session, secret=None)
 
-        try:
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://testserver",
-            ) as client:
-                response = await client.post(
-                    f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
-                    json={"event": "test"},
-                )
-            assert response.status_code == 202
-        finally:
-            await engine.dispose()
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
+                json={"event": "test"},
+            )
+        assert response.status_code == 202
 
     @pytest.mark.asyncio
     async def test_webhook_accepts_configured_signature_header(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        sqlite_engine: AsyncEngine,
     ) -> None:
         """A configured signature_header should override the default header names."""
-        engine = await _make_engine()
-        session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        session_maker = async_sessionmaker(sqlite_engine, class_=AsyncSession, expire_on_commit=False)
         app = _build_webhook_test_app(session_maker)
 
         monkeypatch.setattr(board_webhooks, "enqueue_webhook_delivery", lambda p: True)
@@ -336,22 +316,19 @@ class TestWebhookHmacVerification:
         body = b'{"event": "test"}'
         sig = hmac_mod.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
-        try:
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://testserver",
-            ) as client:
-                response = await client.post(
-                    f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
-                    content=body,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-Custom-Signature": f"sha256={sig}",
-                    },
-                )
-            assert response.status_code == 202
-        finally:
-            await engine.dispose()
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Custom-Signature": f"sha256={sig}",
+                },
+            )
+        assert response.status_code == 202
 
 
 # ---------------------------------------------------------------------------
@@ -472,10 +449,10 @@ class TestWebhookPayloadSizeLimit:
     async def test_webhook_rejects_oversized_payload(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        sqlite_engine: AsyncEngine,
     ) -> None:
         """Payloads exceeding 1 MB should be rejected with 413."""
-        engine = await _make_engine()
-        session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        session_maker = async_sessionmaker(sqlite_engine, class_=AsyncSession, expire_on_commit=False)
         app = _build_webhook_test_app(session_maker)
 
         monkeypatch.setattr(board_webhooks, "enqueue_webhook_delivery", lambda p: True)
@@ -488,29 +465,26 @@ class TestWebhookPayloadSizeLimit:
         async with session_maker() as session:
             board, webhook = await _seed_webhook_with_secret(session, secret=None)
 
-        try:
-            oversized_body = b"x" * (1_048_576 + 1)
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://testserver",
-            ) as client:
-                response = await client.post(
-                    f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
-                    content=oversized_body,
-                    headers={"Content-Type": "text/plain"},
-                )
-            assert response.status_code == 413
-        finally:
-            await engine.dispose()
+        oversized_body = b"x" * (1_048_576 + 1)
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
+                content=oversized_body,
+                headers={"Content-Type": "text/plain"},
+            )
+        assert response.status_code == 413
 
     @pytest.mark.asyncio
     async def test_webhook_rejects_oversized_content_length_header(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        sqlite_engine: AsyncEngine,
     ) -> None:
         """Requests with Content-Length > 1 MB should be rejected early."""
-        engine = await _make_engine()
-        session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        session_maker = async_sessionmaker(sqlite_engine, class_=AsyncSession, expire_on_commit=False)
         app = _build_webhook_test_app(session_maker)
 
         monkeypatch.setattr(board_webhooks, "enqueue_webhook_delivery", lambda p: True)
@@ -523,19 +497,16 @@ class TestWebhookPayloadSizeLimit:
         async with session_maker() as session:
             board, webhook = await _seed_webhook_with_secret(session, secret=None)
 
-        try:
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://testserver",
-            ) as client:
-                response = await client.post(
-                    f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
-                    content=b"small body",
-                    headers={
-                        "Content-Type": "text/plain",
-                        "Content-Length": "2000000",
-                    },
-                )
-            assert response.status_code == 413
-        finally:
-            await engine.dispose()
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
+                content=b"small body",
+                headers={
+                    "Content-Type": "text/plain",
+                    "Content-Length": "2000000",
+                },
+            )
+        assert response.status_code == 413

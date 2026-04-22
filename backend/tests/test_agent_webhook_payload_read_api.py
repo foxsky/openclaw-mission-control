@@ -8,8 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import APIRouter, Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
-from sqlmodel import SQLModel
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.agent import router as agent_router
@@ -22,13 +21,6 @@ from app.models.board_webhooks import BoardWebhook
 from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.organizations import Organization
-
-
-async def _make_engine() -> AsyncEngine:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.connect() as conn, conn.begin():
-        await conn.run_sync(SQLModel.metadata.create_all)
-    return engine
 
 
 def _build_test_app(session_maker: async_sessionmaker[AsyncSession]) -> FastAPI:
@@ -124,164 +116,158 @@ async def _seed_payload(
 
 
 @pytest.mark.asyncio
-async def test_agent_can_fetch_webhook_payload() -> None:
-    engine = await _make_engine()
-    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+async def test_agent_can_fetch_webhook_payload(
+    sqlite_engine: AsyncEngine, sqlite_session: AsyncSession
+) -> None:
+    session_maker = async_sessionmaker(
+        sqlite_engine, class_=AsyncSession, expire_on_commit=False
+    )
     app = _build_test_app(session_maker)
 
-    async with session_maker() as session:
-        token, board, webhook, payload = await _seed_payload(session)
+    token, board, webhook, payload = await _seed_payload(sqlite_session)
 
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(
-                f"/api/v1/agent/boards/{board.id}/webhooks/{webhook.id}/payloads/{payload.id}",
-                headers={"X-Agent-Token": token},
-            )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/v1/agent/boards/{board.id}/webhooks/{webhook.id}/payloads/{payload.id}",
+            headers={"X-Agent-Token": token},
+        )
 
-        assert response.status_code == 200
-        body = response.json()
-        assert body["id"] == str(payload.id)
-        assert body["board_id"] == str(board.id)
-        assert body["webhook_id"] == str(webhook.id)
-        assert body["payload"] == {"event": "push", "ref": "refs/heads/master"}
-        assert body["headers"]["x-github-event"] == "push"
-
-    finally:
-        await engine.dispose()
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == str(payload.id)
+    assert body["board_id"] == str(board.id)
+    assert body["webhook_id"] == str(webhook.id)
+    assert body["payload"] == {"event": "push", "ref": "refs/heads/master"}
+    assert body["headers"]["x-github-event"] == "push"
 
 
 @pytest.mark.asyncio
-async def test_agent_payload_read_rejects_invalid_token() -> None:
-    engine = await _make_engine()
-    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+async def test_agent_payload_read_rejects_invalid_token(
+    sqlite_engine: AsyncEngine, sqlite_session: AsyncSession
+) -> None:
+    session_maker = async_sessionmaker(
+        sqlite_engine, class_=AsyncSession, expire_on_commit=False
+    )
     app = _build_test_app(session_maker)
 
-    async with session_maker() as session:
-        _token, board, webhook, payload = await _seed_payload(session)
+    _token, board, webhook, payload = await _seed_payload(sqlite_session)
 
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(
-                f"/api/v1/agent/boards/{board.id}/webhooks/{webhook.id}/payloads/{payload.id}",
-                headers={"X-Agent-Token": "invalid"},
-            )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/v1/agent/boards/{board.id}/webhooks/{webhook.id}/payloads/{payload.id}",
+            headers={"X-Agent-Token": "invalid"},
+        )
 
-        assert response.status_code == 401
-
-    finally:
-        await engine.dispose()
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_agent_payload_read_truncates_json_preview_with_ellipsis() -> None:
-    engine = await _make_engine()
-    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+async def test_agent_payload_read_truncates_json_preview_with_ellipsis(
+    sqlite_engine: AsyncEngine, sqlite_session: AsyncSession
+) -> None:
+    session_maker = async_sessionmaker(
+        sqlite_engine, class_=AsyncSession, expire_on_commit=False
+    )
     app = _build_test_app(session_maker)
 
-    async with session_maker() as session:
-        payload_value: dict[str, object] = {"event": "push", "ref": "refs/heads/master"}
-        token, board, webhook, payload = await _seed_payload(session, payload_value=payload_value)
+    payload_value: dict[str, object] = {"event": "push", "ref": "refs/heads/master"}
+    token, board, webhook, payload = await _seed_payload(
+        sqlite_session, payload_value=payload_value
+    )
 
     max_chars = 12
     raw = json.dumps(payload_value, ensure_ascii=True)
     expected_preview = f"{raw[: max_chars - 3]}..."
 
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(
-                f"/api/v1/agent/boards/{board.id}/webhooks/{webhook.id}/payloads/{payload.id}",
-                headers={"X-Agent-Token": token},
-                params={"max_chars": max_chars},
-            )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/v1/agent/boards/{board.id}/webhooks/{webhook.id}/payloads/{payload.id}",
+            headers={"X-Agent-Token": token},
+            params={"max_chars": max_chars},
+        )
 
-        assert response.status_code == 200
-        body = response.json()
-        assert body["payload"] == expected_preview
-
-    finally:
-        await engine.dispose()
+    assert response.status_code == 200
+    body = response.json()
+    assert body["payload"] == expected_preview
 
 
 @pytest.mark.asyncio
-async def test_agent_payload_read_truncates_string_preview_without_json_quoting() -> None:
-    engine = await _make_engine()
-    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+async def test_agent_payload_read_truncates_string_preview_without_json_quoting(
+    sqlite_engine: AsyncEngine, sqlite_session: AsyncSession
+) -> None:
+    session_maker = async_sessionmaker(
+        sqlite_engine, class_=AsyncSession, expire_on_commit=False
+    )
     app = _build_test_app(session_maker)
 
-    async with session_maker() as session:
-        token, board, webhook, payload = await _seed_payload(session, payload_value="abcdef")
+    token, board, webhook, payload = await _seed_payload(
+        sqlite_session, payload_value="abcdef"
+    )
 
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(
-                f"/api/v1/agent/boards/{board.id}/webhooks/{webhook.id}/payloads/{payload.id}",
-                headers={"X-Agent-Token": token},
-                params={"max_chars": 4},
-            )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/v1/agent/boards/{board.id}/webhooks/{webhook.id}/payloads/{payload.id}",
+            headers={"X-Agent-Token": token},
+            params={"max_chars": 4},
+        )
 
-        assert response.status_code == 200
-        body = response.json()
-        assert body["payload"] == "a..."
-
-    finally:
-        await engine.dispose()
+    assert response.status_code == 200
+    body = response.json()
+    assert body["payload"] == "a..."
 
 
 @pytest.mark.asyncio
-async def test_agent_payload_read_rejects_cross_board_access() -> None:
-    engine = await _make_engine()
-    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+async def test_agent_payload_read_rejects_cross_board_access(
+    sqlite_engine: AsyncEngine, sqlite_session: AsyncSession
+) -> None:
+    session_maker = async_sessionmaker(
+        sqlite_engine, class_=AsyncSession, expire_on_commit=False
+    )
     app = _build_test_app(session_maker)
 
-    async with session_maker() as session:
-        token, board, webhook, payload = await _seed_payload(session)
+    token, board, webhook, payload = await _seed_payload(sqlite_session)
 
-        # Second board + payload that should be inaccessible to the first board agent.
-        organization_id = uuid4()
-        gateway_id = uuid4()
-        other_board = Board(
-            id=uuid4(),
+    # Second board + payload that should be inaccessible to the first board agent.
+    organization_id = uuid4()
+    gateway_id = uuid4()
+    other_board = Board(
+        id=uuid4(),
+        organization_id=organization_id,
+        gateway_id=gateway_id,
+        name="Other",
+        slug="other",
+    )
+    sqlite_session.add(Organization(id=organization_id, name=f"org-{organization_id}"))
+    sqlite_session.add(
+        Gateway(
+            id=gateway_id,
             organization_id=organization_id,
-            gateway_id=gateway_id,
-            name="Other",
-            slug="other",
-        )
-        session.add(Organization(id=organization_id, name=f"org-{organization_id}"))
-        session.add(
-            Gateway(
-                id=gateway_id,
-                organization_id=organization_id,
-                name="gateway",
-                url="https://gateway.example.local",
-                workspace_root="/tmp/workspace",
-            ),
-        )
-        session.add(other_board)
-        other_webhook = BoardWebhook(
-            id=uuid4(),
-            board_id=other_board.id,
-            description="Other webhook",
-            enabled=True,
-        )
-        session.add(other_webhook)
-        other_payload = BoardWebhookPayload(
-            id=uuid4(),
-            board_id=other_board.id,
-            webhook_id=other_webhook.id,
-            payload={"event": "push"},
-        )
-        session.add(other_payload)
-        await session.commit()
+            name="gateway",
+            url="https://gateway.example.local",
+            workspace_root="/tmp/workspace",
+        ),
+    )
+    sqlite_session.add(other_board)
+    other_webhook = BoardWebhook(
+        id=uuid4(),
+        board_id=other_board.id,
+        description="Other webhook",
+        enabled=True,
+    )
+    sqlite_session.add(other_webhook)
+    other_payload = BoardWebhookPayload(
+        id=uuid4(),
+        board_id=other_board.id,
+        webhook_id=other_webhook.id,
+        payload={"event": "push"},
+    )
+    sqlite_session.add(other_payload)
+    await sqlite_session.commit()
 
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(
-                f"/api/v1/agent/boards/{other_board.id}/webhooks/{other_webhook.id}/payloads/{other_payload.id}",
-                headers={"X-Agent-Token": token},
-            )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/v1/agent/boards/{other_board.id}/webhooks/{other_webhook.id}/payloads/{other_payload.id}",
+            headers={"X-Agent-Token": token},
+        )
 
-        assert response.status_code == 403
-
-    finally:
-        await engine.dispose()
+    assert response.status_code == 403

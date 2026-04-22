@@ -8,8 +8,8 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import APIRouter, Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
-from sqlmodel import SQLModel, col, select
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import board_webhooks
@@ -24,13 +24,6 @@ from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.organizations import Organization
 from app.services.webhooks.queue import QueuedInboundDelivery
-
-
-async def _make_engine() -> AsyncEngine:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.connect() as conn, conn.begin():
-        await conn.run_sync(SQLModel.metadata.create_all)
-    return engine
 
 
 def _build_test_app(
@@ -114,11 +107,12 @@ async def _seed_webhook(
 
 @pytest.mark.asyncio
 async def test_ingest_board_webhook_stores_payload_and_enqueues_for_lead_dispatch(
+    sqlite_engine: AsyncEngine,
+    sqlite_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = await _make_engine()
     session_maker = async_sessionmaker(
-        engine,
+        sqlite_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
@@ -126,8 +120,7 @@ async def test_ingest_board_webhook_stores_payload_and_enqueues_for_lead_dispatc
     enqueued: list[dict[str, object]] = []
     sent_messages: list[dict[str, str]] = []
 
-    async with session_maker() as session:
-        board, webhook = await _seed_webhook(session, enabled=True)
+    board, webhook = await _seed_webhook(sqlite_session, enabled=True)
 
     def _fake_enqueue(payload: QueuedInboundDelivery) -> bool:
         enqueued.append(
@@ -170,72 +163,69 @@ async def test_ingest_board_webhook_stores_payload_and_enqueues_for_lead_dispatc
         _fake_try_send_agent_message,
     )
 
-    try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.post(
-                f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
-                json={"event": "deploy", "service": "api"},
-                headers={"X-Signature": "sha256=abc123"},
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
+            json={"event": "deploy", "service": "api"},
+            headers={"X-Signature": "sha256=abc123"},
+        )
+
+    assert response.status_code == 202
+    body = response.json()
+    payload_id = UUID(body["payload_id"])
+    assert body["board_id"] == str(board.id)
+    assert body["webhook_id"] == str(webhook.id)
+
+    async with session_maker() as session:
+        payloads = (
+            await session.exec(
+                select(BoardWebhookPayload).where(col(BoardWebhookPayload.id) == payload_id),
             )
+        ).all()
+        assert len(payloads) == 1
+        assert payloads[0].payload == {"event": "deploy", "service": "api"}
+        assert payloads[0].headers is not None
+        assert payloads[0].headers.get("x-signature") == "sha256=abc123"
+        assert payloads[0].headers.get("content-type") == "application/json"
 
-        assert response.status_code == 202
-        body = response.json()
-        payload_id = UUID(body["payload_id"])
-        assert body["board_id"] == str(board.id)
-        assert body["webhook_id"] == str(webhook.id)
+        memory_items = (
+            await session.exec(
+                select(BoardMemory).where(col(BoardMemory.board_id) == board.id),
+            )
+        ).all()
+        assert len(memory_items) == 1
+        assert memory_items[0].source == "webhook"
+        assert memory_items[0].tags is not None
+        assert f"webhook:{webhook.id}" in memory_items[0].tags
+        assert f"payload:{payload_id}" in memory_items[0].tags
+        assert f"Payload ID: {payload_id}" in memory_items[0].content
 
-        async with session_maker() as session:
-            payloads = (
-                await session.exec(
-                    select(BoardWebhookPayload).where(col(BoardWebhookPayload.id) == payload_id),
-                )
-            ).all()
-            assert len(payloads) == 1
-            assert payloads[0].payload == {"event": "deploy", "service": "api"}
-            assert payloads[0].headers is not None
-            assert payloads[0].headers.get("x-signature") == "sha256=abc123"
-            assert payloads[0].headers.get("content-type") == "application/json"
+    assert len(enqueued) == 1
+    assert enqueued[0]["board_id"] == str(board.id)
+    assert enqueued[0]["webhook_id"] == str(webhook.id)
+    assert enqueued[0]["payload_id"] == str(payload_id)
 
-            memory_items = (
-                await session.exec(
-                    select(BoardMemory).where(col(BoardMemory.board_id) == board.id),
-                )
-            ).all()
-            assert len(memory_items) == 1
-            assert memory_items[0].source == "webhook"
-            assert memory_items[0].tags is not None
-            assert f"webhook:{webhook.id}" in memory_items[0].tags
-            assert f"payload:{payload_id}" in memory_items[0].tags
-            assert f"Payload ID: {payload_id}" in memory_items[0].content
-
-        assert len(enqueued) == 1
-        assert enqueued[0]["board_id"] == str(board.id)
-        assert enqueued[0]["webhook_id"] == str(webhook.id)
-        assert enqueued[0]["payload_id"] == str(payload_id)
-
-        assert len(sent_messages) == 0
-    finally:
-        await engine.dispose()
+    assert len(sent_messages) == 0
 
 
 @pytest.mark.asyncio
 async def test_ingest_board_webhook_rejects_disabled_endpoint(
+    sqlite_engine: AsyncEngine,
+    sqlite_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = await _make_engine()
     session_maker = async_sessionmaker(
-        engine,
+        sqlite_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
     app = _build_test_app(session_maker)
     sent_messages: list[str] = []
 
-    async with session_maker() as session:
-        board, webhook = await _seed_webhook(session, enabled=False)
+    board, webhook = await _seed_webhook(sqlite_session, enabled=False)
 
     async def _fake_try_send_agent_message(
         self: board_webhooks.GatewayDispatchService,
@@ -256,35 +246,32 @@ async def test_ingest_board_webhook_rejects_disabled_endpoint(
         _fake_try_send_agent_message,
     )
 
-    try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            response = await client.post(
-                f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
-                json={"event": "deploy"},
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/v1/boards/{board.id}/webhooks/{webhook.id}",
+            json={"event": "deploy"},
+        )
+
+    assert response.status_code == 410
+    assert response.json() == {"detail": "Webhook is disabled."}
+
+    async with session_maker() as session:
+        stored_payloads = (
+            await session.exec(
+                select(BoardWebhookPayload).where(
+                    col(BoardWebhookPayload.board_id) == board.id
+                ),
             )
+        ).all()
+        assert stored_payloads == []
+        stored_memory = (
+            await session.exec(
+                select(BoardMemory).where(col(BoardMemory.board_id) == board.id),
+            )
+        ).all()
+        assert stored_memory == []
 
-        assert response.status_code == 410
-        assert response.json() == {"detail": "Webhook is disabled."}
-
-        async with session_maker() as session:
-            stored_payloads = (
-                await session.exec(
-                    select(BoardWebhookPayload).where(
-                        col(BoardWebhookPayload.board_id) == board.id
-                    ),
-                )
-            ).all()
-            assert stored_payloads == []
-            stored_memory = (
-                await session.exec(
-                    select(BoardMemory).where(col(BoardMemory.board_id) == board.id),
-                )
-            ).all()
-            assert stored_memory == []
-
-        assert sent_messages == []
-    finally:
-        await engine.dispose()
+    assert sent_messages == []

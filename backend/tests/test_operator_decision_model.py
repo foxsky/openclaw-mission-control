@@ -8,32 +8,16 @@ follow-up commits.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
-import pytest_asyncio
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlmodel import SQLModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.operator_decisions import (
     OperatorDecision,
     OperatorDecisionTaskLink,
 )
-
-
-@pytest_asyncio.fixture
-async def db_session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    session = AsyncSession(engine, expire_on_commit=False)
-    try:
-        yield session
-    finally:
-        await session.close()
-        await engine.dispose()
 
 
 def _decision(**overrides: object) -> OperatorDecision:
@@ -46,44 +30,44 @@ def _decision(**overrides: object) -> OperatorDecision:
 
 
 @pytest.mark.asyncio
-async def test_canonical_statuses_round_trip(db_session: AsyncSession) -> None:
+async def test_canonical_statuses_round_trip(sqlite_session: AsyncSession) -> None:
     for status in ("pending", "resolved", "cancelled"):
-        db_session.add(_decision(status=status))
-    await db_session.commit()
+        sqlite_session.add(_decision(status=status))
+    await sqlite_session.commit()
 
 
 @pytest.mark.asyncio
-async def test_unknown_status_rejected(db_session: AsyncSession) -> None:
-    db_session.add(_decision(status="approved"))
+async def test_unknown_status_rejected(sqlite_session: AsyncSession) -> None:
+    sqlite_session.add(_decision(status="approved"))
     with pytest.raises(IntegrityError):
-        await db_session.commit()
+        await sqlite_session.commit()
 
 
 @pytest.mark.asyncio
-async def test_default_status_is_pending(db_session: AsyncSession) -> None:
+async def test_default_status_is_pending(sqlite_session: AsyncSession) -> None:
     decision = _decision()
-    db_session.add(decision)
-    await db_session.commit()
+    sqlite_session.add(decision)
+    await sqlite_session.commit()
     assert decision.status == "pending"
 
 
 @pytest.mark.asyncio
 async def test_task_link_unique_per_decision_task_pair(
-    db_session: AsyncSession,
+    sqlite_session: AsyncSession,
 ) -> None:
     """A decision cannot link the same task twice — duplicates would
     inflate the bridge's 'does any decision block this task?' count."""
 
     decision = _decision()
-    db_session.add(decision)
-    await db_session.commit()
+    sqlite_session.add(decision)
+    await sqlite_session.commit()
     task_id = uuid4()
-    db_session.add(
+    sqlite_session.add(
         OperatorDecisionTaskLink(decision_id=decision.id, task_id=task_id),
     )
-    await db_session.commit()
-    db_session.add(
+    await sqlite_session.commit()
+    sqlite_session.add(
         OperatorDecisionTaskLink(decision_id=decision.id, task_id=task_id),
     )
     with pytest.raises(IntegrityError):
-        await db_session.commit()
+        await sqlite_session.commit()
