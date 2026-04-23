@@ -1028,18 +1028,24 @@ async def delete_task(
     ),
 )
 async def list_task_comments(
+    board: Board = BOARD_DEP,
     task: Task = TASK_DEP,
     session: AsyncSession = SESSION_DEP,
     agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
+    include_flagged: bool = Query(default=False),
 ) -> LimitOffsetPage[TaskCommentRead]:
     """List task comments visible to the authenticated agent.
 
     Read this before posting updates to avoid duplicate or low-value comments.
     """
+    _guard_board_access(agent_ctx, board)
     _guard_task_access(agent_ctx, task)
     return await tasks_api.list_task_comments(
+        board=board,
         task=task,
         session=session,
+        actor=_actor(agent_ctx),
+        include_flagged=include_flagged,
     )
 
 
