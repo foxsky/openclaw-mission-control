@@ -332,3 +332,74 @@ async def test_multiple_descriptors_are_distinct_blocker_rows(
         actor=actor,  # type: ignore[arg-type]
     )
     assert len({b.blocker_id for b in read.blockers}) == 2
+
+
+@pytest.mark.asyncio
+async def test_review_duplicate_runtime_blocker_surfaces_as_409(
+    seeded: tuple[AsyncSession, Board, Task, _ActorStub],
+) -> None:
+    """Two ``runtime`` descriptors with the same ``owner_role`` trip the
+    ``uq_blockers_runtime_owner_open`` partial unique index (added in
+    Part D for the auto-filer dedupe). The handler must return 409, not
+    500 — reviewer sees an actionable dedupe error."""
+
+    from fastapi import HTTPException
+
+    session, board, task, actor = seeded
+    with pytest.raises(HTTPException) as exc:
+        await create_task_review(
+            payload=ReviewCreate(
+                verdict="fail",
+                blockers=[
+                    _descriptor(category="runtime", owner_role="codex"),
+                    _descriptor(category="runtime", owner_role="codex"),
+                ],
+            ),
+            board=board,
+            task=task,
+            session=session,
+            actor=actor,  # type: ignore[arg-type]
+        )
+    assert exc.value.status_code == 409
+    detail = exc.value.detail
+    assert isinstance(detail, dict)
+    assert detail["code"] == "review_blocker_dedupe_conflict"
+
+
+@pytest.mark.asyncio
+async def test_review_duplicate_operator_artifact_surfaces_as_409(
+    seeded: tuple[AsyncSession, Board, Task, _ActorStub],
+) -> None:
+    """Parity with ``uq_blockers_operator_artifact_open`` — two
+    operator-category descriptors sharing ``required_artifact`` return
+    409."""
+
+    from fastapi import HTTPException
+
+    session, board, task, actor = seeded
+    with pytest.raises(HTTPException) as exc:
+        await create_task_review(
+            payload=ReviewCreate(
+                verdict="fail",
+                blockers=[
+                    _descriptor(
+                        category="operator",
+                        owner_role="operator",
+                        required_artifact="agent `frontend-dev` missing",
+                    ),
+                    _descriptor(
+                        category="operator",
+                        owner_role="operator",
+                        required_artifact="agent `frontend-dev` missing",
+                    ),
+                ],
+            ),
+            board=board,
+            task=task,
+            session=session,
+            actor=actor,  # type: ignore[arg-type]
+        )
+    assert exc.value.status_code == 409
+    detail = exc.value.detail
+    assert isinstance(detail, dict)
+    assert detail["code"] == "review_blocker_dedupe_conflict"

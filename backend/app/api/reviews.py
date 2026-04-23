@@ -12,7 +12,8 @@ from collections import defaultdict
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 
 from app.api.deps import (
@@ -171,5 +172,28 @@ async def create_task_review(
         session.add(link)
         blocker_reads.append(_to_review_blocker_read(link, blocker))
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        # Part D added partial unique indexes on ``blockers``
+        # (uq_blockers_runtime_owner_open,
+        # uq_blockers_operator_artifact_open) so the feeder filers can
+        # close their dedupe race. A reviewer FAIL that happens to file
+        # the same (task, role/artifact) as an already-open auto-filed
+        # blocker would trip the same constraint and 500 the whole
+        # review. Surface as 409 so the reviewer gets an actionable
+        # error instead of a server fault.
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": (
+                    "A blocker in this review duplicates an already-open "
+                    "auto-filed blocker for the same (task, owner/artifact). "
+                    "Resolve or reference the existing row instead of "
+                    "filing a new one."
+                ),
+                "code": "review_blocker_dedupe_conflict",
+            },
+        ) from exc
     return _review_read(review, blocker_reads)
