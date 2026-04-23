@@ -404,3 +404,68 @@ All three are **additive and deferred** — none blocks Phase III (operator-deci
 1. Complete Phase III (operator-decision bridge) before D.1 or D.2. Their auto-filed rows interact with the operator-decision routing layer.
 2. Land D.3 operational check as a standalone commit during Phase IV or V prep, tied to the next gateway upgrade.
 3. D.1 + D.2 ship together in Phase VI, gated per-board by `structured_blockers_v1`. Graduate the Dev Squad board first for one week of shadow data before widening.
+
+## Part E — OpenClaw 2026.4.21 / 4.22 integration addenda (2026-04-23)
+
+**Context.** Prod upgraded from 2026.4.14 straight to 2026.4.22 on 2026-04-23. An audit covering the four stable releases in the window (4.15, 4.20, 4.21, 4.22) reviewed every Changes + Fixes entry against MC code. Prior work that had already landed is marked below; new items are Part E.
+
+### E.0 Audit outcomes on prior items
+
+- **Part C.1 `models.authStatus` forensic-log + alert gate** — *still unimplemented.* The method is absent from ``GATEWAY_METHODS`` in ``app/services/openclaw/gateway_rpc.py`` and the heartbeat watchdog at ``app/services/openclaw/heartbeat_watchdog.py`` never invokes it. See E.1 for the scoped follow-through.
+- **Part D.1 subagent-failure → Blocker** — *shipped.* Service at ``app/services/subagent_failure_blocker.py`` + agent self-report endpoint ``POST /api/v1/agent/boards/{board_id}/tasks/{task_id}/subagent-failure`` (commit ``3c363e68``). Parent agents can ingest today without waiting on a gateway-push channel; when 4.22's push channel lands, both paths share the same filer + dedupe index.
+- **Part D.2 stale-agent-session → operator Blocker** — *shipped.* Wired in ``_notify_agent_on_task_assign`` and ``_notify_agent_on_task_rework`` on the dispatch-failure branch. Citation goes through ``redact_gateway_error_message`` so token-bearing substrings (``?token=<shared>``, bearer headers, JWTs) never reach the operator-facing Blocker row.
+- **Part D.3 WS scope verification** — *shipped (no-op for this deployment).* MC uses a shared-secret operator token with device-pairing disabled, so the 4.20 broadcast narrowing doesn't affect us. Step 3's frame-age observability check is **deferred / superseded**: MC has no live gateway subscription today (``sessions.subscribe`` is in the method list but has zero callers), so there's no frame stream to monitor. Re-activate if and when MC adopts a gateway-pushed activity stream (currently covered by the agent-self-report path in D.1).
+- **Token redactor** — *shipped.* ``redact_gateway_error_message`` strips ``token=`` / ``access_token=`` / ``authorization:`` key-value / JWT shapes from gateway error messages before they persist. Consumed at D.2's citation builder.
+
+### E.1 `models.authStatus` forensic-log integration (formerly C.1, now scoped)
+
+**Rationale.** 4.15 added ``models.authStatus`` (stripped, 60s-cached) to give operators per-provider OAuth-token and rate-limit-pressure visibility without exposing credentials. §C.1 of the amendments doc called for capturing this on each watchdog repair row AND using it to suppress the "3× repairs in 1h" operator-alert when the provider was independently degraded. The method signature + call shape are now stable; this is the straightforward landing.
+
+**Amendment.**
+
+1. Add ``"models.authStatus"`` to ``GATEWAY_METHODS`` in ``app/services/openclaw/gateway_rpc.py`` and a thin ``models_auth_status(config)`` helper matching the other ``openclaw_*`` helpers.
+2. Extend ``AgentHeartbeatRepairEvent`` with a JSON column ``auth_status_snapshot: dict | None``, migration-only (prod column already exists as JSON elsewhere; reuse that pattern).
+3. In ``heartbeat_watchdog.py`` at the repair path, best-effort call ``models_auth_status`` before inserting the event row. Network failure / method-not-supported must NOT block the repair — wrap in try/except and store ``None`` on failure. Cache the snapshot per-sweep so a wave of repairs in the same tick reuses one call.
+4. Alert-gate extension: the "3× repair / 1h" alarm is suppressed when any snapshot in the window reports ``degraded=true`` or ``expiring=true`` for the affected provider. The repair rows still persist — operators can still see them — only the page is gated.
+
+**Gate.** Requires gateway 4.15+; the method exists across 4.15 → 4.22. On older gateways, the best-effort call degrades to ``None`` via the existing unknown-method pathway.
+
+**Bounds.** Do NOT use the snapshot for gating OTHER alerts (heartbeat-deadline-missed, stale-agent-session filing, etc.). The one-specific gate is "repeated-repair spam during provider degradation"; broadening it risks masking real bugs behind transient auth issues.
+
+### E.2 Parse ``Runner:`` field from ``status`` RPC (4.22)
+
+**Rationale.** 4.22 `#70595` added a ``Runner:`` field to the ``status`` RPC response reporting ``embedded | cli | acp`` — lets operators tell ACP-backed agents apart from embedded-Pi-backed ones without correlating ``agents.list`` separately.
+
+**Amendment.** MC's ``status`` consumer already exists in ``gateway_rpc.py``. Extend the parsed snapshot with an optional ``runner`` field and surface it on the agent snapshot column for the heartbeat-issues dashboard. Priority L — pure observability.
+
+### E.3 Use server-side ``sessions.list`` filters (4.22)
+
+**Rationale.** 4.22 `#69839` added ``label`` / ``agent`` / ``search`` server-side filter params to ``sessions.list``. MC's ``session_service.py`` currently fetches the full list and filters in Python — works fine at today's volume, but the server-side path is cheaper and tracks with the gateway's own paging. Priority L — perf.
+
+### E.4 Promote ``request_id`` from ``PAIRING_REQUIRED`` into structured Blocker field
+
+**Rationale.** 4.20 `#69227` added reason-specific remediation hints + ``request_id`` to ``PAIRING_REQUIRED`` responses. D.2's ``_citation_for`` preserves the raw (redacted) message but the 512-char cap can clip the ``request_id``. Operators need that id to cross-reference gateway logs when triaging a stuck agent.
+
+**Amendment.** Parse ``request_id`` out of the remediation JSON (when present) and stamp it on a new ``Blocker.citation_request_id: str | None`` column. Keep the free-form citation for the rest of the message. Priority M — operator triage quality.
+
+### E.5 Post-upgrade operational smoke test: ``config.patch`` operator-auth
+
+**Rationale.** 4.20 `#69377` tightened the gateway's ``config.patch`` / ``config.apply`` guard to reject model/agent-driven mutations of operator-trusted paths. MC's Sync Templates + agent-create paths call ``config.patch`` from the operator-token context — should be fine, but verify on each major upgrade that the operator-path hasn't accidentally been bound through a narrower scope.
+
+**Amendment.** Operational check, not code:
+1. After any gateway upgrade past 4.20, run one ``POST /api/v1/gateways/{id}/templates/sync`` and confirm ``agents_updated`` comes back non-zero with ``errors: []``.
+2. Create a throwaway test agent via the provisioning API and confirm the agents.create RPC path returns success (not a scope-denied 403).
+3. Red flag: sync returns ``errors`` containing ``permission_denied`` / ``scope_insufficient``. Action: re-check operator token provenance; do NOT downgrade the gateway's guard.
+
+### E.6 What Part E does not do
+
+- Does not change Phase II / III / IV / V / VI / Part D schemas or endpoints. E.1 adds one JSON column; E.4 adds one nullable text column. All other items are runtime-only.
+- Does not require new rollout flags. E.1's alert-gate is always-on (best-effort — the provider-degraded short-circuit is non-invasive); E.2/E.3 are pure-read integrations.
+- Does not alter any §I invariant.
+
+### E.7 Sequencing
+
+1. Land E.1 first — highest-value safety. Watchdog-repair rows immediately carry authStatus snapshot for operator triage; alert-gate lands with it.
+2. E.4 next (M) — small column + parse; paves the Blocker dashboard for the next dispatch-failure wave.
+3. E.2, E.3 batched later (L) — pure observability / perf.
+4. E.5 runs on every upgrade past 4.20; not a code commit.
