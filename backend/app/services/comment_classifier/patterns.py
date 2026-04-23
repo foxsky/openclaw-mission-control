@@ -24,8 +24,13 @@ from app.services.mentions import MENTION_PATTERN
 # --- Rule A: ack-only detection ------------------------------------------
 
 # MULTILINE so markdown preambles ("# Update\nAcknowledged.") still match.
+# Leading mentions (``@Supervisor @QA-E2E @lead Acknowledged.``) count as
+# ack-head — Phase VII echo-gate relies on this to catch the Architect
+# half of the 2026-04-17 echo storm where the pre-extension regex missed
+# messages whose first word was a mention rather than the ack verb.
 ACK_HEAD_RE = re.compile(
-    r"(?m)^\s*(acknowledged|received|confirmed|understood|noted|ack(?:nowledged)?)\b",
+    r"(?m)^\s*(?:@\S+\s+)*"
+    r"(acknowledged|received|confirmed|understood|noted|aligned|ack(?:nowledged)?)\b",
     re.IGNORECASE,
 )
 
@@ -37,6 +42,31 @@ ACK_PHRASE_RE = re.compile(
     r"no approval path|no advancement|"
     r"silence is correct|"
     r"remains? (?:unchanged|fail[- ]closed)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Phase VII: state-reassurance phrases that the 2026-04-17 Architect↔
+# Supervisor echo storm used to paraphrase "nothing has changed, we
+# agree" without carrying evidence. Distinct from ACK_PHRASE_RE: those
+# are explicit "no change" statements; these are reassurance cliches
+# that restate the counterpart's position without adding delta. Both
+# feed into ECHO_SHAPE.
+#
+# Kept narrow — each phrase is drawn from the actual storm corpus, not
+# speculative patterns, to avoid false-firing on legitimate alignment
+# comments that happen to include the word "matches".
+ECHO_PHRASE_RE = re.compile(
+    r"\b("
+    r"on that exact truth|"
+    r"on that same truth|"
+    r"matches my (?:current )?verdict|"
+    r"matches my (?:current )?read|"
+    r"lead is holding (?:the |that )?same|"
+    r"keep (?:the )?(?:lane|gate) fail[- ]closed|"
+    r"stays? out of (?:lane|qa)|"
+    r"no net[- ]new (?:lead )?action|"
+    r"no (?:net[- ]new )?(?:lead )?evidence"
     r")\b",
     re.IGNORECASE,
 )

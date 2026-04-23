@@ -16,6 +16,7 @@ from app.services.comment_classifier.patterns import (
     ACK_HEAD_RE,
     ACK_MAX_WORDS,
     ACK_PHRASE_RE,
+    ECHO_PHRASE_RE,
     LAX_MAX_WORDS,
     LAX_PACKET_TYPES,
     NEAR_DUPLICATE_JACCARD_THRESHOLD,
@@ -38,10 +39,48 @@ class ClassifierFlag(StrEnum):
 
     ACK_ONLY = "ack_only"
     NEAR_DUPLICATE = "near_duplicate"
+    # Phase VII: message paraphrases an alignment / "nothing changed"
+    # signal without carrying evidence. Broader than ACK_ONLY — catches
+    # the leading-``@mention`` messages the 2026-04-17 echo storm used,
+    # and the state-reassurance cliches the classifier previously saw
+    # as innocent long-form prose.
+    ECHO_SHAPE = "echo_shape"
 
 
 def _has_ack_shape(message: str) -> bool:
     return bool(ACK_HEAD_RE.search(message) or ACK_PHRASE_RE.search(message))
+
+
+def _has_echo_shape(message: str) -> bool:
+    """Ack-shape OR one of the phase-VII state-reassurance paraphrases
+    — a broader superset of the ACK_HEAD/ACK_PHRASE checks."""
+
+    return bool(
+        ACK_HEAD_RE.search(message)
+        or ACK_PHRASE_RE.search(message)
+        or ECHO_PHRASE_RE.search(message)
+    )
+
+
+def _is_echo_shape(message: str, *, packet_type: str | None) -> bool:
+    """Same evidence / routing / lax-packet-type gates as
+    :func:`_is_ack_only`, but triggered by the broader
+    :func:`_has_echo_shape` detector. Keeps the echo-shape flag a
+    strict-superset of ack-only on content shape while staying an
+    equally-strict gate on context (no false-firing on legitimate
+    routing handoffs or lax-packet short acks)."""
+
+    if not _has_echo_shape(message):
+        return False
+    if has_negative_evidence(message):
+        return False
+    if word_count(message) > ACK_MAX_WORDS:
+        return False
+    if has_routing_verb(message):
+        return False
+    if packet_type in LAX_PACKET_TYPES:
+        return word_count(message) <= LAX_MAX_WORDS
+    return True
 
 
 def _is_ack_only(message: str, *, packet_type: str | None) -> bool:
@@ -123,6 +162,16 @@ def classify(
 
     if _is_ack_only(message, packet_type=packet_type):
         flags.append(ClassifierFlag.ACK_ONLY)
+
+    # ECHO_SHAPE shares every exemption with ACK_ONLY (negative
+    # evidence, routing verb, lax packet type, max words) but uses a
+    # broader shape detector — messages whose first word is a mention
+    # before the ack verb, and state-reassurance paraphrases the
+    # 2026-04-17 storm exposed. Fires independently of ACK_ONLY so
+    # operator dashboards can observe the gate-signal without losing
+    # the legacy ack_only tuning surface.
+    if _is_echo_shape(message, packet_type=packet_type):
+        flags.append(ClassifierFlag.ECHO_SHAPE)
 
     gap: float | None = None
     if prior_comment is not None and prior_comment_created_at is not None:

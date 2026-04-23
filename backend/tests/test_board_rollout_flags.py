@@ -38,6 +38,7 @@ def test_allowlist_contains_expected_keys() -> None:
             "deploy_truth_v1",
             "heartbeat_watchdog_v1",
             "lead_scoring_v1",
+            "comment_echo_guard_v1",
         }
     )
 

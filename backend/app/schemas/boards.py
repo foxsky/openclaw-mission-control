@@ -28,6 +28,11 @@ OPERATOR_DECISIONS_V1_FLAG = "operator_decisions_v1"
 DEPLOY_TRUTH_V1_FLAG = "deploy_truth_v1"
 HEARTBEAT_WATCHDOG_V1_FLAG = "heartbeat_watchdog_v1"
 LEAD_SCORING_V1_FLAG = "lead_scoring_v1"
+# Phase VII: enforcement-mode gate for the comment-echo detector.
+# When off, the ECHO_SHAPE classifier signal is observed via shadow
+# metrics only. When on, comment writes that fire the gate return 409
+# at ingest. See app/services/echo_guard.py for the predicate.
+COMMENT_ECHO_GUARD_V1_FLAG = "comment_echo_guard_v1"
 
 ROLLOUT_FLAG_ALLOWLIST = frozenset(
     {
@@ -37,6 +42,7 @@ ROLLOUT_FLAG_ALLOWLIST = frozenset(
         DEPLOY_TRUTH_V1_FLAG,
         HEARTBEAT_WATCHDOG_V1_FLAG,
         LEAD_SCORING_V1_FLAG,
+        COMMENT_ECHO_GUARD_V1_FLAG,
     }
 )
 

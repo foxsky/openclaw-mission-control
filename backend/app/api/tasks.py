@@ -81,6 +81,7 @@ from app.services.deploy_truth import (
     fetch_build_metadata,
     packet_sha_matches_live,
 )
+from app.services.echo_guard import classify_for_echo
 from app.services.lane_quieting import should_suppress_comment_for_blocked_lane
 from app.services.shadow_metrics import (
     build_shadow_events_for_comment,
@@ -203,6 +204,47 @@ def _operator_decision_block_error(summary: str | None = None) -> HTTPException:
 
 ERROR_CODE_DELIVERY_CONTRACT_INCOMPLETE = "task_delivery_contract_incomplete"
 ERROR_CODE_COMMENT_SUPPRESSED_BLOCKED_LANE = "comment_suppressed_blocked_lane"
+ERROR_CODE_COMMENT_ECHOED_NO_OP = "comment_echoed_as_no_op"
+
+
+def _echo_guard_suppressed_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": (
+                "Comment rejected as a no-op echo of your prior same-task "
+                "comment. Post a message that references a task-state "
+                "change, a new blocker, a concrete artifact (URL/SHA), or "
+                "a specific action — or stay silent."
+            ),
+            "code": ERROR_CODE_COMMENT_ECHOED_NO_OP,
+        },
+    )
+
+
+async def _require_echo_guard_allows_comment(
+    session: "AsyncSession",
+    *,
+    task: Task,
+    actor: "ActorContext",
+    message: str,
+) -> None:
+    """Phase VII: reject comment writes that ECHO_SHAPE-classify AND
+    have a recent same-author prior on the same task AND saw no
+    state-delta since that prior. Agent actors only — user operators
+    are exempt."""
+
+    if actor.actor_type != "agent":
+        return
+    result = await classify_for_echo(
+        session,
+        task=task,
+        agent_id=_comment_actor_id(actor),
+        message=message,
+    )
+    if not result.should_suppress:
+        return
+    raise _echo_guard_suppressed_error()
 
 
 def _lane_quieting_suppressed_error() -> HTTPException:
@@ -3500,6 +3542,12 @@ async def _finalize_updated_task(
         await _require_lane_quieting_allows_comment(
             session, task=update.task, actor=update.actor
         )
+        await _require_echo_guard_allows_comment(
+            session,
+            task=update.task,
+            actor=update.actor,
+            message=update.comment,
+        )
 
     for key, value in update.updates.items():
         setattr(update.task, key, value)
@@ -3621,6 +3669,9 @@ async def create_task_comment(
     await _validate_task_comment_access(session, task=task, actor=actor)
     await _require_lane_quieting_allows_comment(
         session, task=task, actor=actor
+    )
+    await _require_echo_guard_allows_comment(
+        session, task=task, actor=actor, message=payload.message
     )
     event = ActivityEvent(
         event_type="task.comment",

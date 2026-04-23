@@ -60,6 +60,12 @@ logger = get_logger(__name__)
 # operator's POV.
 EVENT_COMMENT_ACK_ONLY = "comment.ack_only_candidate"
 EVENT_COMMENT_NEAR_DUPLICATE = "comment.near_duplicate_candidate"
+# Phase VII: broader classifier flag than ack_only — catches the
+# leading-``@mention`` alignment messages the 2026-04-17 echo storm
+# used. Emitted via the shared pipeline so operators can observe
+# gate-candidates before graduating ``comment_echo_guard_v1`` to
+# enforcement.
+EVENT_COMMENT_ECHO_SHAPE = "comment.echo_shape_candidate"
 EVENT_TASK_ACTIONABILITY_VIOLATION = "task.actionability_violation_candidate"
 # Phase V §I8: emitted when a task enters ``review``/``done`` with a
 # ``supports_build_metadata`` flag of ``False`` or ``None`` — the
@@ -280,6 +286,8 @@ def _flag_to_event_type(flag: ClassifierFlag) -> str:
         return EVENT_COMMENT_ACK_ONLY
     if flag is ClassifierFlag.NEAR_DUPLICATE:
         return EVENT_COMMENT_NEAR_DUPLICATE
+    if flag is ClassifierFlag.ECHO_SHAPE:
+        return EVENT_COMMENT_ECHO_SHAPE
     raise ValueError(f"Unknown classifier flag: {flag!r}")
 
 

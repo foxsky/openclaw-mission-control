@@ -64,8 +64,12 @@ async def test_clean_comment_emits_no_events() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ack_only_comment_emits_one_event() -> None:
-    """An ack-theater comment emits a single ack_only_candidate event."""
+async def test_ack_only_comment_emits_paired_candidate_events() -> None:
+    """An ack-theater comment emits the paired
+    ack_only_candidate + echo_shape_candidate events. Phase VII
+    ECHO_SHAPE is a strict-superset of ACK_ONLY on shape — keeping
+    both gives operators separate signals to tune ``comment_policy_v1``
+    dashboards vs ``comment_echo_guard_v1`` enforcement rollout."""
 
     session = _FakeSession()
     source_id = uuid4()
@@ -81,17 +85,22 @@ async def test_ack_only_comment_emits_one_event() -> None:
         message="Acknowledged. Holding exactly there. No status change. @lead",
         packet_type="frontend_ui",
     )
-    assert len(result.shadow_events) == 1
-    assert len(result.flags) == 1
-    event = result.shadow_events[0]
-    assert isinstance(event, ShadowMetricEvent)
-    assert event.event_type == EVENT_COMMENT_ACK_ONLY
-    assert event.task_id == task_id
-    assert event.agent_id == agent_id
-    assert event.board_id == board_id
-    assert event.source_event_id == source_id
-    assert event.classifier_metadata is not None
-    assert event.classifier_metadata["packet_type"] == "frontend_ui"
+    event_types = {e.event_type for e in result.shadow_events}
+    assert event_types == {
+        EVENT_COMMENT_ACK_ONLY,
+        "comment.echo_shape_candidate",
+    }
+    assert len(result.flags) == 2
+    ack_event = next(
+        e for e in result.shadow_events if e.event_type == EVENT_COMMENT_ACK_ONLY
+    )
+    assert isinstance(ack_event, ShadowMetricEvent)
+    assert ack_event.task_id == task_id
+    assert ack_event.agent_id == agent_id
+    assert ack_event.board_id == board_id
+    assert ack_event.source_event_id == source_id
+    assert ack_event.classifier_metadata is not None
+    assert ack_event.classifier_metadata["packet_type"] == "frontend_ui"
 
 
 @pytest.mark.asyncio
