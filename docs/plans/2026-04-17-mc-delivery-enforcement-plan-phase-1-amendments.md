@@ -432,15 +432,17 @@ All three are **additive and deferred** — none blocks Phase III (operator-deci
 
 **Bounds.** Do NOT use the snapshot for gating OTHER alerts (heartbeat-deadline-missed, stale-agent-session filing, etc.). The one-specific gate is "repeated-repair spam during provider degradation"; broadening it risks masking real bugs behind transient auth issues.
 
-### E.2 Parse ``Runner:`` field from ``status`` RPC (4.22)
+### E.2 Parse ``Runner:`` field from ``status`` RPC (4.22) — **CANCELLED 2026-04-23**
 
-**Rationale.** 4.22 `#70595` added a ``Runner:`` field to the ``status`` RPC response reporting ``embedded | cli | acp`` — lets operators tell ACP-backed agents apart from embedded-Pi-backed ones without correlating ``agents.list`` separately.
+**Original rationale.** 4.22 `#70595` was read as adding a ``Runner:`` field to the ``status`` RPC response reporting ``embedded | cli | acp``.
 
-**Amendment.** MC's ``status`` consumer already exists in ``gateway_rpc.py``. Extend the parsed snapshot with an optional ``runner`` field and surface it on the agent snapshot column for the heartbeat-issues dashboard. Priority L — pure observability.
+**Why cancelled.** Inspecting the PR (`openclaw/openclaw#70595`, files: ``CHANGELOG.md``, ``src/auto-reply/status.test.ts``, ``src/status/status-message.ts``) showed the change only touches the chat-rendered ``/status`` command output — a human-readable label in a chat message, NOT a structured field on any RPC response (``status``, ``sessions.list``, ``sessions.preview`` all confirmed empty of ``runner`` on a live 4.22 gateway probe). MC has no hook to a chat-formatted label; parsing the human-readable string back into a structured column would be fragile and gives nothing the existing ``config.get`` agent listing doesn't already imply.
 
-### E.3 Use server-side ``sessions.list`` filters (4.22)
+### E.3 Use server-side ``sessions.list`` filters (4.22) — **CANCELLED 2026-04-23**
 
-**Rationale.** 4.22 `#69839` added ``label`` / ``agent`` / ``search`` server-side filter params to ``sessions.list``. MC's ``session_service.py`` currently fetches the full list and filters in Python — works fine at today's volume, but the server-side path is cheaper and tracks with the gateway's own paging. Priority L — perf.
+**Original rationale.** 4.22 `#69839` was read as adding ``label`` / ``agent`` / ``search`` server-side filter params to the ``sessions.list`` gateway RPC.
+
+**Why cancelled.** Inspecting the PR (`openclaw/openclaw#69839` "Expose mailbox discovery via sessions_list", files: ``src/agents/tools/sessions-list-tool.ts`` + ``src/agents/tools/sessions-helpers.ts``) showed the change adds the filter parameters to the **agent-tool** (``sessions_list`` the Codex/ACP agent tool), not to the gateway RPC method (``sessions.list``). The gateway RPC method signature is unchanged. MC is a gateway client, not an agent consumer of agent tools, so this PR has no integration point on the MC side.
 
 ### E.4 Promote ``request_id`` from ``PAIRING_REQUIRED`` into structured Blocker field
 
@@ -467,5 +469,18 @@ All three are **additive and deferred** — none blocks Phase III (operator-deci
 
 1. Land E.1 first — highest-value safety. Watchdog-repair rows immediately carry authStatus snapshot for operator triage; alert-gate lands with it.
 2. E.4 next (M) — small column + parse; paves the Blocker dashboard for the next dispatch-failure wave.
-3. E.2, E.3 batched later (L) — pure observability / perf.
+3. ~~E.2, E.3 batched later (L) — pure observability / perf.~~ **Both cancelled 2026-04-23** after the underlying PRs were confirmed to touch non-MC surfaces (chat-message label and agent-tool respectively). See E.2 / E.3 subsections for the investigation trail.
 4. E.5 runs on every upgrade past 4.20; not a code commit.
+
+### E.8 Status snapshot (2026-04-23)
+
+| Item | Priority | Status |
+|---|---|---|
+| E.1a authStatus capture on repair rows | M | shipped (``13314e4b``) |
+| E.1b authStatus-based alert-gate suppression | M | deferred — needs real snapshot samples from prod before the predicate can be tuned |
+| E.2 ``Runner:`` field parse | L | **cancelled** (chat-label only, not RPC) |
+| E.3 server-side ``sessions.list`` filters | L | **cancelled** (agent-tool, not RPC) |
+| E.4 Blocker ``citation_request_id`` | M | shipped (``780982a6``) |
+| E.5 ``config.patch`` operator-auth smoke test | ops | ready per upgrade; one curl |
+
+**Lesson for future changelog audits.** When a changelog entry mentions a feature added to ``/command``, ``$tool``, or ``src/agents/*``, resolve the PR file list BEFORE scoring MC integration priority. Chat-command surfaces, agent tools, and gateway RPCs are three different wire contracts. The audit that produced Part E pre-cancellation conflated them.
