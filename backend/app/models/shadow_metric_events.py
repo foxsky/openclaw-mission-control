@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Column, ForeignKey, Uuid
+from sqlalchemy import JSON, Column, ForeignKey, Index, Uuid
 from sqlmodel import Field
 
 from app.core.time import utcnow
@@ -33,6 +33,17 @@ class ShadowMetricEvent(QueryModel, table=True):
     """One observability signal emitted by a shadow-mode classifier or hook."""
 
     __tablename__ = "shadow_metric_events"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        # Composite for "prior comment by same author on same task
+        # within window" lookups from the classifier emitter and for
+        # operator queries filtering a task's metric history.
+        Index(
+            "ix_shadow_metric_events_task_agent_created",
+            "task_id",
+            "agent_id",
+            "created_at",
+        ),
+    )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     # Examples: "comment.ack_only_candidate", "comment.near_duplicate_candidate",

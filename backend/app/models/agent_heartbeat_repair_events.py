@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, ForeignKey, Uuid
+from sqlalchemy import Column, ForeignKey, Index, Uuid
 from sqlmodel import Field
 
 from app.core.time import utcnow
@@ -28,6 +28,17 @@ class AgentHeartbeatRepairEvent(QueryModel, table=True):
     """Forensic record of a single heartbeat-watchdog repair."""
 
     __tablename__ = "agent_heartbeat_repair_events"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        # Composite ``(created_at, agent_id)`` serves the windowed
+        # ``GROUP BY agent_id`` query which filters ``created_at >=
+        # since`` first, then aggregates. Leading with created_at lets
+        # the planner do a range scan, then HashAggregate.
+        Index(
+            "ix_agent_heartbeat_repair_events_created_at_agent_id",
+            "created_at",
+            "agent_id",
+        ),
+    )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     agent_id: UUID = Field(
@@ -43,4 +54,8 @@ class AgentHeartbeatRepairEvent(QueryModel, table=True):
     elapsed_since_last_seen_seconds: float | None = None
     repair_reason: str = Field(index=True)
     new_deadline: datetime
-    created_at: datetime = Field(default_factory=utcnow, index=True)
+    # created_at is not single-column-indexed — the composite above
+    # covers the only access pattern (range filter + agent_id group).
+    # Do not re-add ``index=True`` here; it would drift against the
+    # migration which intentionally doesn't create ``ix_created_at``.
+    created_at: datetime = Field(default_factory=utcnow)

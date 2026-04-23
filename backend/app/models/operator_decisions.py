@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, UniqueConstraint
+from sqlalchemy import CheckConstraint, Index, UniqueConstraint, text
 from sqlmodel import Field
 
 from app.core.time import utcnow
@@ -34,6 +34,16 @@ class OperatorDecision(TenantScoped, table=True):
             "status IN ('pending', 'resolved', 'cancelled')",
             name="ck_operator_decisions_status_values",
         ),
+        # Hot dashboard lookup: "pending decisions on this board".
+        # Phase III inbox routing + is_blocked bridge both filter on
+        # ``status = 'pending'``, so a partial index beats a full
+        # ``(board_id, status)`` b-tree on both size and selectivity.
+        Index(
+            "ix_operator_decisions_board_id_pending",
+            "board_id",
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -48,7 +58,12 @@ class OperatorDecision(TenantScoped, table=True):
     # tasks. Not machine-evaluated in Phase III; becomes structured in
     # Phase IV once actionability enforcement lands.
     unblock_rule: str | None = None
-    status: str = Field(default="pending", index=True)
+    # Status isn't individually indexed — migration b10ca1ab1e04 dropped
+    # the standalone ``ix_operator_decisions_status`` once the partial
+    # ``ix_operator_decisions_board_id_pending`` above covers the only
+    # access pattern that cares. Keep them in sync: do not re-add
+    # ``index=True`` here.
+    status: str = Field(default="pending")
     resolved_value: str | None = None
     # Who escalated the decision (agent or null for operator-authored).
     created_by_agent_id: UUID | None = Field(
