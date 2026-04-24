@@ -1973,6 +1973,89 @@ async def test_lead_inbox_to_in_progress_shortcut_stamps_in_progress_at() -> Non
 
 
 @pytest.mark.asyncio
+async def test_non_lead_agent_noop_in_progress_still_claims_unowned_task() -> None:
+    """Codex review 2026-04-24 (second pass): a no-op
+    ``status=in_progress`` PATCH on an already-in_progress, unowned
+    task must still set ``assigned_agent_id = actor.agent.id``. The
+    public API contract at the top of ``_apply_non_lead_agent_task_rules``
+    advertises "agents may claim unassigned tasks by updating
+    status". An over-broad no-op early return would skip that and
+    make the downstream actionability gate 409 on owner-less
+    actionable tasks."""
+
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            org_id = uuid4()
+            board_id = uuid4()
+            gateway_id = uuid4()
+            worker_id = uuid4()
+            task_id = uuid4()
+            original_in_progress = utcnow()
+
+            session.add(Organization(id=org_id, name="org"))
+            session.add(
+                Gateway(
+                    id=gateway_id,
+                    organization_id=org_id,
+                    name="gateway",
+                    url="https://gateway.local",
+                    workspace_root="/tmp/workspace",
+                ),
+            )
+            session.add(
+                Board(
+                    id=board_id,
+                    organization_id=org_id,
+                    name="board",
+                    slug="board",
+                    gateway_id=gateway_id,
+                ),
+            )
+            session.add(
+                Agent(
+                    id=worker_id,
+                    name="Worker",
+                    board_id=board_id,
+                    gateway_id=gateway_id,
+                    status="online",
+                ),
+            )
+            session.add(
+                Task(
+                    id=task_id,
+                    board_id=board_id,
+                    title="unowned in_progress task",
+                    description="",
+                    status="in_progress",
+                    assigned_agent_id=None,  # unowned
+                    in_progress_at=original_in_progress,
+                    review_packet_type="review_only",
+                ),
+            )
+            await session.commit()
+
+            task = (await session.exec(select(Task).where(col(Task.id) == task_id))).first()
+            assert task is not None
+            actor = (await session.exec(select(Agent).where(col(Agent.id) == worker_id))).first()
+            assert actor is not None
+
+            updated = await tasks_api.update_task(
+                payload=TaskUpdate(status="in_progress", comment="Claiming."),
+                task=task,
+                session=session,
+                actor=ActorContext(actor_type="agent", agent=actor),
+            )
+
+            assert updated.status == "in_progress"
+            assert updated.assigned_agent_id == worker_id
+            # original timestamp must NOT have been overwritten
+            assert updated.in_progress_at == original_in_progress
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_lead_can_patch_deploy_truth_metadata() -> None:
     """Codex finding G: leads used to be blocked from setting
     ``packet_commit_sha`` / ``packet_build_sha`` /

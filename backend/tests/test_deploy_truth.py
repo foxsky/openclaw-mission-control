@@ -445,3 +445,39 @@ async def test_deploy_truth_unchanged_when_flag_absent(
         await _require_deploy_truth(task, actor_agent_id=None)
     assert exc.value.status_code == 409
     assert exc.value.detail["code"] == ERROR_CODE_DEPLOY_TRUTH_MISSING_PACKET_SHA
+
+
+@pytest.mark.asyncio
+async def test_deploy_truth_enforces_when_flag_key_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backward-compat: when ``rollout_flags`` is a non-None dict that
+    does NOT contain ``deploy_truth_v1`` (the default for every
+    existing ``Board.rollout_flags={}``), the gate must enforce.
+
+    Codex review 2026-04-24 caught a regression where treating
+    missing-as-False silently turned off enforcement on every
+    existing board. Only an EXPLICIT ``False`` opts a board out."""
+
+    monkeypatch.setattr(
+        "app.api.tasks._schedule_deploy_degraded_emit",
+        lambda **_: None,
+    )
+
+    task = Task(
+        id=uuid4(),
+        board_id=uuid4(),
+        title="t",
+        status="review",
+        validation_target="https://example.test",
+        supports_build_metadata=True,
+        packet_commit_sha=None,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await _require_deploy_truth(
+            task,
+            actor_agent_id=None,
+            rollout_flags={},
+        )
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == ERROR_CODE_DEPLOY_TRUTH_MISSING_PACKET_SHA

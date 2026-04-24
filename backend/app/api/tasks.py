@@ -655,14 +655,18 @@ async def _require_deploy_truth(
         # null; deploy-truth has nothing to verify.
         return
 
-    # Phase V §I8: honor the ``deploy_truth_v1`` rollout flag. When
-    # the caller passed rollout_flags (i.e. we're operating inside a
-    # board scope) and the flag is explicitly disabled, emit a
-    # degraded-shadow metric and skip enforcement. Prior behaviour
-    # was to unconditionally run the gate whether the board had
-    # opted in or not — the flag existed in the schema allowlist
-    # (schemas/boards.py) but no transition code read it.
-    if rollout_flags is not None and not bool(rollout_flags.get("deploy_truth_v1", False)):
+    # Phase V §I8: honor the ``deploy_truth_v1`` rollout flag. Only
+    # an EXPLICIT ``False`` opts a board out — a missing key means
+    # "not yet recorded a preference", and prior behaviour
+    # (pre-flag-wiring) was to enforce the gate unconditionally.
+    # Defaulting missing-to-disabled would silently turn off
+    # enforcement on every existing board (default
+    # ``Board.rollout_flags={}`` per ``models/boards.py``). Codex
+    # review 2026-04-24 caught this regression in the first
+    # iteration of this gate. The flag existed in the schema
+    # allowlist (``schemas/boards.py``) but had no consumer until
+    # this commit.
+    if rollout_flags is not None and rollout_flags.get("deploy_truth_v1") is False:
         _schedule_deploy_degraded_emit(
             task_id=task.id,
             board_id=task.board_id,
@@ -3377,22 +3381,34 @@ async def _apply_non_lead_agent_task_rules(
                     or effective_operator_decision_summary is None
                     else None
                 )
-        # Side effects run only on an actual status CHANGE. A no-op
-        # ``status=X`` PATCH on a task already at status X must not
-        # overwrite ``previous_in_progress_at`` with null (data loss).
-        if status_value == update.task.status:
-            return
+        # ``status_changing`` distinguishes a real transition from a
+        # no-op echo. Side effects that depend on the from→to delta
+        # (clearing ``in_progress_at``, snapshotting it into
+        # ``previous_in_progress_at``, clearing ``assigned_agent_id``
+        # on inbox/review) must not run on no-ops — codex finding B
+        # (2026-04-24) showed those would otherwise wipe the prior
+        # snapshot to null. But owner-claim on ``in_progress`` /
+        # ``rework`` MUST still run on no-ops: the public contract at
+        # the top of this function ("agents may claim unassigned tasks
+        # by updating status") relies on a no-op
+        # ``status=in_progress`` PATCH to assign the actor. Skipping
+        # it would leave actionable tasks owner-less and trigger the
+        # downstream actionability gate. (Codex review 2026-04-24
+        # caught this in the second pass.)
+        status_changing = status_value != update.task.status
         if status_value == "inbox":
-            update.task.assigned_agent_id = None
-            update.task.previous_in_progress_at = update.task.in_progress_at
-            update.task.in_progress_at = None
+            if status_changing:
+                update.task.assigned_agent_id = None
+                update.task.previous_in_progress_at = update.task.in_progress_at
+                update.task.in_progress_at = None
         elif status_value == "review":
-            update.task.previous_in_progress_at = update.task.in_progress_at
-            update.task.assigned_agent_id = None
-            update.task.in_progress_at = None
+            if status_changing:
+                update.task.previous_in_progress_at = update.task.in_progress_at
+                update.task.assigned_agent_id = None
+                update.task.in_progress_at = None
         else:
             update.task.assigned_agent_id = update.actor.agent.id if update.actor.agent else None
-            if status_value == "in_progress":
+            if status_value == "in_progress" and status_changing:
                 update.task.in_progress_at = utcnow()
 
 
