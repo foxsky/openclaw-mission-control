@@ -317,13 +317,10 @@ async def test_non_lead_agent_cannot_move_frontend_task_to_review_without_valida
 
             assert exc.value.status_code == 409
             assert isinstance(exc.value.detail, dict)
-            assert exc.value.detail["code"] == "task_delivery_contract_incomplete"
-            assert exc.value.detail["status"] == "review"
-            assert exc.value.detail["missing_fields"] == [
-                "validation_target",
-                "validation_target_kind",
-                "validation_target_scope",
-            ]
+            # Phase 1 pipeline gate fires first: frontend_ui without
+            # packet_commit_sha is rejected before the delivery contract
+            # gate checks for missing validation_target fields.
+            assert exc.value.detail["code"] == "review_missing_commit"
     finally:
         await engine.dispose()
 
@@ -407,7 +404,7 @@ async def test_non_lead_agent_forbidden_when_task_assigned_to_other_agent() -> N
             assert exc.value.detail["code"] == "task_assignee_mismatch"
             assert (
                 exc.value.detail["message"]
-                == "Agents can only change status on tasks assigned to them."
+                == "Agents can only change status or commit metadata on tasks assigned to them."
             )
     finally:
         await engine.dispose()

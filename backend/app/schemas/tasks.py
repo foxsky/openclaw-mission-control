@@ -169,7 +169,10 @@ def _normalise_and_validate_sha(value: object, field_name: str) -> object | None
 STATUS_GATES: dict[str, frozenset[str]] = {
     "delivery_contract": frozenset({"in_progress", "review", "done"}),
     "owner": frozenset({"in_progress", "done"}),
-    "deploy_truth": frozenset({"review", "done"}),
+    # Phase 2: sync deploy-truth fires only on ``done`` transitions.
+    # Review transitions use async deploy parity check instead
+    # (pipeline-transition-gates design, 2026-04-25).
+    "deploy_truth": frozenset({"done"}),
 }
 
 DELIVERY_CONTRACT_REQUIRED_STATUSES = STATUS_GATES["delivery_contract"]

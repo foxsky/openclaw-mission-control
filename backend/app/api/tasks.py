@@ -51,6 +51,7 @@ from app.schemas.task_custom_fields import (
     validate_custom_field_value,
 )
 from app.schemas.tasks import (
+    REVIEW_PACKET_TYPES_REQUIRING_VALIDATION_TARGET,
     STATUS_GATES,
     TaskCommentCreate,
     TaskCommentRead,
@@ -578,6 +579,52 @@ def _projected_task(task: Task, updates: dict[str, object]) -> Task:
         if field in updates:
             setattr(projected, field, updates[field])
     return projected
+
+
+def _require_commit_sha_for_review(
+    task: Task,
+    updates: dict[str, object],
+) -> None:
+    """Reject review transitions without ``packet_commit_sha`` for deployable tasks.
+
+    Phase 1 of pipeline-transition-gates (2026-04-25).  Fires when the
+    projected target status is ``review`` and the task either has a
+    ``validation_target`` or a deployable ``review_packet_type``.  Pure
+    review-only tasks without a live target are exempt.
+
+    Uses the projected/intended SHA (from ``updates``) so agents can set
+    ``packet_commit_sha`` in the same PATCH that moves to ``review``.
+    """
+
+    projected_status = updates.get("status", task.status)
+    if projected_status != "review":
+        return
+
+    # Check whether this task requires a commit SHA.  Tasks without a
+    # validation target AND with a non-deployable packet type are exempt
+    # (e.g. locale quality review, spec review).
+    projected_target = updates.get("validation_target", task.validation_target)
+    packet_type = task.review_packet_type  # static — not changed in the PATCH
+    if (
+        projected_target is None
+        and packet_type not in REVIEW_PACKET_TYPES_REQUIRING_VALIDATION_TARGET
+    ):
+        return
+
+    projected_sha = updates.get("packet_commit_sha", task.packet_commit_sha)
+    if not projected_sha:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": (
+                    "Cannot move to review without packet_commit_sha. "
+                    "Commit your changes, then include packet_commit_sha "
+                    "in the PATCH: "
+                    '{\"status\": \"review\", \"packet_commit_sha\": \"<SHA>\"}'
+                ),
+                "code": "review_missing_commit",
+            },
+        )
 
 
 def _validate_agent_transition(*, from_status: str, to_status: str) -> None:
@@ -3165,6 +3212,13 @@ async def _apply_lead_task_update(
         raise _operator_decision_block_error()
 
     # Phase V §I8 parity: the non-lead path enforces deploy-truth
+    # Pipeline gate: require packet_commit_sha for review transitions
+    # on deployable tasks.  Lead path must run this too — agents reach
+    # it via _finalize_updated_task, but leads bypass that function.
+    # (Phase 1 of pipeline-transition-gates, 2026-04-25.)
+    if "status" in update.updates:
+        _require_commit_sha_for_review(update.task, update.updates)
+
     # PRE-mutation via a projected task (``_finalize_updated_task`` at
     # ``_require_deploy_truth`` call-site). The lead path must run the
     # same pre-apply gate — lead PATCHes that change ``status`` /
@@ -3303,22 +3357,33 @@ async def _apply_non_lead_agent_task_rules(
             message="Agent can only update tasks for their assigned board.",
         )
     # Allow agents to claim unassigned tasks by updating status (when permitted by board rules).
+    # Also block SHA metadata changes on tasks owned by other agents.
     if (
         update.actor.agent
         and update.task.assigned_agent_id is not None
         and update.task.assigned_agent_id != update.actor.agent.id
-        and "status" in update.updates
+        and (
+            "status" in update.updates
+            or "packet_commit_sha" in update.updates
+            or "packet_build_sha" in update.updates
+        )
     ):
         raise _task_update_forbidden_error(
             code="task_assignee_mismatch",
-            message="Agents can only change status on tasks assigned to them.",
+            message="Agents can only change status or commit metadata on tasks assigned to them.",
         )
-    # Agents are limited to status/comment updates, and non-inbox status moves
-    # must pass dependency checks before they can proceed.
+    # Agents are limited to status/comment updates + commit SHA fields.
+    # Non-inbox status moves must pass dependency checks before they can
+    # proceed.  ``packet_commit_sha`` and ``packet_build_sha`` are allowed
+    # so agents can stamp their fix commit when moving to review, without
+    # needing the lead to relay the SHA.  (Phase 1 of pipeline-transition-
+    # gates design, 2026-04-25.)
     allowed_fields = {
         "status",
         "comment",
         "custom_field_values",
+        "packet_commit_sha",
+        "packet_build_sha",
     }
     if (
         update.depends_on_task_ids is not None
@@ -3329,7 +3394,10 @@ async def _apply_non_lead_agent_task_rules(
     ):
         raise _task_update_forbidden_error(
             code="task_update_field_forbidden",
-            message="Agents may only update status, comment, and custom field values.",
+            message=(
+                "Agents may only update status, comment, custom field values, "
+                "packet_commit_sha, and packet_build_sha."
+            ),
         )
     if "status" in update.updates:
         only_lead_can_change_status = (
@@ -3723,6 +3791,13 @@ async def _finalize_updated_task(
     *,
     update: _TaskUpdateInput,
 ) -> TaskRead:
+    # Pipeline gate: require packet_commit_sha for review transitions
+    # on deployable tasks.  Runs against pre-update state + intended
+    # updates so the agent can set the SHA in the same PATCH.
+    # (Phase 1 of pipeline-transition-gates, 2026-04-25.)
+    if "status" in update.updates:
+        _require_commit_sha_for_review(update.task, update.updates)
+
     # Phase V §I8: run the deploy-truth gate FIRST, before any ORM
     # mutation or autoflushing DB query. The /__build fetch blocks
     # for up to 5s; holding that wall-clock window inside an open
@@ -3863,6 +3938,37 @@ async def _finalize_updated_task(
     session.add(update.task)
     await session.commit()
     await session.refresh(update.task)
+
+    # Phase 2 pipeline gate: enqueue async deploy parity check AFTER
+    # DB commit.  Only for review transitions on tasks with a
+    # validation target + supports_build_metadata=True.
+    if (
+        update.task.status == "review"
+        and update.previous_status != "review"
+        and update.task.validation_target is not None
+        and update.task.supports_build_metadata is True
+        and update.task.packet_commit_sha is not None
+    ):
+        from app.services.deploy_parity import enqueue_deploy_parity_check
+
+        try:
+            enqueue_deploy_parity_check(
+                task_id=update.task.id,
+                board_id=update.board_id,
+                packet_commit_sha=update.task.packet_commit_sha,
+                validation_target=update.task.validation_target,
+                expected_updated_at=update.task.updated_at.isoformat()
+                if update.task.updated_at
+                else "",
+                prior_agent_id=update.previous_assigned,
+            )
+        except Exception:
+            logger.warning(
+                "deploy_parity.enqueue_failed",
+                extra={"task_id": str(update.task.id)},
+                exc_info=True,
+            )
+
     await _record_task_comment_from_update(session, update=update)
     await _record_task_update_activity(session, update=update)
     await _notify_task_update_assignment_changes(session, update=update)

@@ -171,7 +171,9 @@ def _task(**overrides: object) -> Task:
     defaults: dict[str, object] = {
         "board_id": uuid4(),
         "title": "Test",
-        "status": "review",
+        # Phase 2: sync deploy-truth now fires on ``done`` only.
+        # ``review`` uses async parity check instead.
+        "status": "done",
         "validation_target": "https://example.test",
         "supports_build_metadata": True,
         "packet_commit_sha": "abcdef1",
@@ -373,7 +375,7 @@ async def test_deploy_truth_skipped_when_flag_disabled(
         id=uuid4(),
         board_id=uuid4(),
         title="t",
-        status="review",
+        status="done",
         validation_target="https://example.test",
         supports_build_metadata=True,
         packet_commit_sha=None,  # would normally raise
@@ -403,7 +405,7 @@ async def test_deploy_truth_enforces_when_flag_enabled(
         id=uuid4(),
         board_id=uuid4(),
         title="t",
-        status="review",
+        status="done",
         validation_target="https://example.test",
         supports_build_metadata=True,
         packet_commit_sha=None,
@@ -436,7 +438,7 @@ async def test_deploy_truth_unchanged_when_flag_absent(
         id=uuid4(),
         board_id=uuid4(),
         title="t",
-        status="review",
+        status="done",
         validation_target="https://example.test",
         supports_build_metadata=True,
         packet_commit_sha=None,
@@ -468,7 +470,7 @@ async def test_deploy_truth_enforces_when_flag_key_missing(
         id=uuid4(),
         board_id=uuid4(),
         title="t",
-        status="review",
+        status="done",
         validation_target="https://example.test",
         supports_build_metadata=True,
         packet_commit_sha=None,
