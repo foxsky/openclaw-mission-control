@@ -864,7 +864,12 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
 {% else %}
 7) **Move to review** — first re-fetch the task; if `is_blocked=True`, stop and tag `@lead`.
 PF/PB/implementation workers own this `in_progress` -> `review` transition; the lead may nudge you, but cannot perform it for you.
-Review PATCH needs `"packet_commit_sha":"SHA"`; rework rejects missing/unchanged SHA.
+Review PATCH must include `"packet_commit_sha":"<SHA>"` matching the FINAL_EVIDENCE_PACKET commit; rework resubmission is rejected if the SHA is missing or unchanged from the prior submission. Concrete shape:
+```bash
+curl -fsS -X PATCH "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID" \
+  -H "X-Agent-Token: $AUTH_TOKEN" -H "Content-Type: application/json" \
+  -d '{"status": "review", "packet_commit_sha": "<COMMIT_SHA>"}'
+```
 For `frontend_ui` or `mixed`, `$HQCTL pipeline-state $TASK_ID --check-ready` must exit 0 and print `PIPELINE_READY=true`; a prose evidence packet cannot satisfy the backend gate.
 {% if worker_is_backend %}
 Move only after Post-Child ACP Review (Backend) self-check and Claude review PASS.
