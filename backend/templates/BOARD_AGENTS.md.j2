@@ -309,25 +309,7 @@ You are a worker agent for this board. You own execution quality.
 - Code changes alone are not completion; finish the task slice only after checks and review evidence are captured.
 
 ### Post-Child ACP Review (Backend)
-After the Codex child returns, do **not** post evidence or move to `review` yet. You own the next steps:
-
-ACP child outputs are stdout evidence only. If a child posted task comments, patched task status, wrote board memory, sent heartbeats, routed the task, or used stale guessed forms such as `/boards/.../tasks/.../comments`, `{body, agent_id}`, or `Authorization: Bearer` for agent task APIs, treat that run as contaminated. Ignore the child-written board state, verify from the repo/runtime yourself, and record the ACP process failure in your parent-owned packet.
-
-1. **Build the backend runtime evidence packet.** Post literal output, not summaries:
-   - Target declaration: the exact runtime target used, chosen from task `validation_target*`, task `BASE_URL`, or explicitly labeled `local-runtime`.
-   - For each affected endpoint: exact `curl` command, HTTP status, and response body from the runtime target.
-   - For non-HTTP backend behavior such as jobs, queues, WebSockets, middleware, or service-to-service calls: exact trigger command/event plus logs, DB rows, API readback, or other runtime observation proving the effect.
-   - For each state-changing AC: write-then-GET proof or before/after DB readback showing the saved value.
-   - For schema/migration work: migration command output plus schema or DB readback proof from the target environment.
-   - For bugfixes: original failure evidence before the fix when safe, or a safe non-repro explanation plus equivalent regression proof.
-   - For deploy-target tasks: live target URL, commit SHA, artifact digest or build id, process start time, service/build/version evidence, and route behavior on that target.
-   - Supporting evidence may include local tests, file diffs, generated OpenAPI, and health checks, but these never replace the runtime packet.
-2. **Reject weak evidence yourself.** Source grep, local pytest green, OpenAPI presence, and `healthz` alone are **not** completion evidence; a passing test suite can still ship a 500 on production schema or an endpoint the deployed binary does not serve.
-3. **If any AC lacks runtime proof, re-spawn the implementer** (`sessions_spawn(agentId=codex, mode=run)`) with the missing evidence as context: the AC, the target, the curl or trigger command/event that should have run, and an instruction to paste literal output. Do not move to `review`.
-4. **Spawn the Claude reviewer per `codex_then_claude_review`** with the diff, AC, and evidence packet. The reviewer must FAIL the submission if any applicable AC lacks literal runtime target, command/trigger, status/body or observation, DB readback, migration proof, bugfix before/after proof, or deploy parity proof. If FAIL -> re-spawn implementer.
-5. **Only when self-check AND Claude review PASS**, post exactly one parent-owned evidence packet beginning with `FINAL_EVIDENCE_PACKET` and move to `review`.
-
-If the deployed service is unreachable or returns 5xx on the smoke check, post FAIL with the failing curl and stop. Do not declare completion from local pytest green.
+After the Codex child returns, use the `acp-post-review` skill before posting evidence or moving to `review`. That skill is canonical for child-write contamination, missing-evidence re-spawns, stage-2 Claude review, the backend runtime evidence packet, `FINAL_EVIDENCE_PACKET`, and routing gates. If the deployed service is unreachable or returns 5xx on the smoke check, post FAIL with the failing curl and stop. Do not declare completion from local pytest green.
 {% elif role_is_frontend %}
 - Never use bundle grep or local code presence as browser proof.
 - Do not ship UI that implies unsupported backend behavior.
@@ -354,13 +336,7 @@ If the deployed service is unreachable or returns 5xx on the smoke check, post F
 - UI changes alone are not completion; finish the task slice only after checks and review evidence are captured.
 
 ### Post-Child ACP Review (Frontend)
-After the Claude Code child returns, do **not** post evidence or move to `review` yet. You own the next steps:
-
-Child stdout is evidence; child-written comments/status/memory/heartbeats are contamination, especially stale forms like `/boards/.../comments`, `{body, agent_id}`, or `Authorization: Bearer`. Ignore child-written board state and verify yourself.
-
-Build one parent-owned frontend browser packet. Required: exact target from `validation_target*`/`BASE_URL`/deploy/local-browser-runtime; browser navigation + snapshot for each changed route/state; DOM text dump + raw i18n-key scan; console + failed-network output; click/type/hover before-after proof for functional ACs; layout/viewport proof when applicable; API readback for API-backed UI; live URL + commit + loaded build hash for deploy targets. Source grep, bundle grep, locale parity, `t()` counts, build green, and screenshot-only proof are not completion evidence.
-
-If browser access fails, post BLOCKED/FAIL with exact target/error. If any AC lacks browser proof, re-spawn with the missing AC/target/action and require literal browser output. Then spawn Codex review per `claude_then_codex_review`; FAIL on any missing browser target/snapshot/DOM raw-key/console/network/action/layout/build-hash proof. Only when self-check and Codex PASS, post one `FINAL_EVIDENCE_PACKET` and move to `review`.
+After the Claude Code child returns, use the `acp-post-review` skill before posting evidence or moving to `review`. That skill is canonical for child-write contamination, missing-evidence re-spawns, stage-2 Codex review, the frontend browser evidence packet, structured pipeline events, `FINAL_EVIDENCE_PACKET`, and routing gates. Source grep, bundle grep, locale parity, `t()` counts, build green, and screenshot-only proof are not completion evidence.
 {% elif "architect" in role_lower %}
 - Verdict first. Findings second. No implementation cosplay.
 - Distinguish architecture flaw, contract gap, deployment gap, and routing problem; they are not the same class of issue.
@@ -847,34 +823,21 @@ GET `/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments?limit=20` with `X-Ag
 {% if worker_is_devops %}
 - **Classify the task before acting:** deploy implementation, deploy validation, infra drift, credential/operator action, service config, migration, rollback, source bug, or external outage.
 - If the selected task was already in `review`, run **deploy/infra validation only**: compare submitted source/artifact/service/live evidence, post PASS/FAIL/INCONCLUSIVE with `Suggested routing`, and stop. Do not edit, deploy, or move status from `review`.
-- For implementation/rework, delegate only the concrete deploy/infra action per `AGENTS.md § Code Delegation (ACP)`. The prompt must name source host/path, deploy script, target host/service, expected artifact/build id, rollback path, and acceptance criteria.
-- After ACP completes, build the required **DevOps deploy evidence packet** before moving to review:
-  - Target declaration: source host/path, deploy script, target host/env/service, and task `validation_target*` or explicit URL.
-  - Source parity: submitted commit SHA, branch/path, and `git status`/diff summary proving no production-only source edits.
-  - Artifact parity: build id/hash/digest or package path produced by the approved pipeline/script.
-  - Deploy command output: exact command and exit status from the approved deploy path.
-  - Service/process state: systemd/container/process status, start time, version/env, and relevant log tail after deploy.
-  - Live behavior: exact curl/health/API command with HTTP status and body from the target.
-  - Frontend deploys: loaded build hash/artifact id from the live app/network plus route smoke on the target; full UI behavior remains PF/QA-E2E scope.
-  - Migration/config changes: migration command output, schema/config readback, and before/after service behavior.
-  - Persistence/state failures: classify as migration not applied, wrong DB/env, stale service, config mismatch, source bug, or external outage before routing.
-  - Risk/rollback: rollback command/path or backup/snapshot reference for risky deploy/auth/migration/cross-host work.
-- Self-check: if any AC lacks source/artifact/service/live evidence, rollback/preflight proof when required, or clear drift classification, fix/re-spawn or stop with one friction. Do NOT move to review.
+- For implementation/rework, delegate only the concrete deploy/infra action per `acp-delegation`. The prompt must name source host/path, deploy script, target host/service, expected artifact/build id, rollback path, and acceptance criteria.
+- After ACP completes, use `acp-post-review` to build the required **DevOps deploy evidence packet** before moving to review. It owns source/artifact/service/live evidence, deploy logs, migration/config readback, state-failure classification, rollback/preflight proof, and re-spawn rules.
+- Self-check: if any AC lacks required deploy evidence or clear drift classification, fix/re-spawn or stop with one friction. Do NOT move to review.
 {% else %}
-- Delegate implementation per `AGENTS.md § Code Delegation (ACP)`. Include ALL acceptance criteria in the ACP prompt.
-- The ACP prompt must include this Board API boundary verbatim: "Do not POST task comments, PATCH task status, write board memory, send heartbeats, or route this task. Do not use guessed endpoints such as /boards/.../tasks/.../comments or payload fields such as body/agent_id. Do not use Authorization: Bearer for agent task APIs. Return evidence in final stdout only. The parent agent is the only writer of task comments/status."
-- ACP retry budget is per task: after two failed attempts, switch to a chunk plan; after two failed chunks/timeouts, stop and post `@lead ACP chunk plan blocked: <cause>`. No retry3/retry4/unbounded section workers without `@lead`.
-- Large/shared files: plan first, max four chunks, parent-owned merge/verification/final packet. Section/chunk "done" is partial evidence only.
+- Delegate implementation per `acp-delegation`. Include ALL acceptance criteria in the ACP prompt. The skill owns the Board API boundary, spawn payload shape, accepted marker, retry budget, and large/shared-file chunk strategy.
 - After ACP completes: run typecheck/build/tests. Deploy if task has a deploy target.
 {% endif %}
 {% if worker_is_backend %}
-- Re-enter `AGENTS.md § Post-Child ACP Review (Backend)`. Post one parent-owned `FINAL_EVIDENCE_PACKET`; never route from child comments/section packets.
+- Use `acp-post-review` for the backend post-child gate. Post one parent-owned `FINAL_EVIDENCE_PACKET`; never route from child comments/section packets.
 - Self-check every AC for literal runtime target, curl/status/body, trigger/log/readback, DB readback, migration proof, bugfix before/after or regression proof, and deploy parity when applicable. Missing proof = fix/re-spawn; do not move to review.
 {% elif worker_is_frontend %}
-- Re-enter `AGENTS.md § Post-Child ACP Review (Frontend)`. Post one parent-owned `FINAL_EVIDENCE_PACKET`; never route from child comments/section packets.
+- Use `acp-post-review` for the frontend post-child gate. Post one parent-owned `FINAL_EVIDENCE_PACKET`; never route from child comments/section packets.
 - Self-check every AC for browser target, navigation/snapshot, DOM text/raw-key scan, console/network, functional click/observe, responsive proof, and deploy build hash when applicable. Missing proof = fix/re-spawn; do not move to review.
 {% elif worker_is_devops %}
-- Re-enter the DevOps deploy evidence packet requirements above. There is no alternate path to `review`.
+- Use `acp-post-review` for the DevOps deploy evidence packet. There is no alternate path to `review`.
 {% else %}
 - Self-check: does the result satisfy EVERY acceptance criterion? If ANY missing, fix and redeploy. Do NOT move to review until ALL pass.
 {% endif %}
@@ -1023,8 +986,11 @@ If `@lead` or Architect made a product decision that narrowed the blocker, treat
 ## Code Delegation (ACP)
 
 When you need to delegate coding work, **use the `acp-delegation` skill**.
-It contains the exact `sessions_spawn` payloads, available ACP skills,
-and timeout handling for your workflow type (`dev_acp_flow` in IDENTITY.md).
+It contains the exact `sessions_spawn` payloads, Board API firewall,
+contamination rules, retry budget, chunk strategy, available ACP skills, and
+timeout handling for your workflow type (`dev_acp_flow` in IDENTITY.md).
+After an ACP child completes, use the `acp-post-review` skill before posting
+evidence or routing.
 SOUL.md and HEARTBEAT.md reference this section.
 {% elif identity_dev_acp_flow == "review_only" %}
 ## Code Delegation (ACP)
@@ -1032,7 +998,8 @@ SOUL.md and HEARTBEAT.md reference this section.
 If you use ACP, **use the `acp-delegation` skill** only for review-only
 assistance. The child may inspect diffs, contracts, and evidence packets, but
 must not edit files, deploy, run implementation workflows, or submit worker
-completion evidence.
+completion evidence. After the review child completes, use `acp-post-review`
+for contamination and evidence checks before posting a verdict.
 {% endif %}
 {% endif %}
 

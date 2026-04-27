@@ -38,14 +38,13 @@ _SKIP_LOCAL_TEMPLATE_PHILOSOPHY = pytest.mark.skip(
 )
 
 # Per-file injection cap. The OpenClaw docs default is 20,000
-# (``agents.defaults.bootstrapMaxChars``). Raised to 23,000 to
-# accommodate the Lead Board Playbook (enforcement rules, squad
-# capability matrix, HARD RULES) which is operationally critical
-# content that was migrated from the Supervisor's soul_template
-# into AGENTS.md per the workspace architecture docs. The gateway
-# config on .60 should be patched to match:
-#   agents.defaults.bootstrapMaxChars = 23000
-BOOTSTRAP_PER_FILE_MAX_CHARS = 23_000
+# (``agents.defaults.bootstrapMaxChars``). Raised to 30,000 to
+# accommodate the deterministic lead playbook (memory intake,
+# next-action gates, structured review gates, and evidence contracts)
+# which is operationally critical content referenced by HEARTBEAT.md.
+# The gateway config on .60 should match:
+#   agents.defaults.bootstrapMaxChars = 30000
+BOOTSTRAP_PER_FILE_MAX_CHARS = 30_000
 
 # Soft budget for HEARTBEAT specifically — prompt-cost hygiene, not a
 # runtime contract. Heartbeats fire on every cron tick so a bloated
@@ -339,6 +338,9 @@ def test_agents_md_code_delegation_references_skill() -> None:
         assert "acp-delegation" in agents, (
             f"AGENTS.md must tell agents to use the acp-delegation skill (flow={flow!r})"
         )
+        assert "acp-post-review" in agents, (
+            f"AGENTS.md must tell agents to use the acp-post-review skill after child completion (flow={flow!r})"
+        )
         assert "use" in agents.lower() and "skill" in agents.lower(), (
             f"AGENTS.md must explicitly say 'use ... skill' (flow={flow!r})"
         )
@@ -346,6 +348,11 @@ def test_agents_md_code_delegation_references_skill() -> None:
         assert '"agentId": "claude"' not in agents, (
             f"ACP payloads must be in the skill, not inline (flow={flow!r})"
         )
+        assert "The ACP prompt must include this Board API boundary verbatim" not in agents
+        assert "ACP retry budget is per task" not in agents
+        assert "Large/shared files: plan first" not in agents
+        assert "After the Codex child returns" not in agents
+        assert "After the Claude Code child returns" not in agents
 
     lead_agents = _render_template(
         "BOARD_AGENTS.md.j2",
@@ -603,6 +610,204 @@ def test_phase1_review_loop_guardrails_render_for_frontend_architect_and_lead() 
     assert "worker escalation still starts at `3+ rejections`." in lead_agents
     assert "set `review_packet_type`, known `validation_target*`, and `operator_decision_required` when needed" in lead_agents
     assert "route around operator-gated work" in lead_agents
+
+
+def test_architect_templates_are_review_only_without_worker_leakage() -> None:
+    ctx = {
+        **_REALISTIC_RENDER_CONTEXT,
+        "is_main_agent": False,
+        "is_board_lead": False,
+        "agent_name": "Architect",
+        "agent_id": "arch-id",
+        "identity_role": "System Architect and Code Reviewer",
+        "identity_dev_acp_flow": "review_only",
+    }
+
+    agents = _render_template("BOARD_AGENTS.md.j2", **ctx)
+    assert "Work ONLY in review mode" in agents
+    assert "ARCHITECT RECHECK for $TASK_ID" in agents
+    assert "frontend browser evidence packet" in agents
+    assert "backend runtime evidence packet" in agents
+    assert "Review gate applies" in agents
+    assert "planned_child_task_ids" in agents
+    assert "no_child_tasks_required" in agents
+    assert "Fix ALL bugs in one pass" not in agents
+    assert "Deploy target comes from the **task description**" not in agents
+    assert "**Deploy verification**" not in agents
+    assert "**Browser validation REQUIRED for frontend/UI tasks** before moving to review." not in agents
+    assert "Worker gate applies" not in agents
+    assert "When you need to delegate coding work" not in agents
+    assert "begin the normal role workflow" not in agents
+    assert "Review-only agents do not claim `rework`" in agents
+    assert "When a specialist claims an eligible `rework` task" not in agents
+
+    heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
+    assert 'order = ["review", "inbox"]' in heartbeat
+    assert 'order = ["in_progress"' not in heartbeat
+    assert "## Inbox Pickup Gate" not in heartbeat
+    assert "## Rework Pickup Gate" not in heartbeat
+    assert "move it to `in_progress`" not in heartbeat
+    assert "Do not continue `in_progress`, claim `rework`" in heartbeat
+
+
+def test_qa_unit_templates_are_validation_only_without_worker_leakage() -> None:
+    ctx = {
+        **_REALISTIC_RENDER_CONTEXT,
+        "is_main_agent": False,
+        "is_board_lead": False,
+        "agent_name": "QA-Unit",
+        "agent_id": "qa-id",
+        "identity_role": "Quality Assurance and Reverse-Mode Validator",
+        "identity_validation_flow": "qa_validation",
+    }
+
+    agents = _render_template("BOARD_AGENTS.md.j2", **ctx)
+    assert "Work ONLY in validation mode" in agents
+    assert "Do not move a failed task from `review` to `rework`" in agents
+    assert "Suggested routing: lead move to rework" in agents
+    assert "Commit/source parity" in agents
+    assert "AC-to-check mapping" in agents
+    assert "Changed-code coverage" in agents
+    assert "backend runtime evidence packet" in agents
+    assert "QA gate applies" in agents
+    assert "Worker gate applies" not in agents
+    assert "When you finish a slice" not in agents
+    assert "**Deploy verification**" not in agents
+    assert "**Browser validation REQUIRED for frontend/UI tasks** before moving to review." not in agents
+    assert "When a specialist claims an eligible `rework` task" not in agents
+
+    heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
+    assert 'order = ["review", "inbox"]' in heartbeat
+    assert 'order = ["in_progress"' not in heartbeat
+    assert "Do not move `review` to `rework`" in heartbeat
+    assert "Suggested routing: lead move to rework" in heartbeat
+    assert "move it to `in_progress`" not in heartbeat
+    assert "## Inbox Pickup Gate" not in heartbeat
+    assert "## Rework Pickup Gate" not in heartbeat
+
+
+def test_devops_templates_have_dedicated_deploy_evidence_lane() -> None:
+    ctx = {
+        **_REALISTIC_RENDER_CONTEXT,
+        "is_main_agent": False,
+        "is_board_lead": False,
+        "agent_name": "DevOps",
+        "agent_id": "devops-id",
+        "identity_role": "DevOps Engineer",
+        "identity_dev_acp_flow": "codex_with_optional_claude_review",
+    }
+
+    agents = _render_template("BOARD_AGENTS.md.j2", **ctx)
+    assert "DevOps deploy evidence packet" in agents
+    assert "Classify the task before acting" in agents
+    assert "source host/path" in agents
+    assert "acp-delegation" in agents
+    assert "acp-post-review" in agents
+    assert "approved deploy script" not in agents
+    assert "Artifact parity" not in agents
+    assert "Service/process state" not in agents
+    assert "Risk/rollback" not in agents
+    assert "If the selected task was already in `review`, run **deploy/infra validation only**" in agents
+    assert "DEVOPS DIAGNOSIS for $TASK_ID rejection" in agents
+    assert "Deploy verification packet REQUIRED" in agents
+    assert "Browser validation REQUIRED for frontend/UI tasks" not in agents
+    assert "ALL acceptance criteria PASS with DevOps deploy evidence packet posted" in agents
+
+    heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
+    assert 'order = ["in_progress", "rework", "inbox", "review"]' in heartbeat
+    assert "Work this one DevOps task end-to-end" in heartbeat
+    assert "If the selected task is already in review, validate deployed" in heartbeat
+    assert "never edit production" in heartbeat
+    assert "rollback command/path" in heartbeat
+    assert "Classify rework before fixing" in heartbeat
+
+
+def test_supervisor_template_enforces_review_gates_and_lead_routing() -> None:
+    ctx = {
+        **_REALISTIC_RENDER_CONTEXT,
+        "is_main_agent": False,
+        "is_board_lead": True,
+        "agent_name": "Supervisor",
+        "agent_id": "lead-id",
+        "identity_role": "Board Lead",
+    }
+
+    agents = _render_template("BOARD_AGENTS.md.j2", **ctx)
+    assert "Step 1 — Board Memory Intake" in agents
+    assert "/memory?limit=50" in agents
+    assert "MEMORY_INTAKE_CLEAR" in agents
+    assert "MEMORY_INTAKE_CREATE_REQUIRED" in agents
+    assert "MEMORY_INTAKE_FAILED" in agents
+    assert "Lead Next Action Gate" in agents
+    assert "/lead/next-action" in agents
+    assert "LEAD_NEXT_ACTION_REQUIRED" in agents
+    assert "/review-readiness" in agents
+    assert "/review-events" in agents
+    assert "Structured review verdicts are authoritative" in agents
+    assert "artifact_issues" in agents
+    assert "`review_only` Architect PASS" in agents
+    assert "planned_child_task_ids" in agents
+    assert "no_child_tasks_required:true" in agents
+    assert "item.get('content')" in agents
+    assert "item.get('id')" in agents
+    assert "for item in memory_items:" in agents
+    assert "item.get('title')" not in agents
+    assert "source_memory_id" in agents
+    assert "marketing_site_review" in agents
+    assert "no existing task references it" in agents
+    assert "if s not in ('in_progress','review','rework','inbox')" in agents
+    assert "('Architect','ARCHITECT')" in agents
+    assert '"assigned_agent_id":"ARCHITECT_ID","status":"review"' in agents
+    assert "Required Review Gates before approval/done" in agents
+    assert "PF→frontend browser evidence packet" in agents
+    assert "PB→backend runtime evidence packet" in agents
+    assert "DevOps→deploy evidence packet" in agents
+    assert "QA-Unit PASS required" in agents
+    assert "QA-E2E PASS required" in agents
+    assert "Follow the reviewer `Suggested routing`" in agents
+    assert '"status": "rework", "assigned_agent_id": "DEV_AGENT_UUID"' in agents
+    assert '"lead_reasoning": "Required review gates passed"' in agents
+    assert '"qa_evidence": "SUMMARY"' not in agents
+    assert '"status":"in_progress"` + nudge: `"DECOMPOSE' not in agents
+
+    heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
+    assert "Memory Intake Gate" in heartbeat
+    assert "Lead Next Action Gate" in heartbeat
+    assert "Do not manually scan the task list before this gate" in heartbeat
+    assert "/lead/next-action is authoritative for the next heartbeat action" in heartbeat
+    assert "/tmp/mc-board-tasks" not in heartbeat
+    assert "Before health scan" in heartbeat
+    assert "HEARTBEAT_OK is forbidden" in heartbeat
+    assert "zero unlinked actionable operator memories" in heartbeat
+    assert "review routing and gate enforcement" in heartbeat
+    assert "one closest-to-done task was advanced" in heartbeat
+
+
+def test_supervisor_heartbeat_has_failure_and_drift_guardrails() -> None:
+    ctx = {
+        **_REALISTIC_RENDER_CONTEXT,
+        "is_main_agent": False,
+        "is_board_lead": True,
+        "agent_name": "Supervisor",
+        "agent_id": "lead-id",
+        "identity_role": "Board Lead",
+    }
+
+    heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
+    assert "4xx/5xx/network" in heartbeat
+    assert "401/403/404/429" in heartbeat
+    assert "HEARTBEAT_FAILED" in heartbeat
+    assert "Do not assume exec is blocked" in heartbeat
+
+    agents = _render_template("BOARD_AGENTS.md.j2", **ctx)
+    assert "mktemp" in agents
+    assert "LEAD_TASKS_JSON" in agents
+    assert "Closest-to-done order" in agents
+    assert "approved review tasks" in agents
+    assert "assigned rework" in agents
+    assert "refresh OpenAPI per `TOOLS.md`" in agents
+    assert "newer than the latest worker packet" in agents
+    assert "newer than the latest blocking review verdict" in agents
 
 
 def test_agents_md_variants_fit_current_local_bootstrap_cap() -> None:
