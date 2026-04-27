@@ -63,48 +63,39 @@ missing, stop and request reprovisioning.
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/heartbeat" -H "X-Agent-Token: $AUTH_TOKEN"
 ```
-If this fails (5xx/network), stop. Do not continue.
+If this fails for any 4xx/5xx/network error, stop. Do not continue.
+For 401/403/404/429, report `HEARTBEAT_FAILED` once with the HTTP
+status/body or tool error so provisioning, permission, endpoint, or rate-limit
+drift is visible. Do not assume exec is blocked from old context; try the
+check-in command once in this session before declaring a tool/runtime block.
 
-2. **Run the Lead Board Playbook.** Fetch tasks needing routing and act on
-   the first one. Use the task JSON to fill variables in the action curls.
+2. **Memory Intake Gate.** Before health scan, run
+`AGENTS.md § Lead Board Playbook / Step 1 — Board Memory Intake`.
+HEARTBEAT_OK is forbidden until this gate proves there are zero unlinked actionable operator memories, or creates exactly one linked task for the
+newest missing operator review/findings memory. If the gate prints
+`MEMORY_INTAKE_FAILED` or task creation fails, report `HEARTBEAT_FAILED`.
 
-```bash
-curl -fsS "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks?page_size=50" \
-  -H "X-Agent-Token: $AUTH_TOKEN" -o /tmp/mc-board-tasks.json
-python3 - <<'PY'
-import json
-T = json.load(open("/tmp/mc-board-tasks.json")).get("items", [])
-for s in ["review","rework","inbox"]:
-    for t in T:
-        if t.get("status") == s and not t.get("is_blocked"):
-            print(f'TASK_ID={t["id"]}')
-            print(f'TASK_STATUS={s}')
-            print(f'TASK_TITLE={t.get("title","")}')
-            print(f'TASK_ASSIGNED={t.get("assigned_agent_id","")}')
-            raise SystemExit
-print("NO_TASK")
-PY
-```
+3. **Lead Next Action Gate.** Run
+`AGENTS.md § Lead Board Playbook / Step 2 — Lead Next Action Gate`.
+Do not manually scan the task list before this gate. /lead/next-action is authoritative for the next heartbeat action.
+HEARTBEAT_OK is forbidden when it prints `LEAD_NEXT_ACTION_REQUIRED` unless
+this tick applies the returned action or records the first concrete friction
+that prevents it.
 
-   If `NO_TASK`, return `HEARTBEAT_OK`. Otherwise read the task comments to
-   determine the routing action. Apply exactly ONE action per heartbeat:
+4. **Run the rest of the Lead Board Playbook** per `AGENTS.md § Lead Board Playbook`:
+   - health scan and first-friction handling
+   - inbox routing and post-assignment nudges
+   - review routing and gate enforcement
+   - dependency/blocker handling
+   - synthesis when the board is complete
 
-   - **review + all reviewers PASS** → create approval (include `lead_reasoning`):
-     `POST .../approvals` with `task_id`, `action_type: move_to_done`,
-     `lead_reasoning: "Required review gates passed"`, reviewer verdicts in payload.
-   - **review + FAIL verdict** → PATCH `status: rework` + `assigned_agent_id: <original developer from task history>` + nudge the developer with ALL findings.
-   - **review + missing reviewer** → nudge the next required reviewer.
-   - **inbox + ready** → PATCH `status: in_progress` + `assigned_agent_id: <worker>` + nudge.
-
-   Every PATCH must be followed by a nudge curl in the same action. See
-   `AGENTS.md § Lead Board Playbook` for the full bash blocks, variable
-   extraction, and edge cases.
-
-3. **Board Rule Snapshot**
+5. **Board Rule Snapshot**
 `require_approval_for_done={{ board_rule_require_approval_for_done | default(false) }}` `block_status_with_pending_approval={{ board_rule_block_status_changes_with_pending_approval | default(false) }}` `only_lead_can_change_status={{ board_rule_only_lead_can_change_status | default(false) }}`
 
-4. **HEARTBEAT_OK Gate.** Return `HEARTBEAT_OK` only when all are true:
+6. **HEARTBEAT_OK Gate.** Return `HEARTBEAT_OK` only when all are true:
    - check-in succeeded
+   - Memory Intake Gate passed
+   - Lead Next Action Gate passed or its returned action was applied/parked on a real routing object
    - health scan ran
    - one closest-to-done task was advanced, parked on a real routing object, or left alone because it is already waiting on a known owner
    - synthesis ran if the board is fully complete
