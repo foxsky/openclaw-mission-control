@@ -20,8 +20,11 @@ from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.organizations import Organization
 from app.models.task_pipeline_events import TaskPipelineEvent
+from app.models.task_review_events import TaskReviewEvent
 from app.models.tasks import Task
+from app.schemas.tasks import TaskCreate
 from app.schemas.tasks import TaskUpdate
+from app.services.task_pipeline import FRONTEND_REVIEW_PIPELINE_STATES, pipeline_missing_states
 
 
 OLD_COMMIT_SHA = "a" * 40
@@ -144,6 +147,91 @@ async def _record_frontend_pipeline_ready(
             ),
         )
     await session.commit()
+
+
+def test_task_create_payload_does_not_accept_source_memory_id() -> None:
+    memory_id = uuid4()
+
+    payload = TaskCreate.model_validate(
+        {
+            "title": "Manual task",
+            "description": "Created by a caller",
+            "source_memory_id": str(memory_id),
+        },
+    )
+
+    assert "source_memory_id" not in payload.model_dump()
+
+
+def test_empty_pipeline_events_do_not_satisfy_readiness() -> None:
+    task_id = uuid4()
+    board_id = uuid4()
+    events = [
+        TaskPipelineEvent(
+            task_id=task_id,
+            board_id=board_id,
+            state=state,
+        )
+        for state in FRONTEND_REVIEW_PIPELINE_STATES
+    ]
+
+    missing = pipeline_missing_states(events)
+    assert missing == list(FRONTEND_REVIEW_PIPELINE_STATES[1:])
+
+
+def test_worker_cannot_spoof_architect_review_event() -> None:
+    worker = Agent(
+        id=uuid4(),
+        name="Programmer-Frontend",
+        board_id=uuid4(),
+        gateway_id=uuid4(),
+        identity_profile={"role": "Frontend Developer"},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        tasks_api._require_reviewer_role_allowed(
+            actor=ActorContext(actor_type="agent", agent=worker),
+            reviewer_role="architect",
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "reviewer_role_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_delete_task_removes_review_events() -> None:
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            board, worker, task = await _seed_worker_task(session, status="review")
+            session.add(
+                TaskReviewEvent(
+                    task_id=task.id,
+                    board_id=board.id,
+                    agent_id=worker.id,
+                    reviewer_role="qa_e2e",
+                    verdict="pass",
+                ),
+            )
+            await session.commit()
+
+            await tasks_api.delete_task_and_related_records(
+                session,
+                task=await _reload_task(session, task.id),
+            )
+
+            remaining_event = (
+                await session.exec(
+                    select(TaskReviewEvent).where(col(TaskReviewEvent.task_id) == task.id),
+                )
+            ).first()
+            remaining_task = (
+                await session.exec(select(Task).where(col(Task.id) == task.id))
+            ).first()
+            assert remaining_event is None
+            assert remaining_task is None
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

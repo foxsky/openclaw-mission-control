@@ -28,6 +28,7 @@ from app.models.board_memory import BoardMemory
 from app.schemas.board_memory import BoardMemoryCreate, BoardMemoryRead
 from app.schemas.pagination import DefaultLimitOffsetPage
 from app.core.logging import get_logger
+from app.services.board_memory_intake import reconcile_board_memory_intake
 from app.services.mentions import extract_mentions, matches_agent_mention
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig, openclaw_call
@@ -368,7 +369,11 @@ async def create_board_memory(
         source=source,
     )
     session.add(memory)
-    await session.commit()
+    await session.flush()
+    if not is_chat:
+        await reconcile_board_memory_intake(session, board_id=board.id)
+    else:
+        await session.commit()
     await session.refresh(memory)
     if is_chat:
         await _notify_chat_targets(

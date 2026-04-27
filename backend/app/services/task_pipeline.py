@@ -28,6 +28,13 @@ FRONTEND_REVIEW_PIPELINE_STATES = (
     "live_build_verified",
     "runtime_verified",
 )
+PIPELINE_REQUIRED_FIELDS_BY_STATE = {
+    "committed": ("commit_sha",),
+    "built": ("commit_sha", "artifact_hash"),
+    "deployed": ("artifact_hash", "deploy_target"),
+    "live_build_verified": ("deploy_target", "live_sha"),
+    "runtime_verified": ("deploy_target", "evidence"),
+}
 
 
 def frontend_pipeline_required(review_packet_type: str | None) -> bool:
@@ -51,11 +58,26 @@ def pipeline_present_states(events: Sequence[TaskPipelineEvent]) -> list[str]:
     present: list[str] = []
     seen: set[str] = set()
     for event in sorted(events, key=lambda value: value.created_at):
+        if not pipeline_event_has_required_fields(event):
+            continue
         if event.state in seen:
             continue
         seen.add(event.state)
         present.append(event.state)
     return present
+
+
+def pipeline_event_has_required_fields(event: TaskPipelineEvent) -> bool:
+    required_fields = PIPELINE_REQUIRED_FIELDS_BY_STATE.get(event.state, ())
+    for field_name in required_fields:
+        value = getattr(event, field_name)
+        if value is None:
+            return False
+        if isinstance(value, str) and not value.strip():
+            return False
+        if isinstance(value, dict) and not value:
+            return False
+    return True
 
 
 def pipeline_missing_states(

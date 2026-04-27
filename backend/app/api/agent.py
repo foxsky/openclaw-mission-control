@@ -21,6 +21,8 @@ from app.core.agent_auth import AgentAuthContext, get_agent_auth_context
 from app.db.pagination import paginate
 from app.db.session import get_session
 from app.models.agents import Agent
+from app.models.approval_task_links import ApprovalTaskLink
+from app.models.approvals import Approval
 from app.models.board_webhook_payloads import BoardWebhookPayload
 from app.models.boards import Board
 from app.models.gateways import Gateway
@@ -49,12 +51,18 @@ from app.schemas.gateway_coordination import (
     GatewayMainAskUserResponse,
 )
 from app.schemas.health import AgentHealthStatusResponse
+from app.schemas.lead_actions import LeadNextActionRead
 from app.schemas.pagination import DefaultLimitOffsetPage
 from app.schemas.subagent_failures import (
     SubagentFailureReport,
     SubagentFailureReportResponse,
 )
 from app.schemas.tags import TagRef
+from app.schemas.task_review_events import (
+    TaskReviewEventCreate,
+    TaskReviewEventRead,
+    TaskReviewReadinessRead,
+)
 from app.schemas.tasks import TaskCommentCreate, TaskCommentRead, TaskCreate, TaskRead, TaskUpdate
 from app.services.activity_log import record_activity
 from app.services.subagent_failure_blocker import (
@@ -64,11 +72,23 @@ from app.services.subagent_failure_blocker import (
 from app.services.openclaw.coordination_service import GatewayCoordinationService
 from app.services.openclaw.policies import OpenClawAuthorizationPolicy
 from app.services.openclaw.provisioning_db import AgentLifecycleService
+from app.services.lead_next_action import (
+    ApprovalState,
+    latest_approval_state_by_task_id,
+    select_lead_next_action,
+)
 from app.services.tags import replace_tags, validate_tag_ids
+from app.services.task_pipeline import (
+    frontend_pipeline_required,
+    list_task_pipeline_events,
+    pipeline_missing_states,
+)
+from app.services.task_review_events import get_task_review_readiness
 from app.services.task_dependencies import (
     blocked_by_dependency_ids,
     dependency_status_by_id,
     validate_dependency_update,
+    dependency_ids_by_task_id,
 )
 
 if TYPE_CHECKING:
@@ -136,10 +156,117 @@ def _task_list_filters(
 
 
 TASK_LIST_FILTERS_DEP = Depends(_task_list_filters)
+ACTIVE_LEAD_STATUSES = ("inbox", "in_progress", "review", "rework")
 
 
 def _actor(agent_ctx: AgentAuthContext) -> ActorContext:
     return ActorContext(actor_type="agent", agent=agent_ctx.agent)
+
+
+async def _lead_approval_state_by_task_id(
+    session: AsyncSession,
+    *,
+    board_id: UUID,
+    task_ids: Sequence[UUID],
+) -> dict[UUID, ApprovalState]:
+    if not task_ids:
+        return {}
+    direct_rows = list(
+        await session.exec(
+            select(
+                col(Approval.task_id),
+                col(Approval.status),
+                col(Approval.resolved_at),
+                col(Approval.created_at),
+            )
+            .where(col(Approval.board_id) == board_id)
+            .where(col(Approval.task_id).in_(task_ids))
+            .where(col(Approval.action_type) == "move_to_done"),
+        ),
+    )
+    linked_rows = list(
+        await session.exec(
+            select(
+                col(ApprovalTaskLink.task_id),
+                col(Approval.status),
+                col(Approval.resolved_at),
+                col(Approval.created_at),
+            )
+            .join(Approval, col(Approval.id) == col(ApprovalTaskLink.approval_id))
+            .where(col(Approval.board_id) == board_id)
+            .where(col(ApprovalTaskLink.task_id).in_(task_ids))
+            .where(col(Approval.action_type) == "move_to_done"),
+        ),
+    )
+    return latest_approval_state_by_task_id(
+        task_ids=task_ids,
+        rows=[
+            (task_id, str(status), resolved_at, created_at)
+            for task_id, status, resolved_at, created_at in [*direct_rows, *linked_rows]
+        ],
+    )
+
+
+async def _lead_blocked_by_task_id(
+    session: AsyncSession,
+    *,
+    board_id: UUID,
+    tasks: Sequence[Task],
+) -> dict[UUID, list[UUID]]:
+    task_ids = [task.id for task in tasks]
+    deps_by_task_id = await dependency_ids_by_task_id(
+        session,
+        board_id=board_id,
+        task_ids=task_ids,
+    )
+    dep_ids = {dep_id for values in deps_by_task_id.values() for dep_id in values}
+    dep_status = await dependency_status_by_id(
+        session,
+        board_id=board_id,
+        dependency_ids=list(dep_ids),
+    )
+    return {
+        task.id: blocked_by_dependency_ids(
+            dependency_ids=deps_by_task_id.get(task.id, []),
+            status_by_id=dep_status,
+        )
+        for task in tasks
+    }
+
+
+async def _lead_pipeline_missing_by_task_id(
+    session: AsyncSession,
+    *,
+    tasks: Sequence[Task],
+) -> dict[UUID, list[str]]:
+    missing_by_task_id: dict[UUID, list[str]] = {}
+    for task in tasks:
+        if task.status != "review" or not frontend_pipeline_required(task.review_packet_type):
+            continue
+        cycle_since = task.in_progress_at or task.previous_in_progress_at
+        events = await list_task_pipeline_events(
+            session,
+            task_id=task.id,
+            since=cycle_since,
+        )
+        missing = pipeline_missing_states(events)
+        if missing:
+            missing_by_task_id[task.id] = missing
+    return missing_by_task_id
+
+
+async def _lead_review_readiness_by_task_id(
+    session: AsyncSession,
+    *,
+    tasks: Sequence[Task],
+) -> dict[UUID, dict[str, object]]:
+    readiness_by_task_id: dict[UUID, dict[str, object]] = {}
+    for task in tasks:
+        if task.status != "review":
+            continue
+        readiness = await get_task_review_readiness(session, task=task)
+        readiness_by_task_id[task.id] = readiness.model_dump(mode="json")
+    return readiness_by_task_id
 
 
 def _agent_board_openapi_hints(
@@ -592,6 +719,71 @@ async def list_tasks(
         board=board,
         session=session,
         _actor=_actor(agent_ctx),
+    )
+
+
+@router.get(
+    "/boards/{board_id}/lead/next-action",
+    response_model=LeadNextActionRead,
+    tags=AGENT_LEAD_TAGS,
+    summary="Return the deterministic next action for a board lead heartbeat",
+    description=(
+        "Read-only lead endpoint that ranks board work using the heartbeat "
+        "closest-to-done order and returns one explicit action candidate."
+    ),
+    openapi_extra={
+        "x-llm-intent": "lead_next_action_gate",
+        "x-when-to-use": [
+            "Lead heartbeat needs to decide whether HEARTBEAT_OK is allowed.",
+            "Lead needs a deterministic board-state action before interpreting comments.",
+        ],
+        "x-required-actor": "board_lead",
+        "x-side-effects": ["None. This endpoint is read-only."],
+        "x-negative-guidance": [
+            "Do not infer HEARTBEAT_OK from raw task lists when this endpoint returns action_required=true.",
+        ],
+    },
+)
+async def get_lead_next_action(
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
+) -> LeadNextActionRead:
+    """Return one deterministic action candidate for the lead playbook."""
+    _guard_board_access(agent_ctx, board)
+    _require_board_lead(agent_ctx)
+    tasks = list(
+        await session.exec(
+            select(Task)
+            .where(col(Task.board_id) == board.id)
+            .where(col(Task.status).in_(ACTIVE_LEAD_STATUSES)),
+        ),
+    )
+    task_ids = [task.id for task in tasks]
+    blocked_by_task_id = await _lead_blocked_by_task_id(
+        session,
+        board_id=board.id,
+        tasks=tasks,
+    )
+    approval_state_by_task_id = await _lead_approval_state_by_task_id(
+        session,
+        board_id=board.id,
+        task_ids=task_ids,
+    )
+    pipeline_missing_by_task_id = await _lead_pipeline_missing_by_task_id(
+        session,
+        tasks=tasks,
+    )
+    review_readiness_by_task_id = await _lead_review_readiness_by_task_id(
+        session,
+        tasks=tasks,
+    )
+    return select_lead_next_action(
+        tasks=tasks,
+        blocked_by_task_id=blocked_by_task_id,
+        approval_state_by_task_id=approval_state_by_task_id,
+        pipeline_missing_by_task_id=pipeline_missing_by_task_id,
+        review_readiness_by_task_id=review_readiness_by_task_id,
     )
 
 
@@ -1089,6 +1281,74 @@ async def create_task_comment(
     """
     _guard_task_access(agent_ctx, task)
     return await tasks_api.create_task_comment(
+        payload=payload,
+        task=task,
+        session=session,
+        actor=_actor(agent_ctx),
+    )
+
+
+@router.get(
+    "/boards/{board_id}/tasks/{task_id}/review-readiness",
+    response_model=TaskReviewReadinessRead,
+    tags=AGENT_BOARD_TAGS,
+    openapi_extra=_agent_board_openapi_hints(
+        intent="agent_task_review_readiness",
+        when_to_use=[
+            "Lead or reviewer needs structured PASS/FAIL readiness before routing done or rework.",
+        ],
+        routing_examples=[
+            {
+                "input": {
+                    "intent": "check required structured reviewer verdicts",
+                    "required_privilege": "any_agent",
+                },
+                "decision": "agent_task_review_readiness",
+            }
+        ],
+        side_effects=["None. This endpoint is read-only."],
+    ),
+)
+async def get_task_review_readiness_state(
+    task: Task = TASK_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
+) -> TaskReviewReadinessRead:
+    """Return structured reviewer verdict readiness for an agent-visible task."""
+    _guard_task_access(agent_ctx, task)
+    return await tasks_api.get_task_review_readiness_state(task=task, session=session)
+
+
+@router.post(
+    "/boards/{board_id}/tasks/{task_id}/review-events",
+    response_model=TaskReviewEventRead,
+    tags=AGENT_BOARD_TAGS,
+    openapi_extra=_agent_board_openapi_hints(
+        intent="agent_task_review_verdict_record",
+        when_to_use=[
+            "Architect, QA, DevOps, or lead needs to record a structured review verdict.",
+        ],
+        routing_examples=[
+            {
+                "input": {
+                    "intent": "post PASS/FAIL verdict after task review",
+                    "required_privilege": "any_agent",
+                },
+                "decision": "agent_task_review_verdict_record",
+            }
+        ],
+        side_effects=["Appends one structured task_review_events row."],
+    ),
+)
+async def record_task_review_event(
+    payload: TaskReviewEventCreate,
+    task: Task = TASK_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
+) -> TaskReviewEventRead:
+    """Record a structured reviewer verdict for an agent-visible task."""
+    _guard_task_access(agent_ctx, task)
+    return await tasks_api.record_task_review_event(
         payload=payload,
         task=task,
         session=session,

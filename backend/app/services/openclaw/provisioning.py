@@ -146,6 +146,8 @@ def _heartbeat_config(agent: Agent) -> dict[str, Any]:
     merged = DEFAULT_HEARTBEAT_CONFIG.copy()
     if isinstance(agent.heartbeat_config, dict):
         merged.update(agent.heartbeat_config)
+    if getattr(agent, "is_board_lead", False):
+        merged["isolatedSession"] = False
     # Architectural contract (per Codex round-2 review): the
     # post-refactor templates (slim HEARTBEAT.md referencing AGENTS.md
     # playbooks) assume the gateway injects the full bootstrap file set
@@ -1359,10 +1361,8 @@ def _should_include_bootstrap(
 ) -> bool:
     if action != "update" or force_bootstrap:
         return True
-    if not existing_files:
-        return False
-    entry = existing_files.get("BOOTSTRAP.md")
-    return not bool(entry and entry.get("missing"))
+    _ = existing_files
+    return False
 
 
 def _wakeup_text(agent: Agent, *, verb: str) -> str:

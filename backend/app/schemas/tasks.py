@@ -423,6 +423,10 @@ class TaskRead(TaskBase):
     board_id: UUID | None
     created_by_user_id: UUID | None
     in_progress_at: datetime | None
+    previous_in_progress_at: datetime | None = None
+    rework_started_at: datetime | None = None
+    rework_entry_commit_sha: str | None = None
+    source_memory_id: UUID | None = None
     cancelled_at: datetime | None
     created_at: datetime
     updated_at: datetime

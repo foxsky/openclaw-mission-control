@@ -42,6 +42,7 @@ from app.models.task_custom_fields import (
 from app.models.task_dependencies import TaskDependency
 from app.models.task_fingerprints import TaskFingerprint
 from app.models.task_pipeline_events import TaskPipelineEvent
+from app.models.task_review_events import TaskReviewEvent
 from app.models.tasks import Task
 from app.schemas.activity_events import ActivityEventRead
 from app.schemas.common import OkResponse
@@ -56,6 +57,11 @@ from app.schemas.task_pipeline_events import (
     TaskPipelineEventCreate,
     TaskPipelineEventRead,
     TaskPipelineStateRead,
+)
+from app.schemas.task_review_events import (
+    TaskReviewEventCreate,
+    TaskReviewEventRead,
+    TaskReviewReadinessRead,
 )
 from app.schemas.tasks import (
     STATUS_GATES,
@@ -127,6 +133,10 @@ from app.services.task_pipeline import (
     pipeline_missing_states,
     pipeline_present_states,
     require_frontend_pipeline_ready_for_review,
+)
+from app.services.task_review_events import (
+    get_task_review_readiness,
+    task_review_event_read,
 )
 
 if TYPE_CHECKING:
@@ -2661,6 +2671,47 @@ async def _require_task_pipeline_write_access(
     return None
 
 
+def _allowed_reviewer_roles_for_agent(agent: Agent) -> set[str]:
+    profile = agent.identity_profile if isinstance(agent.identity_profile, dict) else {}
+    role = str(profile.get("role") or "").strip().lower()
+    name = agent.name.strip().lower()
+    dev_acp_flow = str(profile.get("dev_acp_flow") or "").strip().lower()
+    validation_flow = str(profile.get("validation_flow") or "").strip().lower()
+    haystack = f"{name} {role}"
+    roles: set[str] = set()
+    if agent.is_board_lead:
+        roles.add("lead")
+    if dev_acp_flow == "review_only" or "architect" in haystack or "code reviewer" in role:
+        roles.add("architect")
+    if validation_flow == "qa_validation" or "qa" in haystack or "quality assurance" in role:
+        if "e2e" in haystack or "browser" in haystack:
+            roles.add("qa_e2e")
+        if "unit" in haystack or "validator" in haystack or "quality assurance" in role:
+            roles.add("qa_unit")
+    if "devops" in haystack or "infrastructure" in role or "infra" in role:
+        roles.add("devops")
+    return roles
+
+
+def _require_reviewer_role_allowed(
+    *,
+    actor: ActorContext,
+    reviewer_role: str,
+) -> None:
+    if actor.actor_type != "agent" or actor.agent is None:
+        return
+    allowed_roles = _allowed_reviewer_roles_for_agent(actor.agent)
+    if reviewer_role not in allowed_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": f"Agent may not record `{reviewer_role}` review events.",
+                "code": "reviewer_role_not_allowed",
+                "allowed_roles": sorted(allowed_roles),
+            },
+        )
+
+
 @router.get("/{task_id}/pipeline", response_model=TaskPipelineStateRead)
 async def get_task_pipeline_state(
     task: Task = TASK_DEP,
@@ -2716,6 +2767,51 @@ async def record_task_pipeline_event(
     await session.commit()
     await session.refresh(event)
     return _task_pipeline_event_read(event)
+
+
+@router.get("/{task_id}/review-readiness", response_model=TaskReviewReadinessRead)
+async def get_task_review_readiness_state(
+    task: Task = TASK_DEP,
+    session: AsyncSession = SESSION_DEP,
+) -> TaskReviewReadinessRead:
+    """Return structured reviewer verdict readiness for the current task cycle."""
+    return await get_task_review_readiness(session, task=task)
+
+
+@router.post("/{task_id}/review-events", response_model=TaskReviewEventRead)
+async def record_task_review_event(
+    payload: TaskReviewEventCreate,
+    task: Task = TASK_DEP,
+    session: AsyncSession = SESSION_DEP,
+    actor: ActorContext = ACTOR_DEP,
+) -> TaskReviewEventRead:
+    """Record an append-only structured reviewer verdict for a task."""
+    if task.board_id is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+    agent_id = await _require_task_pipeline_write_access(
+        session,
+        task=task,
+        actor=actor,
+    )
+    _require_reviewer_role_allowed(actor=actor, reviewer_role=payload.reviewer_role)
+    event = TaskReviewEvent(
+        board_id=task.board_id,
+        task_id=task.id,
+        agent_id=agent_id,
+        reviewer_role=payload.reviewer_role,
+        verdict=payload.verdict,
+        evidence_type=payload.evidence_type,
+        target=payload.target,
+        build_hash=payload.build_hash,
+        source_commit=payload.source_commit,
+        blocking_owner=payload.blocking_owner,
+        suggested_routing=payload.suggested_routing,
+        evidence=payload.evidence,
+    )
+    session.add(event)
+    await session.commit()
+    await session.refresh(event)
+    return task_review_event_read(event)
 
 
 @router.patch(
@@ -2809,6 +2905,12 @@ async def delete_task_and_related_records(
         session,
         TaskPipelineEvent,
         col(TaskPipelineEvent.task_id) == task.id,
+        commit=False,
+    )
+    await crud.delete_where(
+        session,
+        TaskReviewEvent,
+        col(TaskReviewEvent.task_id) == task.id,
         commit=False,
     )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field
 
 from app.core.time import utcnow
@@ -17,6 +18,9 @@ class Task(TenantScoped, table=True):
     """Board-scoped task entity with ownership, status, and timing fields."""
 
     __tablename__ = "tasks"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        UniqueConstraint("source_memory_id", name="uq_tasks_source_memory_id"),
+    )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     board_id: UUID | None = Field(default=None, foreign_key="boards.id", index=True)
@@ -49,6 +53,11 @@ class Task(TenantScoped, table=True):
     supports_build_metadata: bool | None = None
     operator_decision_required: bool = Field(default=False, index=True)
     operator_decision_summary: str | None = None
+    source_memory_id: UUID | None = Field(
+        default=None,
+        foreign_key="board_memory.id",
+        index=True,
+    )
 
     created_by_user_id: UUID | None = Field(
         default=None,
