@@ -65,6 +65,53 @@ def test_frontend_review_with_missing_pipeline_requires_gate_inspection() -> Non
     assert action.details["missing_pipeline_states"] == ["deployed", "runtime_verified"]
 
 
+def test_ready_in_progress_frontend_nudges_worker_review_submission() -> None:
+    task = _task(
+        status="in_progress",
+        title="Frontend implementation",
+        assigned=True,
+        review_packet_type="frontend_ui",
+    )
+
+    action = select_lead_next_action(
+        tasks=[task],
+        blocked_by_task_id={},
+        approval_state_by_task_id={},
+        pipeline_missing_by_task_id={task.id: []},
+    )
+
+    assert action.action_required is True
+    assert action.action == "inspect_stale_in_progress"
+    assert action.reason_code == "in_progress_worker_ready_for_review_submission"
+    assert action.task_id == task.id
+    assert action.details["pipeline_ready"] is True
+    assert action.details["lead_may_not_patch_review"] is True
+    assert action.details["next_step"] == "nudge_assigned_worker_to_patch_status_review"
+
+
+def test_in_progress_frontend_missing_pipeline_names_pipeline_gate() -> None:
+    task = _task(
+        status="in_progress",
+        title="Frontend implementation",
+        assigned=True,
+        review_packet_type="frontend_ui",
+    )
+
+    action = select_lead_next_action(
+        tasks=[task],
+        blocked_by_task_id={},
+        approval_state_by_task_id={},
+        pipeline_missing_by_task_id={task.id: ["runtime_verified"]},
+    )
+
+    assert action.action_required is True
+    assert action.action == "inspect_stale_in_progress"
+    assert action.reason_code == "in_progress_pipeline_missing_review_gate"
+    assert action.task_id == task.id
+    assert action.details["missing_pipeline_states"] == ["runtime_verified"]
+    assert action.details["next_step"] == "inspect_pipeline_state_not_review_readiness"
+
+
 def test_routes_unassigned_inbox_when_no_review_or_active_work_exists() -> None:
     task = _task(status="inbox", title="New work")
 

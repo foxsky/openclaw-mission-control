@@ -122,6 +122,39 @@ def select_lead_next_action(
         )
 
     for task in ordered:
+        if task.status != "in_progress" or task.assigned_agent_id is None:
+            continue
+        if task.id not in pipeline_missing_by_task_id:
+            continue
+        missing_pipeline = list(pipeline_missing_by_task_id.get(task.id, []))
+        if not missing_pipeline:
+            return _action(
+                task=task,
+                action_required=True,
+                action="inspect_stale_in_progress",
+                reason_code="in_progress_worker_ready_for_review_submission",
+                details={
+                    "review_packet_type": task.review_packet_type,
+                    "validation_target": task.validation_target,
+                    "pipeline_ready": True,
+                    "next_step": "nudge_assigned_worker_to_patch_status_review",
+                    "lead_may_not_patch_review": True,
+                },
+            )
+        return _action(
+            task=task,
+            action_required=True,
+            action="inspect_stale_in_progress",
+            reason_code="in_progress_pipeline_missing_review_gate",
+            details={
+                "missing_pipeline_states": missing_pipeline,
+                "review_packet_type": task.review_packet_type,
+                "validation_target": task.validation_target,
+                "next_step": "inspect_pipeline_state_not_review_readiness",
+            },
+        )
+
+    for task in ordered:
         if task.status == "rework" and task.assigned_agent_id is not None:
             return _action(
                 task=task,

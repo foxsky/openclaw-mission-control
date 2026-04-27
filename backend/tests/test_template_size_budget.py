@@ -21,6 +21,9 @@ realistic context matching ``_build_context``.
 
 from __future__ import annotations
 
+import json
+import os
+
 from jinja2 import FileSystemLoader
 from pathlib import Path
 
@@ -42,7 +45,7 @@ _SKIP_LOCAL_TEMPLATE_PHILOSOPHY = pytest.mark.skip(
 # accommodate the deterministic lead playbook (memory intake,
 # next-action gates, structured review gates, and evidence contracts)
 # which is operationally critical content referenced by HEARTBEAT.md.
-# The gateway config on .60 should match:
+# Gateway config must match:
 #   agents.defaults.bootstrapMaxChars = 30000
 BOOTSTRAP_PER_FILE_MAX_CHARS = 30_000
 
@@ -95,6 +98,66 @@ def _render_template(name: str, **context: object) -> str:
     env.loader = FileSystemLoader(str(TEMPLATES_DIR))
     env.undefined = Undefined  # lenient for tests
     return env.get_template(name).render(**context)
+
+
+def _read_skill_text_or_skip(skill_name: str) -> str:
+    roots: list[Path] = []
+    if os.environ.get("OPENCLAW_SKILLS_ROOT"):
+        roots.append(Path(os.environ["OPENCLAW_SKILLS_ROOT"]))
+    if os.environ.get("CODEX_HOME"):
+        roots.append(Path(os.environ["CODEX_HOME"]) / "skills")
+    if os.environ.get("OPENCLAW_HOME"):
+        roots.append(Path(os.environ["OPENCLAW_HOME"]) / "workspace" / "skills")
+    roots.extend(
+        [
+            Path.home() / ".openclaw" / "workspace" / "skills",
+            Path.home() / ".codex" / "skills",
+        ],
+    )
+
+    checked: list[str] = []
+    for root in dict.fromkeys(roots):
+        path = root / skill_name / "SKILL.md"
+        checked.append(str(path))
+        if path.exists():
+            return path.read_text()
+    pytest.skip(f"{skill_name} skill is not installed; checked: {', '.join(checked)}")
+
+
+def _openclaw_config_path() -> Path | None:
+    candidates: list[Path] = []
+    if os.environ.get("OPENCLAW_CONFIG_PATH"):
+        candidates.append(Path(os.environ["OPENCLAW_CONFIG_PATH"]))
+    if os.environ.get("OPENCLAW_HOME"):
+        candidates.append(Path(os.environ["OPENCLAW_HOME"]) / "openclaw.json")
+    candidates.extend(
+        [
+            Path.home() / ".openclaw" / "openclaw.json",
+            Path("/root/.openclaw/openclaw.json"),
+            Path("/home/mcontrol/.openclaw/openclaw.json"),
+        ],
+    )
+    for path in dict.fromkeys(candidates):
+        if path.exists():
+            return path
+    return None
+
+
+def test_live_openclaw_config_supports_template_bootstrap_cap_when_present() -> None:
+    config_path = _openclaw_config_path()
+    if config_path is None:
+        pytest.skip("OpenClaw config file is not present in this environment")
+
+    data = json.loads(config_path.read_text())
+    cap = data.get("agents", {}).get("defaults", {}).get("bootstrapMaxChars")
+    assert isinstance(cap, int), (
+        f"{config_path} must set agents.defaults.bootstrapMaxChars for "
+        "deterministic template-size verification"
+    )
+    assert cap >= BOOTSTRAP_PER_FILE_MAX_CHARS, (
+        f"{config_path} agents.defaults.bootstrapMaxChars={cap} is below "
+        f"the rendered template budget {BOOTSTRAP_PER_FILE_MAX_CHARS}"
+    )
 
 
 def test_heartbeat_templates_fit_in_bootstrap_per_file_cap() -> None:
@@ -832,6 +895,35 @@ def test_frontend_heartbeat_forbids_implicit_worktree_parallelism() -> None:
     agents = _render_template("BOARD_AGENTS.md.j2", **ctx)
     assert "work one acceptance criterion at a time" in agents
     assert "After all ACs pass, use the ACP review flow" in agents
+
+
+def test_frontend_heartbeat_allows_explicit_worktree_parallelism_only_by_profile_flag() -> None:
+    ctx = {
+        **_REALISTIC_RENDER_CONTEXT,
+        "is_main_agent": False,
+        "is_board_lead": False,
+        "agent_name": "Programmer-Frontend",
+        "agent_id": "frontend-id",
+        "identity_role": "Frontend Developer",
+        "identity_dev_acp_flow": "claude_then_codex_review",
+        "identity_frontend_parallel_mode": "worktree",
+    }
+
+    heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
+    assert "Experimental opt-in worktree task parallelism is enabled" in heartbeat
+    assert "Cap at 2 active implementation tasks" in heartbeat
+    assert "git worktree add /tmp/wt-$TASK_ID -b wt-$TASK_ID" in heartbeat
+    assert '"cwd": "/tmp/wt-$TASK_ID"' in heartbeat
+    assert "Completion-woken ticks process child results only" in heartbeat
+    assert "sessions_spawn({" not in heartbeat
+
+
+def test_acp_delegation_documents_explicit_worktree_cwd_mode() -> None:
+    skill = _read_skill_text_or_skip("acp-delegation")
+    assert "### Worktree Task Mode" in skill
+    assert "explicit opt-in only" in skill
+    assert '"cwd": "/tmp/wt-<TASK_ID>"' in skill
+    assert "There is one worktree per task, not per acceptance criterion" in skill
 
 
 def test_agents_md_variants_fit_current_local_bootstrap_cap() -> None:

@@ -549,7 +549,7 @@ Action mapping:
 - `mark_done`: patch the returned task to `done` only after Step 3 confirms required review gates, approval freshness, and container/subtask lifecycle; if the patch fails, report the HTTP body as the friction.
 - `inspect_review_gates`: run Step 3 for the returned task before considering any other review task. Approved approval state still requires Step 3 freshness and lifecycle checks before done.
 - `route_rework`: inspect the latest blocking review verdict and route/nudge the assigned owner once.
-- `inspect_stale_in_progress`: inspect owner status, blocker state, and latest task comment; route only if no represented owner/blocker exists.
+- `inspect_stale_in_progress`: if `details.pipeline_ready` is true, the assigned implementation worker owns the transition; post one direct comment/nudge asking that worker to PATCH the task to `review` with `packet_commit_sha` and final packet context. Board leads must not patch `in_progress` tasks to `review`. If `details.missing_pipeline_states` is present, fetch `/tasks/$TASK_ID/pipeline` and fix or request the missing structured implementation event fields. Do not call `/review-readiness` for an `in_progress` task. Otherwise inspect owner status, blocker state, and latest task comment; route only if no represented owner/blocker exists.
 - `route_inbox`: run Step 2b for the returned task.
 - `clear`: no lead action is currently required by structured board state.
 
@@ -638,7 +638,7 @@ Age tells you where to inspect; it does not justify reminder comments. Use agent
   - Architect PASS required for feature tasks, decomposition tasks, architecture/API/auth/state-machine changes, ≥5 ACs, multi-component work, or lead-routed review. Architect FAIL/INCONCLUSIVE blocks done.
   - QA-Unit PASS required for backend/API/contract/persistence/auth and non-UI logic. It must include AC-to-check mapping, source parity, and changed-code coverage.
   - QA-E2E PASS required for frontend/UI/browser behavior. It must include target URL, browser navigation/snapshot, DOM/raw i18n scan, console/network output, click/observe proof, layout proof when applicable, and loaded build hash.
-  - `frontend_ui`/`mixed`: before approval/done run `$HQCTL pipeline-state TASK_ID --json --check-ready`; require `"ready": true`. Prose/PASS comments do not satisfy this gate.
+  - `frontend_ui`/`mixed`: before approval/done run `$HQCTL pipeline-state TASK_ID --json --check-ready`; require `"ready": true`. Prose/PASS comments do not satisfy this gate. Use `/review-readiness` only for reviewer verdicts after the task is already in `review`; use `/pipeline` for implementation evidence before review.
   - DevOps validation PASS required for deploy/infra/live-target/build-drift work. It must include target, source commit, artifact hash/id, deploy command, service/process state, logs, live HTTP/API output, and rollback/preflight proof when risky.
   - Approval payload must name reviewer verdicts, evidence packet refs, target/build/artifact ids, blocking findings, residual risk, freshness versus latest worker/reviewer evidence, and why done is safe.
 
@@ -846,7 +846,7 @@ GET `/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments?limit=20` with `X-Ag
 {% else %}
 - **Persistence round-trip**: for any AC that says data "persists" or "saves": write the data, then GET the same resource and verify the saved field appears in the response. If the API returns 200 but the field is missing from the response body, the backend does not support it. Post one friction comment naming the exact field and endpoint, then stop; the lead routes the backend dependency.
 {% endif %}
-- **Structured pipeline gate:** for `frontend_ui`/`mixed`, record before review: `code_changed --commit SHA`, `committed --commit SHA`, `built --commit SHA --artifact-hash HASH`, `deployed --commit SHA --artifact-hash HASH --deploy-target URL`, `live_build_verified --live-sha SHA --deploy-target URL`, `runtime_verified --evidence browser_snapshot=posted --evidence dom_scan=posted`. Prefix each with `$HQCTL pipeline-event $TASK_ID`. If another role owns build/deploy, nudge DevOps and wait for `built`/`deployed`. Run `$HQCTL pipeline-state $TASK_ID --check-ready`; if nonzero or `PIPELINE_READY=false`, do not PATCH review.
+- **Structured pipeline gate:** for `frontend_ui`/`mixed`, record before review: `code_changed --commit SHA`, `committed --commit SHA`, `built --commit SHA --artifact-hash HASH`, `deployed --commit SHA --artifact-hash HASH --deploy-target URL`, `live_build_verified --live-sha SHA --deploy-target URL`, `runtime_verified --deploy-target URL --evidence browser_snapshot=posted --evidence dom_scan=posted`. Prefix each with `$HQCTL pipeline-event $TASK_ID`. If another role owns build/deploy, nudge DevOps and wait for `built`/`deployed`. Run `$HQCTL pipeline-state $TASK_ID --check-ready`; if nonzero or `PIPELINE_READY=false`, do not PATCH review.
 {% endif %}
 {% if identity_validation_flow == "qa_validation" %}
 7) **Stop after posting validation.** Do not move status. The lead handles PASS/FAIL routing.
@@ -863,6 +863,7 @@ curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/memory" \
 **Re-review rule** (when a task you previously reviewed comes back after rejection or dispute): re-review the disputed acceptance criteria and new evidence only. Re-citing your previous PASS verdict is forbidden. Required: (a) quote the challenge/rejection, (b) compare commits/evidence since your last review, (c) if no new code/evidence exists for a code-related FAIL, keep FAIL as "no code/evidence changed since previous review", (d) for UI/functional evidence disputes, require fresh browser output from the worker/QA packet. Do not fix code or deploy.
 {% else %}
 7) **Move to review** — first re-fetch the task; if `is_blocked=True`, stop and tag `@lead`.
+PF/PB/implementation workers own this `in_progress` -> `review` transition; the lead may nudge you, but cannot perform it for you.
 Review PATCH needs `"packet_commit_sha":"SHA"`; rework rejects missing/unchanged SHA.
 For `frontend_ui` or `mixed`, `$HQCTL pipeline-state $TASK_ID --check-ready` must exit 0 and print `PIPELINE_READY=true`; a prose evidence packet cannot satisfy the backend gate.
 {% if worker_is_backend %}
