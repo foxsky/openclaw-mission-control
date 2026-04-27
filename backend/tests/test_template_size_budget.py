@@ -810,6 +810,30 @@ def test_supervisor_heartbeat_has_failure_and_drift_guardrails() -> None:
     assert "newer than the latest blocking review verdict" in agents
 
 
+def test_frontend_heartbeat_forbids_implicit_worktree_parallelism() -> None:
+    ctx = {
+        **_REALISTIC_RENDER_CONTEXT,
+        "is_main_agent": False,
+        "is_board_lead": False,
+        "agent_name": "Programmer-Frontend",
+        "agent_id": "frontend-id",
+        "identity_role": "Frontend Developer",
+        "identity_dev_acp_flow": "claude_then_codex_review",
+    }
+
+    heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
+    assert "Frontend Parallel Mode" in heartbeat
+    assert "Do not create git worktrees" in heartbeat
+    assert "Only if `@lead` explicitly routes independent parallel slices" in heartbeat
+    assert "acp-post-review" in heartbeat
+    assert "git worktree add" not in heartbeat
+    assert '"/tmp/wt-$TASK_ID"' not in heartbeat
+
+    agents = _render_template("BOARD_AGENTS.md.j2", **ctx)
+    assert "work one acceptance criterion at a time" in agents
+    assert "After all ACs pass, use the ACP review flow" in agents
+
+
 def test_agents_md_variants_fit_current_local_bootstrap_cap() -> None:
     variants = {
         "main": {"is_main_agent": True, "is_board_lead": False, **_REALISTIC_RENDER_CONTEXT},
