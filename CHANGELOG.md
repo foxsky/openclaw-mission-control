@@ -2,6 +2,11 @@
 
 All notable changes to the OpenClaw Mission Control fork.
 
+## 2026-04-28
+
+### Changed
+- **AGENTS skill extraction**: Moved lead next-action, lead health scan, inbox routing, QA verdict, Architect verdict, reviewer recheck, and DevOps deploy-validation procedures into dedicated skills, leaving AGENTS.md as the visible role/index layer.
+
 ## 2026-04-16
 
 ### Fixed
