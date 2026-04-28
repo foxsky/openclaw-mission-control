@@ -30,6 +30,7 @@ class TaskPipelineEventCreate(SQLModel):
     deploy_target: str | None = None
     live_sha: str | None = None
     evidence: dict[str, object] | None = Field(default=None)
+    overwrite: bool = False
 
     @field_validator(
         "source",

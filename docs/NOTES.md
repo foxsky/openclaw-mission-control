@@ -3,6 +3,48 @@ Review the tasks waiting for approval, use Chome MCP, the expected behavior is f
 
 Investigate why the agents aren't nudging each other as instructed
 
+Review the custom skills, evaluate and point any weekness, gaps and strucutural fails
+
+## 2026-04-28 (continued) — Skill suite review, auto-wake, validator auto-correct
+
+### Backend auto-wake: _notify_lead_on_end_work_event (prod .64)
+- Supervisor woken with `deliver=True` on: review event creation, `in_progress→review`, `rework→review`
+- Best-effort: try/except + rollback on exception, failure logged via module logger
+- Reviewed by 3 subagents + 2 Codex passes: no self-wake risk, session-safe, ordering correct
+
+### Validator auto-correct (prod .64)
+- When Supervisor assigns QA/Architect (validator agents) with `status=in_progress`, backend auto-corrects to `review`
+- Prevents the VP-11 stall pattern where QA was assigned `in_progress` but only processes `review` tasks
+- Guards: checks `identity_profile.validation_flow` and `dev_acp_flow` on the target agent
+
+### Skill suite review — 3 review passes (Claude subagents + Codex)
+- **13 skills deployed**: 6 existing + 7 new (lead-next-action-gate, lead-health-scan, lead-inbox-routing, qa-validation-verdict, architect-review-verdict, reviewer-recheck, devops-deploy-validation)
+- Fixes applied across all passes:
+  - `devops-deploy-validation`: added missing `structured-review-verdict` reference (prevented VP-10 stall pattern)
+  - `structured-review-verdict`: restored `@lead` comment nudge, removed false auto-wake claim, replaced hardcoded IPs with placeholders
+  - `acp-post-review`: clarified PATCH→review auto-wakes first, `@lead` is defense-in-depth
+  - `lead-review-routing`: removed invalid `PARTIAL` verdict, fixed approval state casing to lowercase, added approval API curl example
+  - `lead-health-scan`: fixed shell quoting (`python3 -c` → `<<'PY'` heredoc), added `?limit=200`
+  - `reviewer-recheck`: added `INCONCLUSIVE` to QA verdict options, added `infra_blocked` mapping note
+  - `lead-next-action-gate`: added no-pipeline-push-on-behalf-of-worker rule
+  - `devops-deploy-validation`: added `INFRA BLOCKED` to verdict options
+  - `rework-resubmit`: fixed wake wording to describe backend auto-wake as primary
+  - `architect-review-verdict`: added `packet_type=other` fallback guidance
+- Template: replaced 8-line inline rework procedure with `rework-resubmit` skill reference — all 13 skills now referenced in templates
+- Dual-repo reconciliation: synced mc64-supervisor-liveness skill extraction to local repo
+- Agent drift validation: 2 skills (acp-post-review, rework-resubmit) had minor agent edits — accepted as improvements
+
+### VP visual polish batch — complete
+- VP-01 through VP-11: all done
+- VP-06 (language selector): Chrome MCP verified keyboard access, active indicator, mobile hamburger, 4-locale switching
+- VP-11 (regression sweep): 9 page×viewport checks, zero errors, all locales correct
+- VP-11 readiness fix: changed `review_packet_type` from `frontend_ui` to `review_only` (QA sweep has no pipeline artifacts)
+
+### Parallel PF worktree mode — activated
+- `identity_profile.frontend_parallel_mode = "worktree"` set on PF agent
+- `frontend_parallel_mode` added to `EXTRA_IDENTITY_PROFILE_FIELDS` in constants.py
+- Template renders worktree parallel section (cap at 2, worktree create/merge/cleanup)
+
 ## 2026-04-28 — Pipeline event validation, structured review verdict skill, VP-05/VP-10 approval
 
 ### Pipeline event server-side validation (prod .64)

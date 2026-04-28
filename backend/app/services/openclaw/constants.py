@@ -120,6 +120,7 @@ EXTRA_IDENTITY_PROFILE_FIELDS = {
     # heuristic which would false-positive on agents like "QA-Security"
     # with role "Security Auditor".
     "validation_flow": "identity_validation_flow",
+    "frontend_parallel_mode": "identity_frontend_parallel_mode",
 }
 
 DEFAULT_GATEWAY_FILES = frozenset(

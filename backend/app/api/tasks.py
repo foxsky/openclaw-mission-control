@@ -130,6 +130,7 @@ from app.services.task_pipeline import (
     FRONTEND_REVIEW_PIPELINE_STATES,
     frontend_pipeline_required,
     list_task_pipeline_events,
+    pipeline_missing_required_fields,
     pipeline_missing_states,
     pipeline_present_states,
     require_frontend_pipeline_ready_for_review,
@@ -664,6 +665,29 @@ async def _require_operator_decision_task_not_active(
         raise _operator_decision_block_error()
 
 
+def _require_delivery_contract_for_task_state(
+    *,
+    status_value: str,
+    review_packet_type: str | None,
+    validation_target: str | None,
+    validation_target_kind: str | None,
+    validation_target_scope: str | None,
+) -> None:
+    missing_fields = actionability_missing_fields(
+        status=status_value,
+        review_packet_type=review_packet_type,
+        validation_target=validation_target,
+        validation_target_kind=validation_target_kind,
+        validation_target_scope=validation_target_scope,
+        assigned_agent_id=None,
+    )
+    if missing_fields:
+        raise _delivery_contract_incomplete_error(
+            status_value=status_value,
+            missing_fields=missing_fields,
+        )
+
+
 def _delivery_contract_missing_fields_for_task(task: Task) -> list[str]:
     """Pure check: return the missing actionability fields for the
     task's current state. Empty list means the state is actionable.
@@ -1044,13 +1068,19 @@ async def _reject_pending_move_to_done_approvals_for_task(
     board_id: UUID,
     task_id: UUID,
 ) -> None:
+    done_approval_action_types = (
+        "move_to_done",
+        "mark_done",
+        "task_done",
+        "move_task_to_done",
+    )
     linked_rows = list(
         await session.exec(
             select(Approval)
             .join(ApprovalTaskLink, col(ApprovalTaskLink.approval_id) == col(Approval.id))
             .where(col(Approval.board_id) == board_id)
             .where(col(Approval.status) == "pending")
-            .where(col(Approval.action_type) == "move_to_done")
+            .where(col(Approval.action_type).in_(done_approval_action_types))
             .where(col(ApprovalTaskLink.task_id) == task_id),
         ),
     )
@@ -1059,7 +1089,7 @@ async def _reject_pending_move_to_done_approvals_for_task(
             select(Approval)
             .where(col(Approval.board_id) == board_id)
             .where(col(Approval.status) == "pending")
-            .where(col(Approval.action_type) == "move_to_done")
+            .where(col(Approval.action_type).in_(done_approval_action_types))
             .where(col(Approval.task_id) == task_id),
         ),
     )
@@ -1531,12 +1561,13 @@ async def _send_lead_task_message(
     dispatch: GatewayDispatchService,
     session_key: str,
     config: GatewayClientConfig,
+    agent_name: str,
     message: str,
 ) -> OpenClawGatewayError | None:
     return await dispatch.try_send_agent_message(
         session_key=session_key,
         config=config,
-        agent_name="Lead Agent",
+        agent_name=agent_name,
         message=message,
         deliver=False,
     )
@@ -1841,6 +1872,7 @@ async def _notify_lead_on_task_create(
         dispatch=dispatch,
         session_key=lead.openclaw_session_id,
         config=config,
+        agent_name=lead.name,
         message=message,
     )
     if error is None:
@@ -1900,6 +1932,7 @@ async def _notify_lead_on_task_unassigned(
         dispatch=dispatch,
         session_key=lead.openclaw_session_id,
         config=config,
+        agent_name=lead.name,
         message=message,
     )
     if error is None:
@@ -1922,6 +1955,71 @@ async def _notify_lead_on_task_unassigned(
             board_id=board.id,
         )
         await session.commit()
+
+
+
+async def _notify_lead_on_end_work_event(
+    *,
+    session: AsyncSession,
+    task: Task,
+    reason: str,
+) -> None:
+    """Wake the board lead when an agent finishes work that needs lead action.
+
+    Fires on status transitions to review (worker finished), review
+    event creation (reviewer finished), and rework resubmission.
+    Uses ``deliver=True`` so the Supervisor acts immediately instead
+    of waiting for the next scheduled heartbeat.
+
+    Best-effort: exceptions are caught so the caller (review event
+    creation, task status update) never fails due to a notification
+    issue.
+    """
+    try:
+        if task.board_id is None:
+            return
+        lead = (
+            await Agent.objects.filter_by(board_id=task.board_id)
+            .filter(col(Agent.is_board_lead).is_(True))
+            .first(session)
+        )
+        if lead is None or not lead.openclaw_session_id:
+            return
+        dispatch = GatewayDispatchService(session)
+        board = await session.get(Board, task.board_id)
+        if board is None:
+            return
+        config = await dispatch.optional_gateway_config_for_board(board)
+        if config is None:
+            return
+        message = (
+            f"END_WORK: {reason}\n"
+            f"Task: {task.title} ({task.id})\n"
+            f"Status: {task.status}\n"
+            f"Route per lead-review-routing skill."
+        )
+        error = await dispatch.try_send_agent_message(
+            session_key=lead.openclaw_session_id,
+            config=config,
+            agent_name=lead.name,
+            message=message,
+            deliver=True,
+        )
+        if error:
+            record_activity(
+                session,
+                event_type="task.end_work_notify_failed",
+                task_id=task.id,
+                message=f"Failed to notify lead on end-work event ({reason}): {error}",
+                agent_id=lead.id,
+            )
+            await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        logger.warning(
+            "end-work notify suppressed: %s (task=%s reason=%s)",
+            exc, task.id, reason,
+        )
 
 
 def _status_values(status_filter: str | None) -> list[str]:
@@ -2671,6 +2769,25 @@ async def _require_task_pipeline_write_access(
     return None
 
 
+def _pipeline_event_missing_required_fields_error(
+    *,
+    state: str,
+    missing_fields: list[str],
+) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail={
+            "message": (
+                f"Pipeline event `{state}` is missing required field(s): "
+                f"{', '.join(missing_fields)}."
+            ),
+            "code": "task_pipeline_event_missing_required_fields",
+            "state": state,
+            "missing_fields": missing_fields,
+        },
+    )
+
+
 def _allowed_reviewer_roles_for_agent(agent: Agent) -> set[str]:
     profile = agent.identity_profile if isinstance(agent.identity_profile, dict) else {}
     role = str(profile.get("role") or "").strip().lower()
@@ -2751,6 +2868,44 @@ async def record_task_pipeline_event(
         task=task,
         actor=actor,
     )
+    missing_fields = pipeline_missing_required_fields(
+        state=payload.state,
+        values={
+            "commit_sha": payload.commit_sha,
+            "artifact_hash": payload.artifact_hash,
+            "deploy_target": payload.deploy_target,
+            "live_sha": payload.live_sha,
+            "evidence": payload.evidence,
+        },
+    )
+    if missing_fields:
+        raise _pipeline_event_missing_required_fields_error(
+            state=payload.state,
+            missing_fields=missing_fields,
+        )
+    if payload.overwrite:
+        existing = (
+            await session.exec(
+                select(TaskPipelineEvent)
+                .where(col(TaskPipelineEvent.task_id) == task.id)
+                .where(col(TaskPipelineEvent.state) == payload.state)
+                .order_by(desc(col(TaskPipelineEvent.created_at)))
+            )
+        ).first()
+        if existing is not None:
+            merged = False
+            for field in ("commit_sha", "artifact_hash", "deploy_target", "live_sha", "evidence"):
+                new_val = getattr(payload, field, None)
+                if new_val is not None and getattr(existing, field) is None:
+                    setattr(existing, field, new_val)
+                    merged = True
+            if payload.source and payload.source != "api":
+                existing.source = payload.source
+            if merged:
+                session.add(existing)
+                await session.commit()
+                await session.refresh(existing)
+                return _task_pipeline_event_read(existing)
     event = TaskPipelineEvent(
         board_id=task.board_id,
         task_id=task.id,
@@ -2811,6 +2966,13 @@ async def record_task_review_event(
     session.add(event)
     await session.commit()
     await session.refresh(event)
+    # Auto-wake the board lead so the review-readiness gate is
+    # processed immediately, not on the next scheduled heartbeat.
+    await _notify_lead_on_end_work_event(
+        session=session,
+        task=task,
+        reason=f"{payload.reviewer_role} posted {payload.verdict} review verdict",
+    )
     return task_review_event_read(event)
 
 
@@ -3491,13 +3653,37 @@ async def _lead_apply_status(
             _optional_assigned_agent_id(update.updates["assigned_agent_id"])
         )
         if update.task.status == "inbox" and target_status == "in_progress" and assigning_agent:
+            # Auto-correct: if the target agent is a validator (QA or
+            # review-only), use ``review`` instead of ``in_progress``.
+            # Validators only process review-status tasks — assigning
+            # them as in_progress leaves the task in a dead state.
+            target_agent_id = _optional_assigned_agent_id(
+                update.updates["assigned_agent_id"]
+            )
+            if target_agent_id is not None:
+                target_agent = await Agent.objects.by_id(target_agent_id).first(
+                    session
+                )
+                if target_agent is not None:
+                    profile = (
+                        target_agent.identity_profile
+                        if isinstance(target_agent.identity_profile, dict)
+                        else {}
+                    )
+                    is_validator = (
+                        profile.get("validation_flow") == "qa_validation"
+                        or profile.get("dev_acp_flow") == "review_only"
+                    )
+                    if is_validator:
+                        target_status = "review"
             update.task.status = target_status
             # Stamp ``in_progress_at`` on the lead shortcut the same way the
             # non-lead path does at its ``in_progress`` branch. Without
             # this, a later ``review`` transition clears a null
             # ``in_progress_at`` into ``previous_in_progress_at``, losing
             # cycle-time truth.
-            update.task.in_progress_at = utcnow()
+            if target_status == "in_progress":
+                update.task.in_progress_at = utcnow()
             return
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -4478,6 +4664,18 @@ async def _finalize_updated_task(
     await _record_task_comment_from_update(session, update=update)
     await _record_task_update_activity(session, update=update)
     await _notify_task_update_assignment_changes(session, update=update)
+    # Wake the lead immediately when a worker moves a task to review
+    # or resubmits from rework, so the Supervisor doesn't wait for
+    # the next heartbeat to start routing reviewers.
+    if (
+        update.task.status == "review"
+        and update.previous_status in ("in_progress", "rework")
+    ):
+        await _notify_lead_on_end_work_event(
+            session=session,
+            task=update.task,
+            reason=f"task moved from {update.previous_status} to review",
+        )
 
     return await _task_read_response(
         session,
