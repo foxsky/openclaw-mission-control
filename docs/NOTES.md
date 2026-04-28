@@ -1,14 +1,63 @@
 
-Review the tasks waiting for approval, use Chome MCP, the expected behavior is fully compliance with the task spect, approve only after a thorough and robust verification of the evidence
+Review the tasks waiting for approval, use Chome MCP, the expected behavior is fully compliance with the task spect, approve only after a thorough and robust verification of the evidence, cite the @supervisor on the final notification
 
 Investigate why the agents aren't nudging each other as instructed
+
+The HEARTBEAT.md order is:
+
+Check in
+Refresh API discovery
+Lead Next Action Gate — /lead/next-action (should catch VP-03/VP-04 done-gate)
+Memory Intake Gate — creates tasks from operator memories
+Run rest of Lead Board Playbook
+The Lead Next Action Gate (Step 3) runs before Memory Intake (Step 4). So the Supervisor should see approved_review_needs_done_gate in Step 3 and execute the PATCH to done BEFORE reaching Memory Intake.
+
+But the Supervisor is doing Memory Intake canaries and "Sent question to lead" — which means it's either:
+
+Skipping Step 3 entirely
+Step 3 returns clear (no action needed) because the Supervisor already acted on a different task
+The Supervisor processes Step 3 but the model doesn't execute the done-gate, then continues to Step 4
+
+
+
+There it is — the rule only says "tag @lead" in prose (line 232 of HEARTBEAT.md for QA/Architect). There's no concrete nudge curl for workers or reviewers to nudge the Supervisor after completing work.
+
+The memory file feedback_agents_must_nudge_supervisor.md says agents must nudge Supervisor, but the templates only have @lead prose mentions — no actual API nudge curl.
+
+The deliver=True fix partially solves this: @lead mentions now wake the Supervisor immediately. But agents that don't include @lead in their comments won't trigger any notification.
+
+The missing piece: a concrete nudge curl in the QA/Architect heartbeat section — "after posting your verdict, nudge the Supervisor." And in the worker section — "after moving to review, nudge the Supervisor."
+
+But with deliver=True on @lead mentions, the prose @lead tag IS now functional — it triggers an immediate wake. The agents just need to consistently include @lead in their comments. Want me to verify that all verdict/evidence comments have @lead?
+
+
+
+Supervisor heartbeated at 21:46 — 3 minutes after the @lead mention. It's alive but still not creating approvals. The Supervisor is fundamentally not converting inspect_review_gates + ready=true into an approval POST.
+
+This is the model comprehension problem. The HEARTBEAT.md Step 3 says "Run Lead Next Action Gate" and the API returns the clear action, but the Supervisor model doesn't know the mapping: ready=true + approval_state=none → POST /approvals.
+
+The AGENTS.md probably has this mapping, but the Supervisor isn't following it. This is the same "dog chasing tail" pattern — the instruction exists but the model doesn't execute.
+
+The immediate unblock: I can create the approvals manually for VP-08/VP-09 so they can move to done, while we investigate why the Supervisor ignores the action.
+
+
+The lead path (_apply_lead_task_update) calls _lead_apply_assignment and _lead_apply_status, but does NOT call _assign_review_task_to_lead. The auto-assign to Supervisor only happens in _finalize_updated_task (agent/admin path).
+
+So when I (operator/lead) PATCHed VP-08/VP-09 to review, the lead path ran but skipped the auto-assignment to Supervisor. The tasks stayed assigned to whoever they were assigned to before — which was Architect (from my earlier manual assignment).
+
+The normal flow would have been: PF PATCHes status=review → goes through agent path → _finalize_updated_task → _assign_review_task_to_lead → auto-assigns to Supervisor. My operator intervention broke this chain.
+
+This is a consequence of operator bypass — when I intervened to move tasks to review because the Supervisor was dead, the auto-assignment didn't fire. In a healthy pipeline where PF moves tasks to review, the Supervisor would be auto-assigned correctly.
+
+
 
 ## 2026-04-13 — OpenClaw v2026.4.11/4.12 upgrade evaluation + context-overflow fix
 
 ### Verified post-upgrade
 - **`tick timeout` keepalive fix (v2026.4.12)** — zero events on `.60` today, fix is preventative not curative
 - **Cron heartbeat preservation (v2026.4.12)** — confirmed across both config touches AND a real OOM-kill restart at 18:34:56 UTC. All 9 agent heartbeat overrides survived (5m Supervisor, 10-40m others). The "manually re-set heartbeats after every config change" toil from `feedback_sigusr1_resets_heartbeats.md` is retired.
-- **Active Memory plugin (v2026.4.12)** — silently auto-enabled by the upgrade. Visible in gateway startup log: "ready (11 plugins: acpx, **active-memory**, browser, device-pair, lossless-claw, memory-core, memory-wiki, phone-control, talk-voice, whatsapp, whatsapp-scheduler; 5.2s)". Contributes to memory pressure on top of existing lossless-claw.
+- **Active Memory plugin (v2026.4.12)** — silently auto-enabled by the upgrade. Visible in gateway startup log: "ready (11 plugins: acpx, **active-memory**, browser, device-pair, lossless-claw, memory-core, memory-wiki, phone-control, talk-voice, whatsapp, whatsapp-scheduler; 5.2s)". Contributes to memory pressure on top of exi
+sting lossless-claw.
 
 ### Critical fix applied
 - **`agents.defaults.contextTokens` bumped 128000 → 200000** to fix a context-overflow flood (50 events on Apr 13, 19 post-restart). Root cause: gateway pre-flight safe-threshold check uses the global `agents.defaults.contextTokens` budget; gpt-5.4 sessions were getting rejected at 32-200 messages because their estimated context exceeded 128k. Hot-reloaded at 18:25:41 UTC. Verified zero overflow events in the 10+ minutes since (vs ~3 events per 30-min window before).

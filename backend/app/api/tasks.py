@@ -3133,13 +3133,29 @@ async def _notify_task_comment_targets(
             "If you are mentioned but not assigned, reply in the task "
             "thread but do not change task status."
         )
-        await _send_agent_task_message(
-            dispatch=dispatch,
+        # Mentioned agents (especially @lead) get deliver=True for
+        # immediate wake — they need to act on the mention now.
+        # Non-mentioned targets (assigned agent) get deliver=False
+        # to avoid unnecessary wakes on routine comments.
+        should_deliver = mentioned
+        error = await dispatch.try_send_agent_message(
             session_key=agent.openclaw_session_id,
             config=config,
             agent_name=agent.name,
             message=notification,
+            deliver=should_deliver,
         )
+        if error:
+            record_activity(
+                session,
+                event_type="task.comment_notify_failed",
+                task_id=request.task.id,
+                message=(
+                    f"Failed to notify {agent.name} "
+                    f"(deliver={should_deliver}): {error}"
+                ),
+                agent_id=agent.id,
+            )
 
 
 @dataclass(slots=True)
