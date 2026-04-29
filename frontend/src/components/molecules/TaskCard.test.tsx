@@ -46,6 +46,21 @@ describe("TaskCard", () => {
     expect(screen.getByText(/Waiting for lead review/i)).toBeInTheDocument();
   });
 
+  it("renders nextActor in place of assignee when provided", () => {
+    render(
+      <TaskCard
+        title="Approval pending"
+        assignee="Architect"
+        nextActor="Supervisor (lead)"
+        status="review"
+        approvalsPendingCount={1}
+      />,
+    );
+
+    expect(screen.getByText("Supervisor (lead)")).toBeInTheDocument();
+    expect(screen.queryByText("Architect")).not.toBeInTheDocument();
+  });
+
   it("invokes onClick for mouse and keyboard activation", () => {
     const onClick = vi.fn();
 

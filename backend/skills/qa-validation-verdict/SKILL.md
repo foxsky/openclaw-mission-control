@@ -62,6 +62,26 @@ PASS for non-UI logic requires:
 Local source inspection, broad unrelated green tests, OpenAPI presence, and
 `healthz` are supporting evidence only.
 
+## AC Quoting Rule (verbatim, no paraphrase)
+
+The AC text in your verdict's evidence table must be **copied verbatim** from
+the task description's `Acceptance criteria:` section. Do not summarize,
+reword, simplify, or describe what the live state shows in place of the AC
+text — that lets a deviation pass review by quietly matching what was
+implemented instead of what was specified.
+
+If the spec AC says `Preserve/verify dashboard wrapper perspective tilt from
+VP-13: rotateY(-14deg), transform-origin: left center`, your AC column quotes
+exactly that. If the live state has `rotateY(+14deg)` at `right center`, your
+evidence column reports the live value and your verdict is FAIL — not a
+reworded AC like "right edge near / left edge recedes" that turns a deviation
+into a description.
+
+When the spec AC names specific values (transforms, classNames, breakpoint
+prefixes, pixel measurements), the evidence column must show both the spec
+value and the measured value. Differences are FAIL unless the spec explicitly
+allows variation (`or measured equivalent`, `or above`, `at least`).
+
 ## Comment Format
 
 Post one task comment:

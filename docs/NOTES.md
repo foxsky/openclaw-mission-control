@@ -5,6 +5,19 @@ Investigate why the agents aren't nudging each other as instructed
 
 Review the custom skills, evaluate and point any weekness, gaps and strucutural fails
 
+/root/.openclaw/workspace/taskflow-web-presence-design.md
+
+  Recommended combinations, ranked
+
+  1. Recall-optimized free — MUTATION_MODEL=deepseek-v4-pro:cloud + RESPONSE_MODEL=deepseek-v4-pro:cloud. Both passes on pro. Total wall-clock ~17-20 min. Free. Maximum recall. Tradeoff: report lands later, ~14% FP rate visible.
+
+  2. Asymmetric quality — MUTATION_MODEL=claude-sonnet-4-6 + RESPONSE_MODEL=deepseek-v4-pro:cloud. ~$4/mo for highest mutation quality + free response. Sonnet on the harder reasoning task (timezone arithmetic, weekday derivation) where Anthropic quality matters most. Faster
+   than #1 because Sonnet's mutation pass is fast.
+
+  3. Current (status quo) — MUTATION_MODEL=glm-5.1:cloud + RESPONSE_MODEL=deepseek-v4-pro:cloud. Free, fast, but mutation pass has unverified FP risk per the historical comment.
+
+  My honest pick
+
 ## 2026-04-28 (continued) — Skill suite review, auto-wake, validator auto-correct
 
 ### Backend auto-wake: _notify_lead_on_end_work_event (prod .64)

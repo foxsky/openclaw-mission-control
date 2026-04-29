@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
+from app.core.time import as_naive_utc, utcnow
 from app.models.tasks import Task
 from app.schemas.lead_actions import LeadNextActionName, LeadNextActionRead
+from app.services.task_pipeline import split_missing_states_by_default_owner
 
 ApprovalState = Literal["none", "pending", "approved", "rejected"]
 ApprovalStateRow = tuple[UUID | None, str, datetime | None, datetime]
+
+# Grace window after a worker picks up an in_progress task before the lead is
+# nudged to chase missing pipeline events. Avoids premature nudges fired
+# seconds-to-minutes after the worker accepts the task and starts coding.
+IN_PROGRESS_PIPELINE_NUDGE_GRACE = timedelta(minutes=20)
 
 
 def latest_approval_state_by_task_id(
@@ -68,6 +75,42 @@ def _action(
     )
 
 
+def _review_readiness_ready(readiness: object | None) -> bool:
+    return isinstance(readiness, Mapping) and readiness.get("ready") is True
+
+
+def _in_progress_age(task: Task, *, now: datetime) -> timedelta | None:
+    """Age of the task's current in_progress run, or None if never started.
+
+    Both `now` and the resolved start timestamp are normalized to naive UTC
+    so the subtraction is correct regardless of whether either input is
+    naive (the project convention) or carries an offset.
+    """
+    started = task.in_progress_at or task.updated_at or task.created_at
+    if started is None:
+        return None
+    return as_naive_utc(now) - as_naive_utc(started)
+
+
+def _in_progress_is_fresh(
+    task: Task,
+    *,
+    now: datetime,
+    grace: timedelta,
+) -> bool:
+    age = _in_progress_age(task, now=now)
+    if age is None:
+        return False
+    return age < grace
+
+
+def _in_progress_age_minutes(task: Task, *, now: datetime) -> int | None:
+    age = _in_progress_age(task, now=now)
+    if age is None:
+        return None
+    return max(0, int(age.total_seconds() // 60))
+
+
 def select_lead_next_action(
     *,
     tasks: Sequence[Task],
@@ -75,8 +118,12 @@ def select_lead_next_action(
     approval_state_by_task_id: Mapping[UUID, ApprovalState],
     pipeline_missing_by_task_id: Mapping[UUID, Sequence[str]],
     review_readiness_by_task_id: Mapping[UUID, object] | None = None,
+    now: datetime | None = None,
 ) -> LeadNextActionRead:
     """Return the single closest-to-done lead action from structured state."""
+
+    if now is None:
+        now = utcnow()
 
     active_tasks = [
         task
@@ -106,6 +153,31 @@ def select_lead_next_action(
         if task.status != "review":
             continue
         approval_state = approval_state_by_task_id.get(task.id, "none")
+        readiness = review_readiness_by_task_id.get(task.id)
+        missing_pipeline = list(pipeline_missing_by_task_id.get(task.id, []))
+        if (
+            approval_state == "none"
+            and _review_readiness_ready(readiness)
+            and not missing_pipeline
+        ):
+            return _action(
+                task=task,
+                action_required=True,
+                action="inspect_review_gates",
+                reason_code="review_task_ready_for_approval",
+                details={
+                    "approval_state": approval_state,
+                    "missing_pipeline_states": missing_pipeline,
+                    "review_packet_type": task.review_packet_type,
+                    "validation_target": task.validation_target,
+                    "review_readiness": readiness,
+                },
+            )
+
+    for task in ordered:
+        if task.status != "review":
+            continue
+        approval_state = approval_state_by_task_id.get(task.id, "none")
         missing_pipeline = list(pipeline_missing_by_task_id.get(task.id, []))
         return _action(
             task=task,
@@ -122,6 +194,58 @@ def select_lead_next_action(
         )
 
     for task in ordered:
+        if task.status != "in_progress" or task.assigned_agent_id is None:
+            continue
+        if task.id not in pipeline_missing_by_task_id:
+            continue
+        missing_pipeline = list(pipeline_missing_by_task_id.get(task.id, []))
+        if not missing_pipeline:
+            return _action(
+                task=task,
+                action_required=True,
+                action="inspect_stale_in_progress",
+                reason_code="in_progress_worker_ready_for_review_submission",
+                details={
+                    "review_packet_type": task.review_packet_type,
+                    "validation_target": task.validation_target,
+                    "pipeline_ready": True,
+                    "missing_pipeline_states": [],
+                    "missing_worker_pipeline_states": [],
+                    "missing_deploy_pipeline_states": [],
+                    "in_progress_minutes": _in_progress_age_minutes(task, now=now),
+                    "next_step": "nudge_assigned_worker_to_patch_status_review",
+                    "lead_may_not_patch_review": True,
+                },
+            )
+        if _in_progress_is_fresh(
+            task,
+            now=now,
+            grace=IN_PROGRESS_PIPELINE_NUDGE_GRACE,
+        ):
+            continue
+        owner_split = split_missing_states_by_default_owner(missing_pipeline)
+        return _action(
+            task=task,
+            action_required=True,
+            action="inspect_stale_in_progress",
+            reason_code="in_progress_pipeline_missing_review_gate",
+            details={
+                "pipeline_ready": False,
+                "missing_pipeline_states": missing_pipeline,
+                "missing_worker_pipeline_states": owner_split.worker,
+                "missing_deploy_pipeline_states": owner_split.deploy,
+                "pipeline_owner_assumption": "default_openclaw_topology",
+                "review_packet_type": task.review_packet_type,
+                "validation_target": task.validation_target,
+                "in_progress_minutes": _in_progress_age_minutes(task, now=now),
+                "in_progress_grace_minutes": int(
+                    IN_PROGRESS_PIPELINE_NUDGE_GRACE.total_seconds() // 60
+                ),
+                "next_step": "inspect_pipeline_state_not_review_readiness",
+            },
+        )
+
+    for task in ordered:
         if task.status == "rework" and task.assigned_agent_id is not None:
             return _action(
                 task=task,
@@ -131,13 +255,26 @@ def select_lead_next_action(
             )
 
     for task in ordered:
-        if task.status == "in_progress" and task.assigned_agent_id is not None:
-            return _action(
-                task=task,
-                action_required=True,
-                action="inspect_stale_in_progress",
-                reason_code="in_progress_work_needs_health_check",
-            )
+        if task.status != "in_progress" or task.assigned_agent_id is None:
+            continue
+        if _in_progress_is_fresh(
+            task,
+            now=now,
+            grace=IN_PROGRESS_PIPELINE_NUDGE_GRACE,
+        ):
+            continue
+        return _action(
+            task=task,
+            action_required=True,
+            action="inspect_stale_in_progress",
+            reason_code="in_progress_work_needs_health_check",
+            details={
+                "in_progress_minutes": _in_progress_age_minutes(task, now=now),
+                "in_progress_grace_minutes": int(
+                    IN_PROGRESS_PIPELINE_NUDGE_GRACE.total_seconds() // 60
+                ),
+            },
+        )
 
     for task in ordered:
         if task.status == "inbox" and task.assigned_agent_id is None:

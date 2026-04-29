@@ -43,6 +43,19 @@ type TaskBoardProps = {
   onTaskMove?: (taskId: string, status: TaskStatus) => void | Promise<void>;
   readOnly?: boolean;
   showCancelledColumn?: boolean;
+  boardLeadName?: string | null;
+};
+
+const resolveNextActor = (
+  task: Task,
+  boardLeadName: string | null | undefined,
+): string | undefined => {
+  if (task.is_blocked) return undefined;
+  const pendingApproval = (task.approvals_pending_count ?? 0) > 0;
+  if (task.status === "review" && pendingApproval && boardLeadName) {
+    return `${boardLeadName} (lead)`;
+  }
+  return undefined;
 };
 
 type ReviewBucket = "all" | "approval_needed" | "waiting_lead" | "blocked";
@@ -152,6 +165,7 @@ export const TaskBoard = memo(function TaskBoard({
   onTaskMove,
   readOnly = false,
   showCancelledColumn = false,
+  boardLeadName,
 }: TaskBoardProps) {
   const boardRef = useRef<HTMLDivElement | null>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -525,6 +539,7 @@ export const TaskBoard = memo(function TaskBoard({
                         status={task.status}
                         priority={task.priority}
                         assignee={task.assignee ?? undefined}
+                        nextActor={resolveNextActor(task, boardLeadName)}
                         due={dueState.due}
                         isOverdue={dueState.isOverdue}
                         approvalsPendingCount={task.approvals_pending_count}

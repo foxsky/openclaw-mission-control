@@ -3931,6 +3931,7 @@ export default function BoardDetailPage() {
                       onTaskMove={canWrite ? handleTaskMove : undefined}
                       readOnly={!canWrite}
                       showCancelledColumn={showCancelledColumn}
+                      boardLeadName={boardLead?.name ?? null}
                     />
                   ) : (
                     <div className="rounded-xl border border-slate-200 bg-white shadow-sm">

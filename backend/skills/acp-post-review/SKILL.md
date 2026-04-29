@@ -28,9 +28,10 @@ Before posting evidence or moving to review:
 1. Confirm the child actually completed and capture its output, changed files, diff/commit, and test/check results.
 2. Map every acceptance criterion to observed evidence.
 3. Verify the relevant role evidence packet below using fresh parent-side checks when possible.
-4. Check that the child did not move board status or omit required evidence.
-5. If a stage-2 review is required by role flow, spawn it with the full `acp-delegation` payload shape.
-6. Route only after parent verification and required review return PASS.
+4. For feature, bugfix, refactor, or behavior-change work, parent evidence must include RED/GREEN TDD proof from the child or parent: failing automated test output before production-code changes, then passing output after the smallest implementation. Missing RED output blocks review unless the packet gives a specific no-test-feasible reason plus equivalent runtime/browser regression proof captured before routing.
+5. Check that the child did not move board status or omit required evidence.
+6. If a stage-2 review is required by role flow, spawn it with the full `acp-delegation` payload shape.
+7. Route only after parent verification and required review return PASS.
 
 If evidence is missing, do not describe the child run as successful. Re-spawn only when allowed, with a fresh label and complete payload per `acp-delegation`.
 
@@ -92,6 +93,22 @@ Required parent-side verification:
 - click/interaction evidence for changed behavior
 - responsive/layout check when UI changed
 - build hash or served asset proof when deployment/bundle behavior matters
+- AC-specific quantitative measurement when the AC names a measurable quantity (clearance in px, gap in px, contrast ratio, viewport-bound rect, etc.) — bounding-box rect, computed style, or pixel measurement against the AC threshold; the packet must include the actual number, not "looks fine" or "approximately ~Npx"
+
+Test artifacts cited as evidence must reference the **current task or its AC ids** in their filename or test names (e.g. `tests/vp-12-...spec.ts` or `it("VP-12 AC1 hero descender clearance >= 5px", ...)`). Reusing a sibling task's spec because it superficially overlaps is FAIL on the AC-mapping check, regardless of whether the borrowed spec passes — Architect/QA cannot verify AC coverage from a spec that names a different task. If no VP/AC-specific spec exists, write one before submitting evidence.
+
+When the spec uses `Preserve`, `must match`, `keep`, or quotes specific values
+(`rotateY(-14deg)`, `mb-12`, `lg:left-8`, `perspective: 2200px`,
+`transform-origin: left center`), the implementation must match those values
+exactly. The `or measured equivalent` clause covers numeric variation only
+(e.g., `rotateY(-16deg)` for `-14deg`, `perspective: 2400` for `2200`,
+`mb-10` for `mb-12` if subtitle clearance is met). It does **not** cover
+direction inversion, pivot-axis flip, mirrored origins, or substitution of
+named CSS classes. Treat direction-mirrored transforms (`rotateY(+N)` at
+`right center` vs `rotateY(-N)` at `left center`) as a structural change, not
+an equivalent. If a different visual direction looks better, do not flip it
+in the implementation — surface it as an explicit spec-amendment request to
+`@lead` and wait for spec approval before changing direction.
 
 If any AC lacks browser proof, re-spawn the implementer only with a complete `acp-delegation` implementation payload. Tell the child exactly which AC lacks evidence and require browser navigation plus literal snapshot/DOM output.
 
@@ -112,6 +129,7 @@ That packet must include:
 
 - final commit SHA and loaded/deployed build artifact when applicable
 - changed files grouped by task scope, not by child
+- RED/GREEN TDD output for feature, bugfix, refactor, or behavior-change code, or a specific no-test-feasible reason plus equivalent runtime/browser regression proof
 - every acceptance criterion mapped to fresh parent-observed evidence
 - for frontend/UI/i18n: target URL, browser navigation/snapshot output, visible
   DOM text/raw-key scan, console and failed-network output, interaction proof

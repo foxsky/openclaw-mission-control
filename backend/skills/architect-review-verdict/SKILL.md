@@ -32,6 +32,20 @@ fill the gap with source-level inference.
 - For decomposition PASS, structured evidence must include
   `planned_child_task_ids` for every created child task or
   `no_child_tasks_required:true`.
+- **Verbatim spec-value match**: when the spec quotes a specific value or
+  property (e.g., `rotateY(-14deg)`, `mb-12`, `lg:left-8`, `perspective: 2200px`,
+  `transform-origin: left center`), your evidence row for that AC must include
+  both the **spec quote** and the **live measurement** on the same line, and
+  FAIL if they differ — unless the spec explicitly allows variation
+  (e.g., `or measured equivalent`). The `or measured equivalent` clause covers
+  numeric variation (e.g., `rotateY(-16deg)` for `-14deg`, `perspective: 2400`
+  for `2200`); it does **not** cover direction inversion, pivot-axis flip, or
+  substitution of a named CSS class for a different one. Direction-mirrored
+  transforms (`rotateY(+N)` vs `rotateY(-N)` at mirrored origin) are
+  structurally different, not "measured equivalent". When you observe a
+  structural deviation but the AC otherwise reads as met, the verdict is FAIL
+  with `blocking_owner` set to the implementer, not PASS with a non-blocking
+  note.
 
 ## Comment Format
 
