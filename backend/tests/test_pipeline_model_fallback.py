@@ -1,0 +1,230 @@
+"""Tests for the ``model_fallback`` informational pipeline event.
+
+Validates the OpenClaw 2026.4.27 ``model.fallback_step`` trajectory event
+support: schema-level evidence-key validation, exclusion from readiness
+gates, and surfacing of the latest fallback step on review-readiness
+responses.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+import pytest
+from pydantic import ValidationError
+
+from app.models.task_pipeline_events import TaskPipelineEvent
+from app.schemas.task_pipeline_events import (
+    INFORMATIONAL_PIPELINE_STATES,
+    MODEL_FALLBACK_REQUIRED_EVIDENCE_KEYS,
+    TaskPipelineEventCreate,
+)
+from app.services.task_pipeline import (
+    FRONTEND_REVIEW_PIPELINE_STATES,
+    latest_model_fallback_step,
+    pipeline_missing_states,
+    pipeline_present_states,
+)
+
+
+def _event(
+    *,
+    state: str,
+    created_at: datetime | None = None,
+    commit_sha: str | None = None,
+    artifact_hash: str | None = None,
+    deploy_target: str | None = None,
+    live_sha: str | None = None,
+    evidence: dict[str, object] | None = None,
+) -> TaskPipelineEvent:
+    return TaskPipelineEvent(
+        id=uuid4(),
+        board_id=uuid4(),
+        task_id=uuid4(),
+        agent_id=None,
+        state=state,
+        source="test",
+        commit_sha=commit_sha,
+        artifact_hash=artifact_hash,
+        deploy_target=deploy_target,
+        live_sha=live_sha,
+        evidence=evidence,
+        created_at=created_at or datetime.now(UTC),
+    )
+
+
+# --- Schema-level evidence-key validation ---
+
+
+class TestModelFallbackEvidenceValidation:
+    """``state="model_fallback"`` requires evidence with the trajectory keys."""
+
+    def test_create_rejects_missing_evidence_dict(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            TaskPipelineEventCreate(state="model_fallback", evidence=None)
+        assert "evidence" in str(exc.value).lower()
+
+    def test_create_rejects_empty_evidence_dict(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            TaskPipelineEventCreate(state="model_fallback", evidence={})
+        assert "evidence" in str(exc.value).lower()
+
+    def test_create_rejects_evidence_missing_required_keys(self) -> None:
+        with pytest.raises(ValidationError) as exc:
+            TaskPipelineEventCreate(
+                state="model_fallback",
+                evidence={"from_model": "ollama/qwen3.5:cloud"},
+            )
+        message = str(exc.value)
+        assert "to_model" in message
+        assert "reason" in message
+
+    def test_create_accepts_evidence_with_all_required_keys(self) -> None:
+        event = TaskPipelineEventCreate(
+            state="model_fallback",
+            evidence={
+                "from_model": "ollama/qwen3.5:cloud",
+                "to_model": "ollama/glm-5.1:cloud",
+                "reason": "timeout",
+            },
+        )
+        assert event.state == "model_fallback"
+        assert event.evidence is not None
+        assert MODEL_FALLBACK_REQUIRED_EVIDENCE_KEYS.issubset(event.evidence.keys())
+
+    def test_create_accepts_evidence_with_extra_keys(self) -> None:
+        """Extra trajectory metadata is preserved verbatim."""
+        event = TaskPipelineEventCreate(
+            state="model_fallback",
+            evidence={
+                "from_model": "ollama/qwen3.5:cloud",
+                "to_model": "ollama/glm-5.1:cloud",
+                "reason": "timeout",
+                "chain_position": 1,
+                "final_outcome": "succeeded",
+                "request_id": "abc-123",
+            },
+        )
+        assert event.evidence is not None
+        assert event.evidence["chain_position"] == 1
+
+    def test_non_fallback_state_unaffected_by_evidence_validator(self) -> None:
+        """Other states still accept events with no evidence dict."""
+        event = TaskPipelineEventCreate(state="committed", commit_sha="abc1234")
+        assert event.state == "committed"
+        assert event.evidence is None
+
+
+# --- Readiness exclusion ---
+
+
+class TestModelFallbackReadinessExclusion:
+    """``model_fallback`` events must never affect ``ready`` gates."""
+
+    def test_model_fallback_in_informational_set(self) -> None:
+        assert "model_fallback" in INFORMATIONAL_PIPELINE_STATES
+
+    def test_present_states_excludes_model_fallback(self) -> None:
+        events = [
+            _event(state="code_changed"),
+            _event(
+                state="model_fallback",
+                evidence={
+                    "from_model": "a",
+                    "to_model": "b",
+                    "reason": "timeout",
+                },
+            ),
+            _event(state="committed", commit_sha="abc1234"),
+        ]
+        present = pipeline_present_states(events)
+        assert "model_fallback" not in present
+        assert "code_changed" in present
+        assert "committed" in present
+
+    def test_only_fallback_events_yield_empty_present(self) -> None:
+        """A task with only a fallback step has no readiness progress."""
+        events = [
+            _event(
+                state="model_fallback",
+                evidence={
+                    "from_model": "a",
+                    "to_model": "b",
+                    "reason": "timeout",
+                },
+            ),
+        ]
+        assert pipeline_present_states(events) == []
+
+    def test_missing_states_unchanged_by_fallback_event(self) -> None:
+        """Adding a fallback event does not satisfy any required state."""
+        events_without = [_event(state="code_changed")]
+        events_with_fallback = [
+            *events_without,
+            _event(
+                state="model_fallback",
+                evidence={
+                    "from_model": "a",
+                    "to_model": "b",
+                    "reason": "timeout",
+                },
+            ),
+        ]
+        missing_without = pipeline_missing_states(events_without)
+        missing_with = pipeline_missing_states(events_with_fallback)
+        assert missing_without == missing_with
+        # Sanity: the readiness frontier still requires the rest of the gates.
+        assert "committed" in missing_with
+        assert "model_fallback" not in FRONTEND_REVIEW_PIPELINE_STATES
+
+
+# --- Latest fallback step retrieval ---
+
+
+class TestLatestModelFallbackStep:
+    """``latest_model_fallback_step`` returns the most recent fallback event."""
+
+    def test_returns_none_when_no_fallback_events(self) -> None:
+        events = [_event(state="code_changed"), _event(state="committed", commit_sha="x")]
+        assert latest_model_fallback_step(events) is None
+
+    def test_returns_only_fallback_when_one_exists(self) -> None:
+        target = _event(
+            state="model_fallback",
+            evidence={
+                "from_model": "ollama/qwen3.5:cloud",
+                "to_model": "ollama/glm-5.1:cloud",
+                "reason": "timeout",
+            },
+        )
+        events = [
+            _event(state="code_changed"),
+            target,
+            _event(state="committed", commit_sha="x"),
+        ]
+        result = latest_model_fallback_step(events)
+        assert result is target
+
+    def test_returns_most_recent_when_multiple_fallbacks(self) -> None:
+        base = datetime(2026, 4, 30, 12, 0, tzinfo=UTC)
+        oldest = _event(
+            state="model_fallback",
+            created_at=base,
+            evidence={"from_model": "a", "to_model": "b", "reason": "timeout"},
+        )
+        middle = _event(
+            state="model_fallback",
+            created_at=base + timedelta(minutes=1),
+            evidence={"from_model": "b", "to_model": "c", "reason": "overloaded"},
+        )
+        newest = _event(
+            state="model_fallback",
+            created_at=base + timedelta(minutes=2),
+            evidence={"from_model": "c", "to_model": "d", "reason": "billing"},
+        )
+        events = [middle, newest, oldest]  # arbitrary insertion order
+        result = latest_model_fallback_step(events)
+        assert result is newest
+        assert result is not None and result.evidence is not None
+        assert result.evidence["reason"] == "billing"

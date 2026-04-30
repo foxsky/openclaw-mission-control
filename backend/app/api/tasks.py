@@ -128,6 +128,7 @@ from app.services.task_dependencies import (
 from app.services.task_pipeline import (
     FRONTEND_REVIEW_PIPELINE_STATES,
     frontend_pipeline_required,
+    latest_model_fallback_step,
     list_task_pipeline_events,
     pipeline_missing_required_fields,
     pipeline_missing_states,
@@ -2845,6 +2846,7 @@ async def get_task_pipeline_state(
     )
     present_states = pipeline_present_states(events)
     missing_states = pipeline_missing_states(events)
+    latest_fallback = latest_model_fallback_step(events)
     return TaskPipelineStateRead(
         task_id=task.id,
         required_states=list(FRONTEND_REVIEW_PIPELINE_STATES),
@@ -2852,6 +2854,11 @@ async def get_task_pipeline_state(
         missing_states=missing_states,
         ready=not missing_states,
         events=[_task_pipeline_event_read(event) for event in events],
+        latest_fallback_step=(
+            _task_pipeline_event_read(latest_fallback)
+            if latest_fallback is not None
+            else None
+        ),
     )
 
 

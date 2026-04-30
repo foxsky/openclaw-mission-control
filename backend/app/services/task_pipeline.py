@@ -11,6 +11,7 @@ from sqlalchemy import desc
 from sqlmodel import col, select
 
 from app.models.task_pipeline_events import TaskPipelineEvent
+from app.schemas.task_pipeline_events import INFORMATIONAL_PIPELINE_STATES
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -88,9 +89,18 @@ async def list_task_pipeline_events(
 
 
 def pipeline_present_states(events: Sequence[TaskPipelineEvent]) -> list[str]:
+    """Distinct readiness-relevant states observed in the event stream.
+
+    Informational states (``INFORMATIONAL_PIPELINE_STATES``) are excluded
+    so they never affect ``ready`` calculations or appear next to true
+    readiness milestones. Use ``latest_model_fallback_step`` for trajectory
+    visibility.
+    """
     present: list[str] = []
     seen: set[str] = set()
     for event in sorted(events, key=lambda value: value.created_at):
+        if event.state in INFORMATIONAL_PIPELINE_STATES:
+            continue
         if not pipeline_event_has_required_fields(event):
             continue
         if event.state in seen:
@@ -98,6 +108,20 @@ def pipeline_present_states(events: Sequence[TaskPipelineEvent]) -> list[str]:
         seen.add(event.state)
         present.append(event.state)
     return present
+
+
+def latest_model_fallback_step(
+    events: Sequence[TaskPipelineEvent],
+) -> TaskPipelineEvent | None:
+    """Return the most recent ``model_fallback`` event, if any.
+
+    Surfaced inline on review-readiness responses so reviewers see which
+    model actually produced the packet without paging through every event.
+    """
+    fallbacks = [event for event in events if event.state == "model_fallback"]
+    if not fallbacks:
+        return None
+    return max(fallbacks, key=lambda value: value.created_at)
 
 
 def pipeline_event_has_required_fields(event: TaskPipelineEvent) -> bool:
