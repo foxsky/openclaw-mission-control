@@ -597,44 +597,6 @@ def test_hard_rules_in_agents_not_identity() -> None:
     )
 
 
-def test_qa_e2e_runtime_pipeline_command_names_deploy_target() -> None:
-    qa_agents = _render_template(
-        "BOARD_AGENTS.md.j2",
-        **{
-            **_REALISTIC_RENDER_CONTEXT,
-            "is_main_agent": False,
-            "is_board_lead": False,
-            "agent_name": "QA-E2E",
-            "agent_id": "qa-e2e-id",
-            "identity_role": "QA-E2E Browser Validator",
-            "identity_validation_flow": "qa_validation",
-        },
-    )
-    assert "qa-validation-verdict" in qa_agents
-    qa_skill = _read_skill_text_or_skip("qa-validation-verdict")
-    assert (
-        "runtime_verified --deploy-target URL --evidence qa_browser_snapshot=posted"
-        in qa_skill
-    )
-
-    heartbeat = _render_template(
-        "BOARD_HEARTBEAT.md.j2",
-        **{
-            **_REALISTIC_RENDER_CONTEXT,
-            "is_main_agent": False,
-            "is_board_lead": False,
-            "agent_name": "QA-E2E",
-            "agent_id": "qa-e2e-id",
-            "identity_role": "QA-E2E Browser Validator",
-            "identity_validation_flow": "qa_validation",
-        },
-    )
-    assert (
-        "runtime_verified --deploy-target URL --evidence qa_browser_snapshot=posted"
-        in heartbeat
-    )
-
-
 def test_qa_discriminator_does_not_false_positive_on_name_containing_qa() -> None:
     """Regression: an agent named 'QA-Security' with role 'Security
     Auditor' must NOT get the QA validation checklist. The previous
@@ -715,6 +677,47 @@ def test_phase1_review_loop_guardrails_render_for_frontend_architect_and_lead() 
     assert "route around operator-gated work" in lead_agents
 
 
+def test_pf_pb_and_acp_skills_enforce_tdd_discipline() -> None:
+    pb_agents = _render_template(
+        "BOARD_AGENTS.md.j2",
+        **{
+            **_REALISTIC_RENDER_CONTEXT,
+            "is_main_agent": False,
+            "is_board_lead": False,
+            "agent_name": "Programmer-Backend",
+            "agent_id": "pb-id",
+            "identity_role": "Backend Developer",
+        },
+    )
+    pf_agents = _render_template(
+        "BOARD_AGENTS.md.j2",
+        **{
+            **_REALISTIC_RENDER_CONTEXT,
+            "is_main_agent": False,
+            "is_board_lead": False,
+            "agent_name": "Programmer-Frontend",
+            "agent_id": "pf-id",
+            "identity_role": "Frontend Developer",
+        },
+    )
+
+    for rendered in (pb_agents, pf_agents):
+        assert "TDD is required for feature, bugfix, refactor, and behavior-change code." in rendered
+        assert "write or update a failing automated test first" in rendered
+        assert "capture the failing output before implementation" in rendered
+        assert "capture passing output after the smallest implementation" in rendered
+        assert "If no automated test is feasible, state why before coding" in rendered
+
+    acp_delegation = _read_skill_text_or_skip("acp-delegation")
+    assert "TDD discipline is required for implementation children." in acp_delegation
+    assert "Do not implement production code before capturing the RED result." in acp_delegation
+    assert "include the RED/GREEN output in final evidence" in acp_delegation
+
+    acp_post_review = _read_skill_text_or_skip("acp-post-review")
+    assert "parent evidence must include RED/GREEN TDD proof" in acp_post_review
+    assert "Missing RED output blocks review" in acp_post_review
+
+
 def test_architect_templates_are_review_only_without_worker_leakage() -> None:
     ctx = {
         **_REALISTIC_RENDER_CONTEXT,
@@ -734,9 +737,12 @@ def test_architect_templates_are_review_only_without_worker_leakage() -> None:
     assert "frontend browser evidence packet" in agents
     assert "backend runtime evidence packet" in agents
     assert "Review gate applies" in agents
-    assert "planned_child_task_ids" not in agents
-    assert "no_child_tasks_required" not in agents
+    assert "planned child task ids" not in agents
+    assert "no-child-tasks-required marker" not in agents
     assert "review-events API wakes the lead" in agents
+    assert "do not tag `@lead` in normal verdict comments" in agents
+    verdict_skill = _read_skill_text_or_skip("structured-review-verdict")
+    assert "auto-wakes the lead" in verdict_skill
     assert "Lead wake: structured-review-verdict review event" not in agents
     assert "@lead Review posted for task $TASK_ID" not in agents
     assert r"Evidence gaps:\n- <missing packet/output or none>\n@lead" not in agents
@@ -755,7 +761,7 @@ def test_architect_templates_are_review_only_without_worker_leakage() -> None:
     assert 'order = ["review", "inbox"]' in heartbeat
     assert 'order = ["in_progress"' not in heartbeat
     assert "post the result to the task comment without `@lead`" in heartbeat
-    assert "post the result to the task comment, and tag `@lead`" not in heartbeat
+    assert "post the result to the task comment, tag `@lead`" not in heartbeat
     assert "## Inbox Pickup Gate" not in heartbeat
     assert "## Rework Pickup Gate" not in heartbeat
     assert "move it to `in_progress`" not in heartbeat
@@ -784,6 +790,7 @@ def test_qa_unit_templates_are_validation_only_without_worker_leakage() -> None:
     assert "Changed-code coverage" not in agents
     assert "backend runtime evidence packet" in agents
     assert "QA gate applies" in agents
+    assert "structured-review-verdict" in agents
     assert "review-events API wakes the lead" not in agents
     verdict_skill = _read_skill_text_or_skip("structured-review-verdict")
     assert "auto-wakes the lead" in verdict_skill
@@ -791,6 +798,8 @@ def test_qa_unit_templates_are_validation_only_without_worker_leakage() -> None:
     assert "BUILD/SOURCE DRIFT @lead" not in agents
     assert 'Infra issues (not code bugs): <list or "none">\n  @lead' not in agents
     assert "Lead wake: structured-review-verdict review event" not in agents
+    assert 'tasks/$TASK_ID/review-events' not in agents
+    assert '"reviewer_role":"qa_unit"' not in agents
     assert "Worker gate applies" not in agents
     assert "When you finish a slice" not in agents
     assert "**Deploy verification**" not in agents
@@ -801,7 +810,7 @@ def test_qa_unit_templates_are_validation_only_without_worker_leakage() -> None:
     assert 'order = ["review", "inbox"]' in heartbeat
     assert 'order = ["in_progress"' not in heartbeat
     assert "post the result to the task comment without `@lead`" in heartbeat
-    assert "post the result to the task comment, and tag `@lead`" not in heartbeat
+    assert "post the result to the task comment, tag `@lead`" not in heartbeat
     assert "Do not move `review` to `rework`" in heartbeat
     assert "Suggested routing: lead move to rework" in heartbeat
     assert "move it to `in_progress`" not in heartbeat
@@ -839,10 +848,11 @@ def test_devops_templates_have_dedicated_deploy_evidence_lane() -> None:
 
     heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
     assert 'order = ["in_progress", "rework", "inbox", "review"]' in heartbeat
-    assert "Work this one DevOps task end-to-end" in heartbeat
-    assert "If the selected task is already in review, validate deployed" in heartbeat
-    assert "never edit production" in heartbeat
-    assert "rollback command/path" in heartbeat
+    assert "acp-delegation" in heartbeat
+    assert "acp-post-review" in heartbeat
+    assert "validate deployed state only" in heartbeat
+    assert "production source directly" in heartbeat
+    assert "rollback command/path" not in heartbeat
     assert "Classify rework before fixing" in heartbeat
 
 
@@ -863,16 +873,21 @@ def test_supervisor_template_enforces_review_gates_and_lead_routing() -> None:
         "Step 2 — Board Memory Intake"
     )
     assert "/memory?limit=50" not in agents
-    assert "MEMORY_INTAKE_CLEAR" not in agents
-    assert "MEMORY_INTAKE_CREATE_REQUIRED" not in agents
-    assert "MEMORY_INTAKE_FAILED" not in agents
+    assert "/memory/intake/reconcile" not in agents
+    assert "lead-next-action-gate" in agents
+    assert "lead-health-scan" in agents
+    assert "lead-inbox-routing" in agents
+    assert "lead-memory-intake" in agents
     assert "Lead Next Action Gate" in agents
     assert "/lead/next-action" in agents
     assert "LEAD_NEXT_ACTION_REQUIRED" not in agents
-    assert "/review-readiness" not in agents
-    assert "/review-events" not in agents
+    assert "review_task_ready_for_approval" not in agents
+    assert "create exactly one pending approval" not in agents
+    assert "lead-review-routing" in agents
+    assert "structured-review-verdict" in agents
+    assert "MEMORY_INTAKE_CLEAR" not in agents
+    assert "MEMORY_INTAKE_FAILED" not in agents
     assert "Structured review verdicts are authoritative" not in agents
-    assert "artifact_issues" not in agents
     assert "`review_only` Architect PASS" not in agents
     assert "planned_child_task_ids" not in agents
     assert "no_child_tasks_required:true" not in agents
@@ -880,9 +895,7 @@ def test_supervisor_template_enforces_review_gates_and_lead_routing() -> None:
     assert "item.get('id')" not in agents
     assert "for item in memory_items:" not in agents
     assert "item.get('title')" not in agents
-    assert "source_memory_id" not in agents
     assert "marketing_site_review" not in agents
-    assert "no existing task references it" not in agents
     assert "if s not in ('in_progress','review','rework','inbox')" not in agents
     assert "('Architect','ARCHITECT')" not in agents
     assert '"assigned_agent_id":"ARCHITECT_ID","status":"review"' not in agents
@@ -892,26 +905,25 @@ def test_supervisor_template_enforces_review_gates_and_lead_routing() -> None:
     assert "DevOps→deploy evidence packet" not in agents
     assert "QA-Unit PASS required" not in agents
     assert "QA-E2E PASS required" not in agents
-    assert "Follow the reviewer `Suggested routing`" not in agents
     assert '"status": "rework", "assigned_agent_id": "DEV_AGENT_UUID"' not in agents
-    assert "lead-next-action-gate" in agents
-    assert "lead-memory-intake" in agents
-    assert "lead-health-scan" in agents
-    assert "lead-inbox-routing" in agents
-    assert "lead-review-routing" in agents
-    assert '"lead_reasoning": "Required review gates passed"' in agents
+    assert '"lead_reasoning": "Required review gates passed"' not in agents
     assert '"qa_evidence": "SUMMARY"' not in agents
     assert '"status":"in_progress"` + nudge: `"DECOMPOSE' not in agents
 
     heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
     assert "Memory Intake Gate" in heartbeat
     assert "Lead Next Action Gate" in heartbeat
+    assert heartbeat.index("Lead Next Action Gate") < heartbeat.index("Memory Intake Gate")
     assert "Do not manually scan the task list before this gate" in heartbeat
     assert "/lead/next-action is authoritative for the next heartbeat action" in heartbeat
+    assert "review_task_ready_for_approval" in heartbeat
+    assert "create exactly one pending approval" in heartbeat
     assert "/tmp/mc-board-tasks" not in heartbeat
+    assert "lead-review-routing" in heartbeat
+    assert "lead-memory-intake" in heartbeat
     assert "Before health scan" in heartbeat
     assert "HEARTBEAT_OK is forbidden" in heartbeat
-    assert "zero unlinked actionable operator memories" in heartbeat
+    assert "zero unlinked actionable operator memories" not in heartbeat
     assert "review routing and gate enforcement" in heartbeat
     assert "one closest-to-done task was advanced" in heartbeat
 
@@ -939,10 +951,11 @@ def test_supervisor_heartbeat_has_failure_and_drift_guardrails() -> None:
     assert "approved review tasks" not in agents
     assert "assigned rework" not in agents
     assert "refresh OpenAPI per `TOOLS.md`" not in agents
-    assert "newer than the latest worker packet" not in agents
-    assert "newer than the latest blocking review verdict" not in agents
     assert "lead-health-scan" in agents
     assert "lead-next-action-gate" in agents
+    assert "lead-review-routing" in agents
+    assert "newer than the latest worker packet" not in agents
+    assert "newer than the latest blocking review verdict" not in agents
 
 
 def test_frontend_heartbeat_forbids_implicit_worktree_parallelism() -> None:
@@ -984,8 +997,7 @@ def test_frontend_heartbeat_allows_explicit_worktree_parallelism_only_by_profile
     heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
     assert "Experimental opt-in worktree task parallelism is enabled" in heartbeat
     assert "Cap at 2 active implementation tasks" in heartbeat
-    assert "git worktree add /tmp/wt-$TASK_ID -b wt-$TASK_ID" in heartbeat
-    assert '"cwd": "/tmp/wt-$TASK_ID"' in heartbeat
+    assert "`acp-delegation` § Worktree Task Mode" in heartbeat
     assert "Completion-woken ticks process child results only" in heartbeat
     assert "sessions_spawn({" not in heartbeat
 
@@ -993,40 +1005,133 @@ def test_frontend_heartbeat_allows_explicit_worktree_parallelism_only_by_profile
 def test_acp_delegation_documents_explicit_worktree_cwd_mode() -> None:
     skill = _read_skill_text_or_skip("acp-delegation")
     assert "### Worktree Task Mode" in skill
+    assert "git worktree add" in skill
     assert "explicit opt-in only" in skill
     assert '"cwd": "/tmp/wt-<TASK_ID>"' in skill
     assert "There is one worktree per task, not per acceptance criterion" in skill
+    assert "acp-router" not in skill
+    assert "ACP transport unavailable" in skill
 
 
-def test_extracted_board_skills_cover_agents_template_boundaries() -> None:
+def test_installed_acp_delegation_copy_has_current_transport_contract_when_present() -> None:
+    codex_skill = Path.home() / ".codex" / "skills" / "acp-delegation" / "SKILL.md"
+    if not codex_skill.exists():
+        pytest.skip("Codex acp-delegation skill is not installed")
+
+    skill = codex_skill.read_text()
+    assert "acp-router" not in skill
+    assert "ACP transport unavailable" in skill
+    assert "Do not assume query parameters such as `?lng=`" in skill
+
+
+def test_acp_post_review_requires_lead_wake_on_parent_handoff() -> None:
+    skill = _read_skill_text_or_skip("acp-post-review")
+    assert "must include `@lead`" in skill
+    assert "wakes the Supervisor immediately" in skill
+    assert "only for parent-owned ACP handoffs and blockers" in skill
+    assert "consolidated evidence packet with `@lead`" in skill
+    assert '"packet_commit_sha":"<SHA>"' in skill
+    assert "## Structured Pipeline Evidence" in skill
+    assert "runtime_verified --deploy-target <URL_OR_ENV> --evidence" in skill
+    assert "Do not assume `?lng=` works" in skill
+
+
+def test_installed_acp_post_review_copy_has_current_wake_contract_when_present() -> None:
+    codex_skill = Path.home() / ".codex" / "skills" / "acp-post-review" / "SKILL.md"
+    if not codex_skill.exists():
+        pytest.skip("Codex acp-post-review skill is not installed")
+
+    skill = codex_skill.read_text()
+    assert "must include `@lead`" in skill
+    assert "consolidated evidence packet with `@lead`" in skill
+    assert "runtime_verified --deploy-target <URL_OR_ENV> --evidence" in skill
+    assert "Do not assume `?lng=` works" in skill
+
+
+def test_custom_lead_skills_match_template_boundaries() -> None:
     next_action = _read_skill_text_or_skip("lead-next-action-gate")
     assert "/lead/next-action" in next_action
     assert "LEAD_NEXT_ACTION_REQUIRED" in next_action
     assert "review_task_ready_for_approval" in next_action
+    assert "create exactly" in next_action
 
     health = _read_skill_text_or_skip("lead-health-scan")
     assert "LEAD_TASKS_JSON" in health
     assert "Closest-To-Done Order" in health
+    assert "approved review tasks" in health
+    assert "refresh OpenAPI per `TOOLS.md`" in health
 
     inbox = _read_skill_text_or_skip("lead-inbox-routing")
     assert "Decomposition Gate" in inbox
+    assert "ARCHITECT_ID" in inbox
     assert "Umbrella Lifecycle" in inbox
 
+    memory = _read_skill_text_or_skip("lead-memory-intake")
+    assert "Step 2" in memory
+    assert "/memory/intake/reconcile" in memory
+    assert "LEAD_RECONCILE_JSON" in memory
+    assert "/memory?limit=200" in memory
+    assert "/memory?limit=50" not in memory
+    assert "MEMORY_INTAKE_FAILED" in memory
+    assert "MEMORY_INTAKE_CREATE_REQUIRED" not in memory
+    assert "-d '{" not in memory
+    assert "The reconcile endpoint is synchronous" in memory
+    assert "do not add sleeps or loops around this gate" in memory
+
+    review = _read_skill_text_or_skip("lead-review-routing")
+    assert "AGENTS.md § Lead Board Playbook / Step 3" in review
+    assert "review_task_ready_for_approval" in review
+    assert "@Miguel" not in review
+    assert "board-memory chat nudge" in review
+    assert "Prose verdicts are for humans only" in review
+    assert "Packet type `other`" in review
+    assert "do not post a duplicate" in review
+
+    verdict = _read_skill_text_or_skip("structured-review-verdict")
+    assert "POST `/review-events`" in verdict
+    assert "reviewer_role" in verdict
+    assert '"verdict": "<lowercase_verdict>"' in verdict
+    assert "<VERDICT>" not in verdict
+    assert "INFRA BLOCKED" in verdict
+    assert "auto-wakes the lead" in verdict
+    assert "second task-comment nudge" in verdict
+    assert "commits and refreshes the structured" in verdict
+    assert "Do not repost an identical PASS" in verdict
+
+
+def test_extracted_worker_review_skills_match_template_boundaries() -> None:
     qa = _read_skill_text_or_skip("qa-validation-verdict")
     assert "QA-E2E PASS Evidence" in qa
     assert "QA-Unit PASS Evidence" in qa
+    assert "Suggested routing: lead move to rework" in qa
+    assert "structured-review-verdict" in qa
 
     architect = _read_skill_text_or_skip("architect-review-verdict")
+    assert "Architect Review Verdict" in architect
     assert "planned_child_task_ids" in architect
     assert "no_child_tasks_required:true" in architect
 
     recheck = _read_skill_text_or_skip("reviewer-recheck")
     assert "QA RECHECK for $TASK_ID" in recheck
     assert "ARCHITECT RECHECK for $TASK_ID" in recheck
+    assert "Re-citing a previous PASS is forbidden" in recheck
 
     devops = _read_skill_text_or_skip("devops-deploy-validation")
     assert "DEVOPS DIAGNOSIS for $TASK_ID rejection" in devops
     assert "validate deployed state only" in devops
+    assert "production source directly" in devops
+
+
+def test_rework_resubmit_skill_is_installed_and_uses_current_wake_contract() -> None:
+    skill = _read_skill_text_or_skip("rework-resubmit")
+    assert "Task-comment" in skill
+    assert "mentions wake the named board agent" in skill
+    assert "no API effect" not in skill
+    assert "http://192.168.2.64:8000" not in skill
+    assert "Authorization: Bearer" not in skill
+    assert "Structured Pipeline Evidence" in skill
+    assert "Do not copy or invent a variant" in skill
+    assert "runtime_verified --deploy-target <URL_OR_ENV> --evidence" not in skill
 
 
 def test_agents_md_variants_fit_current_local_bootstrap_cap() -> None:

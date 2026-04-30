@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -1359,6 +1360,173 @@ async def test_patch_agent_heartbeats_skips_config_patch_for_disabled_semantic_m
 
 
 @pytest.mark.asyncio
+async def test_patch_agent_heartbeats_adds_openclaw_426_runtime_guardrails(monkeypatch):
+    calls: list[tuple[str, dict[str, object] | None]] = []
+
+    async def _fake_openclaw_call(method, params=None, config=None):
+        _ = config
+        calls.append((method, params))
+        if method == "config.get":
+            return {
+                "hash": "h-426",
+                "config": {
+                    "agents": {
+                        "defaults": {
+                            "compaction": {
+                                "mode": "safeguard",
+                                "model": "ollama/qwen3.5:cloud",
+                                "notifyUser": False,
+                            },
+                            "subagents": {"maxConcurrent": 8, "runTimeoutSeconds": True},
+                        },
+                        "list": [
+                            {
+                                "id": "agent-x",
+                                "workspace": "/tmp/workspace-agent-x",
+                                "heartbeat": {"every": "10m"},
+                            },
+                        ],
+                    },
+                    "acp": {"dispatch": {"enabled": True}},
+                    "channels": {
+                        "defaults": {
+                            "heartbeat": {
+                                "showOk": False,
+                                "showAlerts": True,
+                                "useIndicator": True,
+                            }
+                        }
+                    },
+                    "tools": {"exec": {"host": "gateway"}},
+                },
+            }
+        if method == "config.patch":
+            return {"ok": True}
+        raise AssertionError(f"Unexpected method: {method}")
+
+    monkeypatch.setattr(agent_provisioning, "openclaw_call", _fake_openclaw_call)
+    cp = agent_provisioning.OpenClawGatewayControlPlane(
+        agent_provisioning.GatewayClientConfig(url="ws://gateway.example/ws", token=None),
+    )
+
+    await cp.patch_agent_heartbeats(
+        [
+            (
+                "agent-x",
+                "/tmp/workspace-agent-x",
+                {"every": "10m"},
+            )
+        ],
+    )
+
+    assert [method for method, _ in calls] == ["config.get", "config.patch"]
+    patch_params = calls[1][1]
+    assert isinstance(patch_params, dict)
+    assert patch_params["baseHash"] == "h-426"
+    raw = patch_params["raw"]
+    assert isinstance(raw, str)
+    patch = json.loads(raw)
+
+    compaction = patch["agents"]["defaults"]["compaction"]
+    assert compaction["mode"] == "safeguard"
+    assert compaction["model"] == "ollama/qwen3.5:cloud"
+    assert compaction["notifyUser"] is False
+    assert compaction["truncateAfterCompaction"] is True
+    assert compaction["maxActiveTranscriptBytes"] == "20mb"
+
+    subagents = patch["agents"]["defaults"]["subagents"]
+    assert subagents["maxConcurrent"] == 8
+    assert subagents["allowAgents"] == ["claude", "codex"]
+    assert subagents["requireAgentId"] is True
+    assert subagents["runTimeoutSeconds"] == 3600
+    assert subagents["archiveAfterMinutes"] == 120
+
+    assert patch["acp"]["dispatch"]["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_preserves_existing_openclaw_426_runtime_choices(
+    monkeypatch,
+):
+    calls: list[tuple[str, dict[str, object] | None]] = []
+
+    async def _fake_openclaw_call(method, params=None, config=None):
+        _ = config
+        calls.append((method, params))
+        if method == "config.get":
+            return {
+                "hash": "h-existing",
+                "config": {
+                    "agents": {
+                        "defaults": {
+                            "compaction": {
+                                "truncateAfterCompaction": True,
+                                "maxActiveTranscriptBytes": "64mb",
+                            },
+                            "subagents": {
+                                "maxConcurrent": 8,
+                                "allowAgents": ["research", "claude"],
+                                "requireAgentId": True,
+                                "runTimeoutSeconds": 1800,
+                                "archiveAfterMinutes": 45,
+                            },
+                        },
+                        "list": [
+                            {
+                                "id": "agent-x",
+                                "workspace": "/tmp/workspace-agent-x",
+                                "heartbeat": {"every": "10m"},
+                            },
+                        ],
+                    },
+                    "acp": {"dispatch": {"enabled": False}},
+                    "channels": {
+                        "defaults": {
+                            "heartbeat": {
+                                "showOk": False,
+                                "showAlerts": True,
+                                "useIndicator": True,
+                            }
+                        }
+                    },
+                    "tools": {"exec": {"host": "gateway"}},
+                },
+            }
+        if method == "config.patch":
+            return {"ok": True}
+        raise AssertionError(f"Unexpected method: {method}")
+
+    monkeypatch.setattr(agent_provisioning, "openclaw_call", _fake_openclaw_call)
+    cp = agent_provisioning.OpenClawGatewayControlPlane(
+        agent_provisioning.GatewayClientConfig(url="ws://gateway.example/ws", token=None),
+    )
+
+    await cp.patch_agent_heartbeats(
+        [
+            (
+                "agent-x",
+                "/tmp/workspace-agent-x",
+                {"every": "10m"},
+            )
+        ],
+    )
+
+    assert [method for method, _ in calls] == ["config.get", "config.patch"]
+    patch_params = calls[1][1]
+    assert isinstance(patch_params, dict)
+    raw = patch_params["raw"]
+    assert isinstance(raw, str)
+    patch = json.loads(raw)
+
+    assert "compaction" not in patch["agents"]["defaults"]
+
+    subagents = patch["agents"]["defaults"]["subagents"]
+    assert subagents["allowAgents"] == ["research", "claude", "codex"]
+    assert subagents["runTimeoutSeconds"] == 1800
+    assert subagents["archiveAfterMinutes"] == 45
+
+
+@pytest.mark.asyncio
 async def test_control_plane_upsert_agent_missing_after_already_exists_fails_fast(monkeypatch):
     calls: list[tuple[str, dict[str, object] | None]] = []
     sleeps: list[float] = []
@@ -1566,6 +1734,18 @@ def test_default_heartbeat_config_has_isolation():
     # happen without also redesigning every template to be fully self-
     # contained in HEARTBEAT.md.
     assert DEFAULT_HEARTBEAT_CONFIG["lightContext"] is False
+
+
+def test_board_lead_heartbeat_config_preserves_isolated_session():
+    agent = _AgentStub(
+        name="Supervisor",
+        heartbeat_config={"isolatedSession": True, "lightContext": False},
+        is_board_lead=True,
+    )
+
+    heartbeat = agent_provisioning._heartbeat_config(agent)  # type: ignore[arg-type]
+
+    assert heartbeat["isolatedSession"] is True
 
 
 def test_offline_threshold_exceeds_max_heartbeat():
