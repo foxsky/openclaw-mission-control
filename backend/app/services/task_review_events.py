@@ -11,7 +11,9 @@ from sqlalchemy import desc
 from sqlmodel import col, select
 
 from app.models.tasks import Task
+from app.models.task_pipeline_events import TaskPipelineEvent
 from app.models.task_review_events import TaskReviewEvent
+from app.schemas.task_pipeline_events import TaskPipelineEventRead
 from app.schemas.task_review_events import TaskReviewEventRead, TaskReviewReadinessRead
 
 if TYPE_CHECKING:
@@ -143,8 +145,14 @@ def build_review_readiness(
     task: Task,
     events: Sequence[TaskReviewEvent],
     board_task_ids: Collection[UUID] | None = None,
+    latest_fallback_step: TaskPipelineEvent | None = None,
 ) -> TaskReviewReadinessRead:
-    """Compute whether structured reviewer verdicts satisfy current task gates."""
+    """Compute whether structured reviewer verdicts satisfy current task gates.
+
+    The optional ``latest_fallback_step`` is informational — it is surfaced
+    inline so reviewers see WHICH model produced the packet, but it does
+    NOT participate in readiness gating.
+    """
 
     required_roles = required_review_roles(task.review_packet_type)
     latest_by_role = _latest_events_by_role(task=task, events=events)
@@ -166,6 +174,12 @@ def build_review_readiness(
     ready = bool(required_roles) and not missing_roles and not blocking_roles and all(
         latest_by_role[role].verdict == PASS_VERDICT for role in required_roles
     ) and not artifact_issues
+    fallback_payload: TaskPipelineEventRead | None = None
+    if latest_fallback_step is not None:
+        fallback_payload = TaskPipelineEventRead.model_validate(
+            latest_fallback_step,
+            from_attributes=True,
+        )
     return TaskReviewReadinessRead(
         task_id=task.id,
         review_packet_type=task.review_packet_type,
@@ -181,6 +195,7 @@ def build_review_readiness(
             task_review_event_read(event)
             for event in sorted(events, key=lambda value: value.created_at, reverse=True)
         ],
+        latest_fallback_step=fallback_payload,
     )
 
 
@@ -212,8 +227,27 @@ async def get_task_review_readiness(
         board_task_ids = set(
             await session.exec(select(Task.id).where(col(Task.board_id) == task.board_id)),
         )
+
+    # Pull the latest model_fallback pipeline event for the current cycle
+    # (in_progress_at → now). Fallback events are informational; they are
+    # surfaced inline on review-readiness so reviewers see the trajectory
+    # context without paging through pipeline events.
+    from app.services.task_pipeline import (
+        latest_model_fallback_step,
+        list_task_pipeline_events,
+    )
+
+    cycle_since = task.in_progress_at or task.previous_in_progress_at
+    pipeline_events = await list_task_pipeline_events(
+        session,
+        task_id=task.id,
+        since=cycle_since,
+    )
+    latest_fallback = latest_model_fallback_step(pipeline_events)
+
     return build_review_readiness(
         task=task,
         events=events,
         board_task_ids=board_task_ids,
+        latest_fallback_step=latest_fallback,
     )

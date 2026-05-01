@@ -7,6 +7,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from app.core.time import utcnow
+from app.models.task_pipeline_events import TaskPipelineEvent
 from app.models.task_review_events import TaskReviewEvent
 from app.models.tasks import Task
 from app.services.task_review_events import build_review_readiness
@@ -167,3 +168,92 @@ def test_review_only_architect_pass_accepts_explicit_no_child_tasks_required() -
 
     assert readiness.ready is True
     assert readiness.artifact_issues == []
+
+
+# --- B2: latest_fallback_step surfacing on review readiness ---
+
+
+def _fallback_event(task: Task, *, minutes_after_cycle: int = 2) -> TaskPipelineEvent:
+    """Build a model_fallback pipeline event for readiness tests."""
+    assert task.board_id is not None
+    assert task.in_progress_at is not None
+    return TaskPipelineEvent(
+        id=uuid4(),
+        board_id=task.board_id,
+        task_id=task.id,
+        agent_id=None,
+        state="model_fallback",
+        source="test",
+        evidence={
+            "from_model": "ollama/qwen3.5:cloud",
+            "to_model": "ollama/glm-5.1:cloud",
+            "reason": "timeout",
+            "chain_position": 1,
+            "final_outcome": "next_fallback",
+        },
+        created_at=task.in_progress_at + timedelta(minutes=minutes_after_cycle),
+    )
+
+
+class TestLatestFallbackStepSurfacing:
+    """Codex re-pass goal-aligned: B2 surfaces fallback context inline."""
+
+    def test_review_readiness_omits_fallback_when_none_occurred(self) -> None:
+        task = _task(review_packet_type="frontend_ui")
+        readiness = build_review_readiness(
+            task=task,
+            events=[
+                _event(task, reviewer_role="architect", verdict="pass"),
+                _event(task, reviewer_role="qa_e2e", verdict="pass"),
+            ],
+        )
+        assert readiness.latest_fallback_step is None
+
+    def test_review_readiness_includes_fallback_when_present(self) -> None:
+        task = _task(review_packet_type="frontend_ui")
+        fallback = _fallback_event(task)
+        readiness = build_review_readiness(
+            task=task,
+            events=[
+                _event(task, reviewer_role="architect", verdict="pass"),
+                _event(task, reviewer_role="qa_e2e", verdict="pass"),
+            ],
+            latest_fallback_step=fallback,
+        )
+        assert readiness.latest_fallback_step is not None
+        assert readiness.latest_fallback_step.state == "model_fallback"
+        assert readiness.latest_fallback_step.evidence is not None
+        assert readiness.latest_fallback_step.evidence["from_model"] == "ollama/qwen3.5:cloud"
+        assert readiness.latest_fallback_step.evidence["to_model"] == "ollama/glm-5.1:cloud"
+
+    def test_fallback_does_not_affect_ready_calculation(self) -> None:
+        """Fallback events are informational only; they must not gate ready=True."""
+        task = _task(review_packet_type="frontend_ui")
+        fallback = _fallback_event(task)
+        readiness = build_review_readiness(
+            task=task,
+            events=[
+                _event(task, reviewer_role="architect", verdict="pass"),
+                _event(task, reviewer_role="qa_e2e", verdict="pass"),
+            ],
+            latest_fallback_step=fallback,
+        )
+        # ready stays True even with a fallback present
+        assert readiness.ready is True
+
+    def test_fallback_serializes_via_pipeline_event_read(self) -> None:
+        """The surfaced fallback uses the canonical TaskPipelineEventRead shape."""
+        task = _task(review_packet_type="frontend_ui")
+        fallback = _fallback_event(task)
+        readiness = build_review_readiness(
+            task=task,
+            events=[
+                _event(task, reviewer_role="architect", verdict="pass"),
+                _event(task, reviewer_role="qa_e2e", verdict="pass"),
+            ],
+            latest_fallback_step=fallback,
+        )
+        # The fallback should round-trip through the model schema
+        assert readiness.latest_fallback_step is not None
+        assert readiness.latest_fallback_step.task_id == task.id
+        assert readiness.latest_fallback_step.created_at == fallback.created_at
