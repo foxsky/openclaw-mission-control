@@ -441,6 +441,9 @@ HANDLERS = {
     "tools/call": handle_tools_call,
 }
 
+_REQUEST_METHODS = frozenset(HANDLERS)
+_NOTIFICATION_METHODS = frozenset({"notifications/initialized"})
+
 
 def make_response(request_id: object, result: dict[str, Any]) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
@@ -452,10 +455,6 @@ def make_error(request_id: object, code: int, message: str) -> dict[str, Any]:
         "id": request_id,
         "error": {"code": code, "message": message},
     }
-
-
-_REQUEST_METHODS = frozenset({"initialize", "tools/list", "tools/call"})
-_NOTIFICATION_METHODS = frozenset({"notifications/initialized"})
 
 
 def process_message(message: dict[str, Any]) -> dict[str, Any] | None:

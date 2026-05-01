@@ -222,6 +222,10 @@ def cmd_review_event_create(args: argparse.Namespace) -> dict[str, Any]:
         payload["build_hash"] = args.build_hash
     if args.commit_sha:
         payload["source_commit"] = args.commit_sha
+    if args.blocking_owner:
+        payload["blocking_owner"] = args.blocking_owner
+    if args.suggested_routing:
+        payload["suggested_routing"] = args.suggested_routing
     evidence = _parse_evidence(args.evidence)
     if evidence is not None:
         payload["evidence"] = evidence
@@ -345,6 +349,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub_review.add_argument("--target", default=None)
     sub_review.add_argument("--build-hash", default=None)
     sub_review.add_argument("--commit-sha", default=None)
+    sub_review.add_argument(
+        "--blocking-owner",
+        default=None,
+        help="For FAIL/INCONCLUSIVE: who must fix it (e.g. PF, PB, DevOps).",
+    )
+    sub_review.add_argument(
+        "--suggested-routing",
+        default=None,
+        help="Free-form routing hint for the lead (e.g. 'lead move to rework for PF').",
+    )
     sub_review.add_argument(
         "--evidence",
         default=None,

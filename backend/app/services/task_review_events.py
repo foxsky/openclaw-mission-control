@@ -15,6 +15,7 @@ from app.models.task_pipeline_events import TaskPipelineEvent
 from app.models.task_review_events import TaskReviewEvent
 from app.schemas.task_pipeline_events import TaskPipelineEventRead
 from app.schemas.task_review_events import TaskReviewEventRead, TaskReviewReadinessRead
+from app.services.task_pipeline import fetch_latest_model_fallback_step
 
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
@@ -221,21 +222,14 @@ async def get_task_review_readiness(
 ) -> TaskReviewReadinessRead:
     """Load structured review verdicts and compute readiness for a task."""
 
-    events = await list_task_review_events(session, task_id=task.id)
+    cycle_since = _cycle_since(task)
+    events = await list_task_review_events(session, task_id=task.id, since=cycle_since)
     board_task_ids: set[UUID] | None = None
     if task.board_id is not None:
         board_task_ids = set(
             await session.exec(select(Task.id).where(col(Task.board_id) == task.board_id)),
         )
 
-    # Pull the latest model_fallback pipeline event for the current cycle.
-    # Pushes ``state = 'model_fallback'`` + ``ORDER BY created_at DESC
-    # LIMIT 1`` to SQL so the per-task cost is one targeted row, not a
-    # full event-list fetch (avoids the N+1 pattern when the lead loops
-    # every review task on next-action).
-    from app.services.task_pipeline import fetch_latest_model_fallback_step
-
-    cycle_since = task.in_progress_at or task.previous_in_progress_at
     latest_fallback = await fetch_latest_model_fallback_step(
         session,
         task_id=task.id,

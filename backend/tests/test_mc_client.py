@@ -162,6 +162,29 @@ class TestArgparse:
         )
         assert args.verdict == "infra_blocked"
 
+    def test_review_event_accepts_blocking_owner_and_routing(self) -> None:
+        """structured-review-verdict skill documents both flags as the
+        preferred path for FAIL/INCONCLUSIVE routing hints; the CLI must
+        actually carry them or the skill docs lie."""
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "review-event-create",
+                "--task",
+                "abc",
+                "--reviewer-role",
+                "architect",
+                "--verdict",
+                "fail",
+                "--blocking-owner",
+                "PF",
+                "--suggested-routing",
+                "lead move to rework for PF",
+            ]
+        )
+        assert args.blocking_owner == "PF"
+        assert args.suggested_routing == "lead move to rework for PF"
+
 
 # --- env-var resolution ---
 
