@@ -178,6 +178,23 @@ def _actor(agent_ctx: AgentAuthContext) -> ActorContext:
     return ActorContext(actor_type="agent", agent=agent_ctx.agent)
 
 
+def _task_card_with_reason_codes(
+    task: TaskRead,
+    *,
+    open_blocker_reason_codes: list[str],
+    pending_operator_decision_reason_codes: list[str],
+) -> TaskCardRead:
+    task_payload = task.model_dump()
+    # ``tasks_api.list_tasks`` may already return ``TaskCardRead`` rows
+    # from the user-auth path. Replace enrichment fields instead of
+    # passing duplicate keyword arguments into the Pydantic constructor.
+    task_payload["open_blocker_reason_codes"] = open_blocker_reason_codes
+    task_payload["pending_operator_decision_reason_codes"] = (
+        pending_operator_decision_reason_codes
+    )
+    return TaskCardRead(**task_payload)
+
+
 async def _lead_approval_state_by_task_id(
     session: AsyncSession,
     *,
@@ -755,19 +772,14 @@ async def list_tasks(
         session, board_id=board.id, task_ids=page_task_ids,
     )
     enriched = [
-        TaskCardRead(
-            **task.model_dump(),
+        _task_card_with_reason_codes(
+            task,
             open_blocker_reason_codes=blocker_codes.get(task.id, []),
             pending_operator_decision_reason_codes=decision_codes.get(task.id, []),
         )
         for task in page.items
     ]
-    return LimitOffsetPage[TaskCardRead](
-        items=enriched,
-        total=page.total,
-        limit=page.limit,
-        offset=page.offset,
-    )
+    return page.model_copy(update={"items": enriched})
 
 
 @router.get(
