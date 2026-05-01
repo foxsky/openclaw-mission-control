@@ -180,6 +180,93 @@ class TestEnvFallback:
             main(["task-read", "--task", "abc"])
         assert "BOARD_ID" in str(exc.value)
 
+    def test_board_flag_must_match_env_when_both_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Codex 3rd-pass finding: skill claims cross-board enforcement;
+        verify the guard actually fires when --board disagrees with $BOARD_ID.
+        """
+        monkeypatch.setenv("LOCAL_AUTH_TOKEN", "tok")
+        monkeypatch.setenv("BOARD_ID", "board-from-env")
+        with pytest.raises(SystemExit) as exc:
+            main(["--board", "different-board", "task-read", "--task", "abc"])
+        message = str(exc.value)
+        assert "does not match" in message
+        assert "different-board" in message
+        assert "board-from-env" in message
+
+    def test_board_flag_alone_works_when_env_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--board override is fine when $BOARD_ID is unset (no conflict)."""
+        from unittest import mock
+
+        monkeypatch.setenv("LOCAL_AUTH_TOKEN", "tok")
+        monkeypatch.delenv("BOARD_ID", raising=False)
+
+        class _Resp:
+            def __enter__(self) -> "_Resp":
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                pass
+
+            def read(self) -> bytes:
+                return json.dumps({"items": [{"id": "abc", "title": "t"}]}).encode()
+
+        def fake_urlopen(req, timeout=None):
+            return _Resp()
+
+        with mock.patch.object(_module.urllib.request, "urlopen", fake_urlopen):
+            rc = main(
+                [
+                    "--base-url",
+                    "http://test",
+                    "--board",
+                    "explicit-board",
+                    "task-read",
+                    "--task",
+                    "abc",
+                ]
+            )
+        assert rc == 0
+
+    def test_board_flag_matches_env_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Idempotent: passing --board with the same value as $BOARD_ID is fine."""
+        from unittest import mock
+
+        monkeypatch.setenv("LOCAL_AUTH_TOKEN", "tok")
+        monkeypatch.setenv("BOARD_ID", "same-board")
+
+        class _Resp:
+            def __enter__(self) -> "_Resp":
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                pass
+
+            def read(self) -> bytes:
+                return json.dumps({"items": [{"id": "abc", "title": "t"}]}).encode()
+
+        def fake_urlopen(req, timeout=None):
+            return _Resp()
+
+        with mock.patch.object(_module.urllib.request, "urlopen", fake_urlopen):
+            rc = main(
+                [
+                    "--base-url",
+                    "http://test",
+                    "--board",
+                    "same-board",
+                    "task-read",
+                    "--task",
+                    "abc",
+                ]
+            )
+        assert rc == 0
+
 
 # --- HTTP layer (with stubbed urlopen) ---
 

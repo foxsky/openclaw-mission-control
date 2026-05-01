@@ -90,7 +90,23 @@ def _resolve_token(args: argparse.Namespace) -> str:
 
 
 def _resolve_board(args: argparse.Namespace) -> str:
-    board = args.board or os.environ.get("BOARD_ID")
+    """Resolve the board id, with cross-board guard.
+
+    The skill at ``backend/skills/mc-board-api/SKILL.md`` documents that
+    the CLI prevents accidental cross-board writes. Enforce that here:
+    if both ``--board`` and ``$BOARD_ID`` are set and they disagree, abort
+    rather than silently use the override. Codex re-pass finding from the
+    2026-05-01 third review.
+    """
+    env_board = os.environ.get("BOARD_ID") or None
+    flag_board = args.board or None
+    if flag_board and env_board and flag_board != env_board:
+        raise SystemExit(
+            f"--board {flag_board!r} does not match $BOARD_ID {env_board!r}; "
+            "refusing to write to a different board than the one the spawn "
+            "parent provisioned. Unset BOARD_ID or pass the matching value."
+        )
+    board = flag_board or env_board
     if not board:
         raise SystemExit(
             "no board id: set BOARD_ID env var or pass --board"
