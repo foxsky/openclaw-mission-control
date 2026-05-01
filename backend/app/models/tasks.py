@@ -59,10 +59,13 @@ class Task(TenantScoped, table=True):
         index=True,
     )
     # Phase V: explicit parent/child link for decomposition cascade.
-    # Set when a subtask is created from a parent's decomposition plan
-    # (see ``lead-inbox-routing`` Umbrella Lifecycle). Distinct from
-    # ``TaskDependency`` (ordering) — children point at the umbrella,
-    # not at sibling prereqs.
+    # Set at create time when a subtask is created from a parent's
+    # decomposition plan (see ``lead-inbox-routing`` Umbrella
+    # Lifecycle). Treated as immutable post-create: ``TaskUpdate``
+    # deliberately does not surface this field, so PATCH callers
+    # cannot re-parent a task. If reparenting becomes a real need,
+    # add the field to ``TaskUpdate`` together with revalidation
+    # (no self-parent, no cross-board, no cycles via parent chain).
     parent_task_id: UUID | None = Field(
         default=None,
         foreign_key="tasks.id",

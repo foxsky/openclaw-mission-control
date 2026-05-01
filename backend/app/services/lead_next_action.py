@@ -10,6 +10,7 @@ from uuid import UUID
 from app.core.time import as_naive_utc, utcnow
 from app.models.tasks import Task
 from app.schemas.lead_actions import LeadNextActionName, LeadNextActionRead
+from app.services.parent_cascade import TERMINAL_STATUSES
 from app.services.task_pipeline import split_missing_states_by_default_owner
 
 ApprovalState = Literal["none", "pending", "approved", "rejected"]
@@ -277,22 +278,28 @@ def select_lead_next_action(
 
     # Phase V — orphan children of terminal parents. Surface BEFORE
     # rework/inbox routing so the lead retires obsolete decomposition
-    # children rather than nudging owners to keep working on them. We
-    # iterate the full ``tasks`` list (not ``ordered``) because an
+    # children rather than nudging owners to keep working on them.
+    # Iterates the full ``tasks`` list (not ``ordered``) because an
     # orphan child can carry its own waiting flags — those don't
-    # disqualify it from cleanup; the parent terminating already
-    # declared the work moot. Active review/in_progress orphans are
-    # left to complete naturally — those branches return earlier.
+    # disqualify cleanup; the parent terminating already declared the
+    # work moot. Orphans currently in ``review`` or ``in_progress``
+    # are left to complete naturally — earlier branches will have
+    # surfaced those if they need attention. Already-terminal orphans
+    # are skipped (race-safe: snapshot may include a child that
+    # transitioned during the tick). Sorted by id (not timestamp like
+    # ``_task_sort_key``) because cleanup ordering is arbitrary as
+    # long as it is deterministic across calls within the same tick.
     if orphan_children_with_terminal_parent:
-        # Stable order: the lowest-id task that's an orphan, so the
-        # action is deterministic across calls within the same tick.
-        orphan_candidates = [
-            task for task in tasks
-            if task.id in orphan_children_with_terminal_parent
-            and task.status not in {"done", "cancelled", "review", "in_progress"}
-        ]
+        orphan_candidates = sorted(
+            (
+                task for task in tasks
+                if task.id in orphan_children_with_terminal_parent
+                and task.status not in TERMINAL_STATUSES
+                and task.status not in {"review", "in_progress"}
+            ),
+            key=lambda t: str(t.id),
+        )
         if orphan_candidates:
-            orphan_candidates.sort(key=lambda t: (str(t.id),))
             orphan_task = orphan_candidates[0]
             parent_id = orphan_children_with_terminal_parent[orphan_task.id]
             return _action(

@@ -120,7 +120,7 @@ from app.services.operator_decisions import (
 from app.services.parent_cascade import (
     TERMINAL_STATUSES,
     non_terminal_children_of,
-    orphan_children_with_terminal_parent,
+    orphan_children_by_parent_id,
 )
 from app.services.task_dependencies import (
     blocked_by_dependency_ids,
@@ -659,7 +659,7 @@ def _operator_only_cancel_error() -> HTTPException:
 
 
 def _status_clears_blockers(status_value: str) -> bool:
-    return status_value in {"done", "cancelled"}
+    return status_value in TERMINAL_STATUSES
 
 
 def _task_has_operator_decision_block(task: Task) -> bool:
@@ -2422,6 +2422,14 @@ async def _task_read_page(
     pending_decision_task_ids = await task_ids_with_pending_operator_decision(
         session, board_id=board_id, task_ids=task_ids
     )
+    terminal_parent_ids = [t.id for t in tasks if t.status in TERMINAL_STATUSES]
+    orphan_children_map = (
+        await orphan_children_by_parent_id(
+            session, board_id=board_id, parent_task_ids=terminal_parent_ids
+        )
+        if terminal_parent_ids
+        else {}
+    )
 
     output: list[TaskRead] = []
     for task in tasks:
@@ -2449,6 +2457,7 @@ async def _task_read_page(
                         ),
                     ),
                     "custom_field_values": custom_field_values_by_task_id.get(task.id, {}),
+                    "orphan_child_task_ids": orphan_children_map.get(task.id, []),
                 },
             ),
         )
