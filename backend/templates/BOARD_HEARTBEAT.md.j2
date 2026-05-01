@@ -168,8 +168,9 @@ If this fails (5xx/network), stop. Do not continue.
 2. **Frontend Parallel Scheduler Gate.** This replaces the single-task
    selector while `identity.frontend_parallel_mode={{ identity_frontend_parallel_mode }}`
    is enabled. Do not use the main workspace for implementation children.
-   Maintain up to 4 active implementation tasks unless the operator has
-   explicitly raised or lowered the cap.
+   Maintain up to 2 active implementation tasks unless the operator has
+   explicitly raised the cap (the embedded scheduler enforces this at
+   `if len(active) < 2:` below).
 
    First, if this wake contains an ACP child completion, process that result
    with `acp-post-review`; do not spawn new work on the same tick.
@@ -182,10 +183,10 @@ If this fails (5xx/network), stop. Do not continue.
    whose ACP spawn never returned `accepted` does **not** count toward the
    cap — these tasks are assigned to you but no child is running, so they
    consume zero ACP capacity. If active count by this strict definition is
-   already `4`, return `HEARTBEAT_OK` unless a selected active child result
+   already `2`, return `HEARTBEAT_OK` unless a selected active child result
    needs processing.
 
-   If active count is below `4`, choose the first non-blocked task in this
+   If active count is below `2`, choose the first non-blocked task in this
    order: active `in_progress` without an unfinished child, assigned `rework`
    that has cleared its blocker, then assigned `inbox`. Set `TASK_ID` before
    continuing.

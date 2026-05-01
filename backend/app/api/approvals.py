@@ -829,6 +829,27 @@ async def update_approval(
                     "requested_status": target_status,
                 },
             )
+        # Audit-integrity guard: ``approved -> pending`` is forbidden because
+        # it converts a 2-PATCH overturn (approved -> pending -> rejected)
+        # into a clean bypass of the terminal-flip conflict guard above.
+        # The legitimate rehydrate path is ``rejected -> pending`` (worker
+        # re-submitting after a rejection); approving and then "un-approving"
+        # has no legitimate ergonomics — operators who need to overturn an
+        # approved decision must open a new approval. Codex F2 from the
+        # 2026-05-01 review re-pass.
+        if target_status == "pending" and prior_status == "approved":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": (
+                        "Cannot reopen an approved approval to pending; "
+                        "create a new approval to overturn."
+                    ),
+                    "approval_id": str(approval.id),
+                    "current_status": prior_status,
+                    "requested_status": target_status,
+                },
+            )
         if target_status == "pending" and prior_status != "pending":
             task_ids_by_approval = await load_task_ids_by_approval(
                 session, approval_ids=[approval.id]
