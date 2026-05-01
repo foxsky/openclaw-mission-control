@@ -385,6 +385,58 @@ def test_routes_unassigned_inbox_when_no_review_or_active_work_exists() -> None:
     assert action.task_id == task.id
 
 
+def test_routes_unassigned_inbox_before_assigned_rework() -> None:
+    inbox = _task(status="inbox", title="New inbox")
+    rework = _task(status="rework", title="Existing rework", assigned=True)
+
+    action = select_lead_next_action(
+        tasks=[rework, inbox],
+        blocked_by_task_id={},
+        approval_state_by_task_id={},
+        pipeline_missing_by_task_id={},
+    )
+
+    assert action.action_required is True
+    assert action.action == "route_inbox"
+    assert action.reason_code == "unassigned_inbox_needs_routing"
+    assert action.task_id == inbox.id
+
+
+def test_routes_assigned_inbox_for_lead_triage() -> None:
+    task = _task(status="inbox", title="Assigned inbox", assigned=True)
+
+    action = select_lead_next_action(
+        tasks=[task],
+        blocked_by_task_id={},
+        approval_state_by_task_id={},
+        pipeline_missing_by_task_id={},
+    )
+
+    assert action.action_required is True
+    assert action.action == "route_inbox"
+    assert action.reason_code == "assigned_inbox_needs_lead_triage"
+    assert action.task_id == task.id
+    assert action.assigned_agent_id == task.assigned_agent_id
+    assert action.details["next_step"] == "triage_assigned_inbox"
+
+
+def test_routes_assigned_inbox_before_assigned_rework() -> None:
+    inbox = _task(status="inbox", title="Assigned inbox", assigned=True)
+    rework = _task(status="rework", title="Existing rework", assigned=True)
+
+    action = select_lead_next_action(
+        tasks=[rework, inbox],
+        blocked_by_task_id={},
+        approval_state_by_task_id={},
+        pipeline_missing_by_task_id={},
+    )
+
+    assert action.action_required is True
+    assert action.action == "route_inbox"
+    assert action.reason_code == "assigned_inbox_needs_lead_triage"
+    assert action.task_id == inbox.id
+
+
 def test_returns_clear_when_only_known_blocked_work_remains() -> None:
     task = _task(status="in_progress", title="Blocked work", assigned=True)
 

@@ -275,6 +275,31 @@ def select_lead_next_action(
         )
 
     for task in ordered:
+        if task.status == "inbox" and task.assigned_agent_id is None:
+            return _action(
+                task=task,
+                action_required=True,
+                action="route_inbox",
+                reason_code="unassigned_inbox_needs_routing",
+            )
+
+    for task in ordered:
+        if task.status == "inbox" and task.assigned_agent_id is not None:
+            return _action(
+                task=task,
+                action_required=True,
+                action="route_inbox",
+                reason_code="assigned_inbox_needs_lead_triage",
+                details={
+                    "next_step": "triage_assigned_inbox",
+                    "lead_must_decide": (
+                        "move_to_review_if_review_intake, move_to_in_progress_if_implementation, "
+                        "decompose_or_block_if_parked"
+                    ),
+                },
+            )
+
+    for task in ordered:
         if task.status == "rework" and task.assigned_agent_id is not None:
             return _action(
                 task=task,
@@ -304,15 +329,6 @@ def select_lead_next_action(
                 ),
             },
         )
-
-    for task in ordered:
-        if task.status == "inbox" and task.assigned_agent_id is None:
-            return _action(
-                task=task,
-                action_required=True,
-                action="route_inbox",
-                reason_code="unassigned_inbox_needs_routing",
-            )
 
     return _action(
         task=None,

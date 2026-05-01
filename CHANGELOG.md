@@ -2,6 +2,12 @@
 
 All notable changes to the OpenClaw Mission Control fork.
 
+## 2026-05-01
+
+### Fixed
+- **Lead inbox routing starvation**: `/lead/next-action` now surfaces unassigned and assigned actionable `inbox` tasks before owner follow-up on assigned `rework`/`in_progress` tasks, so stale ready inbox work gets lead triage instead of being hidden behind older active lanes.
+- **Review-only inbox handoff loop**: QA and Architect templates no longer instruct validation/review agents to PATCH `inbox -> review`, which the agent API rejects. Assigned inbox intake is now explicitly lead-routed with a single `@lead` marker.
+
 ## 2026-04-29
 
 ### Changed

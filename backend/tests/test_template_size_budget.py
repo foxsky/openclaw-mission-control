@@ -223,7 +223,7 @@ def test_frontend_parallel_heartbeat_schedules_worktree_acp_children() -> None:
 
     assert "Frontend Parallel Scheduler Gate" in rendered
     assert "- `WORKSPACE_PATH` when `identity.frontend_parallel_mode` is worktree" in rendered
-    assert "Maintain up to 2 active implementation tasks" in rendered
+    assert "Maintain up to 4 active implementation tasks" in rendered
     assert "def unfinished_child" in rendered
     assert "/tmp/mc-frontend-scheduler.env" in rendered
     assert 'WT_PATH="/tmp/wt-$TASK_SHORT"' in rendered
@@ -710,8 +710,10 @@ def test_phase1_review_loop_guardrails_render_for_frontend_architect_and_lead() 
     assert "Post one blocker summary" in lead_agents
     assert "Keep failed review in `rework`" in lead_agents
     assert "worker escalation still starts at `3+ rejections`." in lead_agents
-    assert "set `review_packet_type`, known `validation_target*`, and `operator_decision_required` when needed" in lead_agents
-    assert "route around operator-gated work" in lead_agents
+    assert "use first-class `OperatorDecision` links for human/operator choices" in lead_agents
+    assert "structured `Blocker` rows for runtime/deploy/source/contract friction" in lead_agents
+    assert "Do not set legacy `operator_decision_required` on active assigned work" in lead_agents
+    assert "human/operator choice" in lead_agents
 
 
 def test_pf_pb_and_acp_skills_enforce_tdd_discipline() -> None:
@@ -797,6 +799,9 @@ def test_architect_templates_are_review_only_without_worker_leakage() -> None:
     heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
     assert 'order = ["review", "inbox"]' in heartbeat
     assert 'order = ["in_progress"' not in heartbeat
+    assert "Assigned `inbox` review intake requires lead routing" in heartbeat
+    assert "For a chosen `inbox` review task, move it to `review`" not in heartbeat
+    assert '-d \'{"status": "review"}\'' not in heartbeat
     assert "post the result to the task comment without `@lead`" in heartbeat
     assert "post the result to the task comment, tag `@lead`" not in heartbeat
     assert "## Inbox Pickup Gate" not in heartbeat
@@ -846,6 +851,9 @@ def test_qa_unit_templates_are_validation_only_without_worker_leakage() -> None:
     heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
     assert 'order = ["review", "inbox"]' in heartbeat
     assert 'order = ["in_progress"' not in heartbeat
+    assert "Assigned `inbox` validation intake requires lead routing" in heartbeat
+    assert "For a chosen `inbox` validation task, move it to `review`" not in heartbeat
+    assert '-d \'{"status": "review"}\'' not in heartbeat
     assert "post the result to the task comment without `@lead`" in heartbeat
     assert "post the result to the task comment, tag `@lead`" not in heartbeat
     assert "Do not move `review` to `rework`" in heartbeat
@@ -1033,7 +1041,7 @@ def test_frontend_heartbeat_allows_explicit_worktree_parallelism_only_by_profile
 
     heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
     assert "Experimental opt-in worktree task parallelism is enabled" in heartbeat
-    assert "Cap at 2 active implementation tasks" in heartbeat
+    assert "Cap at 4 active implementation tasks" in heartbeat
     assert "`acp-delegation` § Worktree Task Mode" in heartbeat
     assert "Completion-woken ticks process child results only" in heartbeat
     assert "sessions_spawn({" not in heartbeat
@@ -1093,6 +1101,8 @@ def test_custom_lead_skills_match_template_boundaries() -> None:
     assert "LEAD_NEXT_ACTION_REQUIRED" in next_action
     assert "review_task_ready_for_approval" in next_action
     assert "create exactly" in next_action
+    assert "assigned_inbox_needs_lead_triage" in next_action
+    assert "assigned inbox" in next_action.lower()
 
     health = _read_skill_text_or_skip("lead-health-scan")
     assert "LEAD_TASKS_JSON" in health
