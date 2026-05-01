@@ -88,6 +88,29 @@ async def list_task_pipeline_events(
     return list(await session.exec(statement))
 
 
+async def list_task_pipeline_events_for_tasks(
+    session: AsyncSession,
+    *,
+    task_ids: Sequence[UUID],
+) -> dict[UUID, list[TaskPipelineEvent]]:
+    """Batch-fetch pipeline events grouped by task_id (one SQL pass).
+
+    Per-task ``cycle_since`` filtering is the caller's job — each task has
+    its own cycle. Events within a group are sorted ``created_at DESC``.
+    """
+    if not task_ids:
+        return {}
+    statement = (
+        select(TaskPipelineEvent)
+        .where(col(TaskPipelineEvent.task_id).in_(list(task_ids)))
+        .order_by(desc(col(TaskPipelineEvent.created_at)))
+    )
+    events_by_task: dict[UUID, list[TaskPipelineEvent]] = {}
+    for event in await session.exec(statement):
+        events_by_task.setdefault(event.task_id, []).append(event)
+    return events_by_task
+
+
 def pipeline_present_states(events: Sequence[TaskPipelineEvent]) -> list[str]:
     """Distinct readiness-relevant states observed in the event stream.
 

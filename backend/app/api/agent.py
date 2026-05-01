@@ -74,11 +74,10 @@ from app.services.lead_next_action import (
 from app.services.tags import replace_tags, validate_tag_ids
 from app.services.task_pipeline import (
     frontend_pipeline_required,
-    list_task_pipeline_events,
+    list_task_pipeline_events_for_tasks,
     pipeline_missing_states,
 )
 from app.services.task_review_events import (
-    get_task_review_readiness,
     get_task_review_readiness_batch,
 )
 from app.services.task_dependencies import (
@@ -253,18 +252,23 @@ async def _lead_pipeline_missing_by_task_id(
     *,
     tasks: Sequence[Task],
 ) -> dict[UUID, list[str]]:
+    relevant_tasks = [
+        task
+        for task in tasks
+        if task.status in {"in_progress", "review"}
+        and frontend_pipeline_required(task.review_packet_type)
+    ]
+    if not relevant_tasks:
+        return {}
+    events_by_task = await list_task_pipeline_events_for_tasks(
+        session, task_ids=[task.id for task in relevant_tasks]
+    )
     missing_by_task_id: dict[UUID, list[str]] = {}
-    for task in tasks:
-        if task.status not in {"in_progress", "review"}:
-            continue
-        if not frontend_pipeline_required(task.review_packet_type):
-            continue
+    for task in relevant_tasks:
         cycle_since = task.in_progress_at or task.previous_in_progress_at
-        events = await list_task_pipeline_events(
-            session,
-            task_id=task.id,
-            since=cycle_since,
-        )
+        events = events_by_task.get(task.id, [])
+        if cycle_since is not None:
+            events = [event for event in events if event.created_at >= cycle_since]
         missing_by_task_id[task.id] = pipeline_missing_states(events)
     return missing_by_task_id
 

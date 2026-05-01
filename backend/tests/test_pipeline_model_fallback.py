@@ -422,3 +422,110 @@ class TestFetchLatestModelFallbackStepsForTasks:
                 assert evidence_b["reason"] == "overloaded"
         finally:
             await engine.dispose()
+
+
+# --- Batched all-events fetch (lead pipeline-missing N+1 fix) ---
+
+
+class TestListTaskPipelineEventsForTasks:
+    """``list_task_pipeline_events_for_tasks`` returns one SQL pass and
+    groups events by task_id, sorted ``created_at DESC`` per group.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_task_ids_returns_empty_dict(self) -> None:
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlmodel import SQLModel
+        from sqlmodel.ext.asyncio.session import AsyncSession
+
+        from app.services.task_pipeline import list_task_pipeline_events_for_tasks
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.connect() as conn, conn.begin():
+            await conn.run_sync(SQLModel.metadata.create_all)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                result = await list_task_pipeline_events_for_tasks(session, task_ids=[])
+                assert result == {}
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_groups_events_by_task_with_one_query(self) -> None:
+        from sqlalchemy import event as sa_event
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlmodel import SQLModel
+        from sqlmodel.ext.asyncio.session import AsyncSession
+
+        from app.services.task_pipeline import list_task_pipeline_events_for_tasks
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.connect() as conn, conn.begin():
+            await conn.run_sync(SQLModel.metadata.create_all)
+
+        query_count = 0
+
+        @sa_event.listens_for(engine.sync_engine, "before_cursor_execute")
+        def _count(*_args: object, **_kwargs: object) -> None:
+            nonlocal query_count
+            query_count += 1
+
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                board_id = uuid4()
+                task_a = uuid4()
+                task_b = uuid4()
+                task_c = uuid4()  # has no events at all
+                base = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+
+                rows = [
+                    TaskPipelineEvent(
+                        id=uuid4(),
+                        board_id=board_id,
+                        task_id=task_a,
+                        agent_id=None,
+                        state="committed",
+                        source="test",
+                        commit_sha="abc1234",
+                        created_at=base,
+                    ),
+                    TaskPipelineEvent(
+                        id=uuid4(),
+                        board_id=board_id,
+                        task_id=task_a,
+                        agent_id=None,
+                        state="built",
+                        source="test",
+                        commit_sha="abc1234",
+                        artifact_hash="art-1",
+                        created_at=base + timedelta(minutes=1),
+                    ),
+                    TaskPipelineEvent(
+                        id=uuid4(),
+                        board_id=board_id,
+                        task_id=task_b,
+                        agent_id=None,
+                        state="code_changed",
+                        source="test",
+                        created_at=base,
+                    ),
+                ]
+                session.add_all(rows)
+                await session.commit()
+
+                query_count = 0
+                result = await list_task_pipeline_events_for_tasks(
+                    session, task_ids=[task_a, task_b, task_c]
+                )
+
+                assert set(result.keys()) == {task_a, task_b}  # task_c absent
+                assert len(result[task_a]) == 2
+                # DESC order — newest first
+                assert result[task_a][0].state == "built"
+                assert result[task_a][1].state == "committed"
+                assert len(result[task_b]) == 1
+                assert query_count == 1, (
+                    f"expected 1 query for batch fetch; got {query_count}"
+                )
+        finally:
+            await engine.dispose()
