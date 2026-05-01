@@ -130,6 +130,38 @@ class TestArgparse:
                 ]
             )
 
+    def test_review_event_rejects_partial_not_in_real_schema(self) -> None:
+        """Codex F3: 'partial' was wrongly in choices and not in MC schema."""
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(
+                [
+                    "review-event-create",
+                    "--task",
+                    "abc",
+                    "--reviewer-role",
+                    "architect",
+                    "--verdict",
+                    "partial",
+                ]
+            )
+
+    def test_review_event_accepts_infra_blocked(self) -> None:
+        """Codex F3: 'infra_blocked' was wrongly omitted; valid per MC schema."""
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "review-event-create",
+                "--task",
+                "abc",
+                "--reviewer-role",
+                "devops",
+                "--verdict",
+                "infra_blocked",
+            ]
+        )
+        assert args.verdict == "infra_blocked"
+
 
 # --- env-var resolution ---
 

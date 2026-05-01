@@ -321,7 +321,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub_review.add_argument(
         "--verdict",
         required=True,
-        choices=["pass", "fail", "partial", "inconclusive"],
+        # Mirrors backend/app/schemas/task_review_events.py ReviewVerdict
+        # Literal — keep in sync if MC's schema changes.
+        choices=["pass", "fail", "inconclusive", "infra_blocked"],
     )
     sub_review.add_argument("--evidence-type", default=None)
     sub_review.add_argument("--target", default=None)

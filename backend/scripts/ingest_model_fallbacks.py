@@ -31,8 +31,10 @@ import dataclasses
 import hashlib
 import json
 import logging
+import os
 import re
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Iterable, Iterator
@@ -123,6 +125,42 @@ def parse_gateway_log(log_path: Path) -> Iterator[FallbackEvent]:
             )
 
 
+_PAGE_SIZE = 200
+_MAX_PAGES = 50  # safety stop to avoid runaway pagination on a misbehaving API
+
+
+def _paginate_get(
+    *,
+    base_url: str,
+    path: str,
+    token: str,
+    timeout: int = 15,
+) -> Iterator[dict[str, object]]:
+    """Yield items from a paginated MC list endpoint.
+
+    Walks ``offset`` until the page is empty OR ``offset + page_size >= total``
+    (when the response carries a ``total`` field) OR the safety cap is hit.
+    Tolerates list-shaped responses (no envelope) by yielding once and
+    stopping. Codex F4 from the 2026-05-01 review.
+    """
+    for page_idx in range(_MAX_PAGES):
+        offset = page_idx * _PAGE_SIZE
+        url = f"{base_url}{path}?limit={_PAGE_SIZE}&offset={offset}"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read())
+        if isinstance(body, list):
+            yield from body
+            return
+        items = body.get("items", []) if isinstance(body, dict) else []
+        if not items:
+            return
+        yield from items
+        total = body.get("total") if isinstance(body, dict) else None
+        if isinstance(total, int) and offset + _PAGE_SIZE >= total:
+            return
+
+
 def fetch_executor_started_comments(
     *,
     mc_base_url: str,
@@ -133,39 +171,34 @@ def fetch_executor_started_comments(
 
     Walks recent comments on every task in the board and parses the markers.
     For boards with many tasks this is N HTTP calls; acceptable for the
-    cron cadence. For high-volume boards, callers can pre-filter by
-    in_progress / review status.
+    cron cadence. Both the task list and the per-task comments are
+    paginated (Codex F4) so boards with > 200 tasks or tasks with > 200
+    comments do not silently drop markers from later pages.
     """
-    tasks_url = f"{mc_base_url}/api/v1/boards/{board_id}/tasks?limit=200"
-    req = urllib.request.Request(tasks_url, headers={"Authorization": f"Bearer {mc_token}"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        body = json.loads(resp.read())
-    items = body if isinstance(body, list) else body.get("items", [])
-
     run_to_task: dict[str, str] = {}
-    for task in items:
+    for task in _paginate_get(
+        base_url=mc_base_url,
+        path=f"/api/v1/boards/{board_id}/tasks",
+        token=mc_token,
+    ):
         task_id = task.get("id")
         if not task_id:
             continue
-        comments_url = (
-            f"{mc_base_url}/api/v1/boards/{board_id}/tasks/{task_id}/comments?limit=200"
-        )
-        req = urllib.request.Request(
-            comments_url, headers={"Authorization": f"Bearer {mc_token}"}
-        )
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                comments_body = json.loads(resp.read())
+            comments = list(
+                _paginate_get(
+                    base_url=mc_base_url,
+                    path=f"/api/v1/boards/{board_id}/tasks/{task_id}/comments",
+                    token=mc_token,
+                )
+            )
         except urllib.error.HTTPError as exc:
             LOG.warning("comments fetch failed task=%s status=%s", task_id, exc.code)
             continue
-        comments = (
-            comments_body
-            if isinstance(comments_body, list)
-            else comments_body.get("items", [])
-        )
         for comment in comments:
             message = comment.get("message") or ""
+            if not isinstance(message, str):
+                continue
             for match in EXECUTOR_STARTED_RE.finditer(message):
                 run = match.group("run")
                 label_match = TASK_ID_FROM_LABEL_RE.match(match.group("label"))
@@ -216,10 +249,32 @@ def load_state(state_file: Path) -> set[str]:
 
 
 def save_state(state_file: Path, posted_hashes: set[str]) -> None:
+    """Write the state file atomically (write tmp + os.replace).
+
+    Plain ``write_text`` is not atomic — a crash mid-write or a concurrent
+    cron overlap can leave a truncated state file. The tmp + replace
+    pattern guarantees readers see either the old or the new state, never
+    a partial one. Codex F6 from the 2026-05-01 review.
+    """
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(
-        json.dumps({"posted_hashes": sorted(posted_hashes)}, indent=2)
+    payload = json.dumps({"posted_hashes": sorted(posted_hashes)}, indent=2)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=state_file.name + ".",
+        suffix=".tmp",
+        dir=state_file.parent,
     )
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, state_file)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def ingest(

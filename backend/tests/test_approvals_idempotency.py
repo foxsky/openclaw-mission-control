@@ -200,6 +200,67 @@ async def test_update_approval_rejects_conflicting_terminal_flip_approve_to_reje
 
 
 @pytest.mark.asyncio
+async def test_update_approval_uses_for_update_lock_on_approval_row() -> None:
+    """Codex F1: the approval read must hold a row lock until commit.
+
+    Verified by intercepting the SQL statement compilation and asserting
+    the ``FOR UPDATE`` clause is present. SQLite does not honor the lock
+    at runtime, so we cannot test the race itself in this harness — but
+    the clause must be in the compiled query so PostgreSQL on .66 enforces
+    it.
+    """
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            board, task_id = await _seed_board_with_task(session)
+            created = await approvals_api.create_approval(
+                payload=ApprovalCreate(
+                    action_type="task.review",
+                    task_id=task_id,
+                    payload={"reason": "Lock test."},
+                    confidence=90,
+                    status="pending",
+                ),
+                board=board,
+                session=session,
+                actor=_test_actor(session),
+            )
+
+            # Spy on session.exec to capture the FIRST SELECT statement
+            # produced during update_approval (the locking read).
+            from unittest import mock
+
+            captured: list[Any] = []
+            original_exec = session.exec
+
+            async def spy_exec(statement, *args, **kwargs):
+                captured.append(str(statement.compile(compile_kwargs={"literal_binds": True})))
+                return await original_exec(statement, *args, **kwargs)
+
+            with mock.patch.object(session, "exec", spy_exec):
+                await approvals_api.update_approval(
+                    approval_id=created.id,  # type: ignore[arg-type]
+                    payload=ApprovalUpdate(status="approved"),
+                    board=board,
+                    session=session,
+                    actor=_test_actor(session),
+                )
+
+            # The first compiled SELECT against the approvals table must
+            # include FOR UPDATE.
+            approval_selects = [
+                sql for sql in captured if "FROM approvals" in sql or "approvals" in sql.lower()
+            ]
+            assert approval_selects, "no SELECT against approvals table observed"
+            first_select = approval_selects[0]
+            assert "FOR UPDATE" in first_select.upper(), (
+                f"locking SELECT missing FOR UPDATE clause: {first_select}"
+            )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_update_approval_rejects_conflicting_terminal_flip_reject_to_approve() -> None:
     """A reject→approve flip on an already-resolved approval must 409."""
     engine = await _make_engine()

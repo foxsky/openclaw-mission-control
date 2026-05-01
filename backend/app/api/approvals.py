@@ -199,6 +199,25 @@ async def _ensure_no_pending_approval_conflicts(
         )
 
 
+async def _lock_approval_for_update(
+    session: AsyncSession,
+    approval_id: str | UUID,
+) -> Approval | None:
+    """Fetch the approval row holding a SELECT FOR UPDATE row lock.
+
+    Concentrates the locking SQL behind one helper so update_approval's
+    test surface (which monkeypatches ``approvals.Approval`` with a fake
+    class to dodge SQLAlchemy entirely) can substitute this helper
+    directly without needing real SQLAlchemy coercion.
+
+    Codex F1 from the 2026-05-01 review.
+    """
+    rows = await session.exec(
+        select(Approval).where(col(Approval.id) == approval_id).with_for_update()
+    )
+    return rows.first()
+
+
 DONE_APPROVAL_ACTION_TYPES = (
     "move_to_done",
     "mark_done",
@@ -764,7 +783,13 @@ async def update_approval(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only board leads can reject approvals.",
             )
-    approval = await Approval.objects.by_id(approval_id).first(session)
+    # Lock the approval row for the duration of this transaction so concurrent
+    # PATCHes against the same approval serialize at the database. Without this
+    # lock, two requests can both observe ``status=pending``, both pass the
+    # idempotency / conflict guards below, and both commit terminal decisions
+    # — last-write-wins. SQLite tests don't surface this (engine-level lock);
+    # PostgreSQL on .66 does. Codex F1 from the 2026-05-01 review.
+    approval = await _lock_approval_for_update(session, approval_id)
     if approval is None or approval.board_id != board.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     prior_status = approval.status

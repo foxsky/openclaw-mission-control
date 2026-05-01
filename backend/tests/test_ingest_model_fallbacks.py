@@ -260,6 +260,156 @@ class TestStateFile:
         state_file.write_text("{not valid json")
         assert load_state(state_file) == set()
 
+    def test_save_is_atomic_via_tmp_replace(self, tmp_path: Path) -> None:
+        """Codex F6: writes go through a tmp file + os.replace.
+
+        Verify by stubbing os.replace to fail mid-write — the original
+        state file (if any) must remain intact, and no .tmp leftover
+        survives.
+        """
+        import os as os_mod
+        from unittest import mock
+
+        state_file = tmp_path / "state.json"
+        state_file.write_text(
+            __import__("json").dumps({"posted_hashes": ["original"]})
+        )
+        with mock.patch.object(
+            os_mod, "replace", side_effect=OSError("simulated fs error")
+        ):
+            with pytest.raises(OSError):
+                save_state(state_file, {"new1", "new2"})
+        # Original state preserved
+        assert load_state(state_file) == {"original"}
+        # No tmp leftover in the dir
+        leftovers = list(tmp_path.glob(state_file.name + ".*.tmp"))
+        assert leftovers == [], f"tmp leftovers not cleaned up: {leftovers}"
+
+
+# --- pagination (Codex F4) ---
+
+
+class TestPaginateGet:
+    """Verify _paginate_get walks offset until total exhausted or empty page.
+
+    The bug fixed by F4: prior version made a single ``?limit=200`` fetch
+    with no offset loop, silently dropping any items beyond the first
+    page.
+    """
+
+    def _stub_pages(
+        self,
+        page_results: list[dict[str, object]],
+    ) -> object:
+        """Return a urlopen replacement that serves successive pages."""
+        from unittest import mock as mock_module
+
+        call_count = {"i": 0}
+        captured_urls: list[str] = []
+
+        class _Resp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def __enter__(self) -> "_Resp":
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                pass
+
+            def read(self) -> bytes:
+                return self._body
+
+        def fake_urlopen(req, timeout=None):
+            captured_urls.append(req.full_url)
+            idx = call_count["i"]
+            call_count["i"] = idx + 1
+            if idx >= len(page_results):
+                return _Resp(b'{"items": [], "total": 0}')
+            return _Resp(__import__("json").dumps(page_results[idx]).encode())
+
+        return fake_urlopen, captured_urls, call_count
+
+    def test_walks_offset_until_total_exhausted(self) -> None:
+        from unittest import mock
+
+        # Use total=400 to force a second page (page size in script is 200).
+        # First page returns 200 items; second page returns the remaining 200.
+        page_one_items = [{"id": f"t{i}"} for i in range(200)]
+        page_two_items = [{"id": f"t{i}"} for i in range(200, 400)]
+        pages = [
+            {"items": page_one_items, "total": 400},
+            {"items": page_two_items, "total": 400},
+        ]
+        fake_urlopen, urls, _ = self._stub_pages(pages)
+        with mock.patch.object(_module.urllib.request, "urlopen", fake_urlopen):
+            items = list(
+                _module._paginate_get(
+                    base_url="http://test",
+                    path="/api/v1/boards/b/tasks",
+                    token="tok",
+                )
+            )
+        # Got all 400 across both pages — F4 fix: prior version would
+        # have stopped after page 1 with only 200 items.
+        assert len(items) == 400
+        assert items[0]["id"] == "t0"
+        assert items[-1]["id"] == "t399"
+        # Issued exactly 2 requests
+        assert len(urls) == 2
+        assert "offset=0" in urls[0]
+        assert "offset=200" in urls[1]
+
+    def test_stops_on_empty_items(self) -> None:
+        from unittest import mock
+
+        pages = [
+            {"items": [{"id": "t1"}], "total": 999},
+            {"items": [], "total": 999},
+        ]
+        fake_urlopen, urls, _ = self._stub_pages(pages)
+        with mock.patch.object(_module.urllib.request, "urlopen", fake_urlopen):
+            items = list(
+                _module._paginate_get(
+                    base_url="http://test",
+                    path="/api/v1/boards/b/tasks",
+                    token="tok",
+                )
+            )
+        assert [t["id"] for t in items] == ["t1"]
+        assert len(urls) == 2  # one fetch + one empty page that signals stop
+
+    def test_handles_list_response_without_envelope(self) -> None:
+        """Some endpoints return a bare list, not {items, total} envelope."""
+        from unittest import mock
+
+        class _Resp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def __enter__(self) -> "_Resp":
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                pass
+
+            def read(self) -> bytes:
+                return self._body
+
+        def fake_urlopen(req, timeout=None):
+            return _Resp(b'[{"id": "a"}, {"id": "b"}]')
+
+        with mock.patch.object(_module.urllib.request, "urlopen", fake_urlopen):
+            items = list(
+                _module._paginate_get(
+                    base_url="http://test",
+                    path="/test",
+                    token="tok",
+                )
+            )
+        # List shape returns once; no infinite loop
+        assert [t["id"] for t in items] == ["a", "b"]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
