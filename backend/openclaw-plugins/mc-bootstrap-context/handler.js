@@ -41,6 +41,7 @@ const handler = async (event) => {
   if (role === "worker" && !creds.mcAgentId) return;
 
   let content;
+  const startedAt = Date.now();
   try {
     if (role === "lead") {
       const data = await fetchJSON(
@@ -68,6 +69,7 @@ const handler = async (event) => {
     content,
     missing: false,
   });
+  log("info", `injected ${SYNTHETIC_NAME} for ${agentId} (${role}, ${Date.now() - startedAt}ms)`);
 };
 
 // Read hook config from gateway snapshot. MC_OPERATOR_TOKEN intentionally

@@ -276,5 +276,42 @@ const TOK = "test-agent-token-abc123";
   await fs.rm(wsRoot, { recursive: true, force: true });
 }
 
+// --- 9. successful injection emits an observability log line
+//
+// Why: in production the only journal evidence we have today is the
+// generic ``bootstrap-context:18ms`` stage timing — that doesn't tell
+// us whether the hook injected MC content or no-op'd. A success log
+// like "injected MC_RUNTIME_BRIEF.md for <agent_id> (lead, 215ms)"
+// makes deploy / drift verification a journalctl-grep away.
+{
+  const agentId = "lead-log1234";
+  const mcAgentId = "11111111-2222-3333-4444-555555555555";
+  const wsRoot = await makeTempWorkspaceWithToolsMd(agentId, TOK, mcAgentId);
+  const calls = [];
+  const origLog = console.log;
+  console.log = (...args) => {
+    calls.push(args.map(String).join(" "));
+    origLog.apply(console, args);
+  };
+  try {
+    await withStubServer(
+      async (baseUrl) => {
+        const ev = makeBootstrapEvent({
+          agentId,
+          env: { MC_BASE_URL: baseUrl, BOARD_ID: "b", WORKSPACE_ROOT: wsRoot, TIMEOUT_MS: "1500" },
+        });
+        await handler(ev);
+      },
+      { action: "x", reason_code: "y", action_required: false },
+    );
+  } finally {
+    console.log = origLog;
+  }
+  expect("success path emits an observability log line", calls, (c) => c.some((line) => line.includes("[mc-bootstrap-context]") && line.includes("injected") && line.includes(agentId)));
+  expect("success log includes role tag", calls, (c) => c.some((line) => line.includes("(lead")));
+  expect("success log includes elapsed time", calls, (c) => c.some((line) => /\d+ms/.test(line)));
+  await fs.rm(wsRoot, { recursive: true, force: true });
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
