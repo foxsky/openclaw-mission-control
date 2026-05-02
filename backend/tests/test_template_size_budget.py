@@ -996,7 +996,9 @@ def test_frontend_heartbeat_allows_explicit_worktree_parallelism_only_by_profile
 
     heartbeat = _render_template("BOARD_HEARTBEAT.md.j2", **ctx)
     assert "Experimental opt-in worktree task parallelism is enabled" in heartbeat
-    assert "Cap at 2 active implementation tasks" in heartbeat
+    assert "Cap at 5 active implementation tasks" in heartbeat
+    assert "concurrent-max, not a per-tick spawn budget" in heartbeat
+    assert "WT_MERGE_LOCK" in heartbeat
     assert "`acp-delegation` § Worktree Task Mode" in heartbeat
     assert "Completion-woken ticks process child results only" in heartbeat
     assert "sessions_spawn({" not in heartbeat

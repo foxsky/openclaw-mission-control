@@ -123,8 +123,25 @@ After successfully applying an action, re-run the gate script in the same tick
 to fetch the next action. Continue draining until one of these stop conditions
 holds:
 
-- The endpoint returns `action="clear"` (`reason_code=only_waiting_or_no_active_work`).
-  Print `LEAD_NEXT_ACTION_DRAIN_CLEAR <count>` and continue to Memory Intake.
+- The endpoint returns `action="clear"`. The `reason_code` distinguishes the
+  sub-state — emit `LEAD_NEXT_ACTION_DRAIN_CLEAR <count> <reason_code>` and
+  continue to Memory Intake. Recognized clear reason_codes:
+  - `no_active_work` — queue is empty (only `done`/`cancelled` tasks, or no tasks).
+  - `only_pending_approval` — at least one review task is awaiting operator
+    approval; nothing else is lead-actionable. Operator owns next move.
+  - `only_blocked` — every active-state task is filtered by a structured
+    `Blocker`, dependency, or `OperatorDecision`. Owners must resolve before
+    the lead has work.
+  - `only_fresh_in_progress` — every in_progress task is within the
+    `IN_PROGRESS_PIPELINE_NUDGE_GRACE` window; backend is intentionally
+    holding off the nudge.
+  - `only_waiting_or_no_active_work` — legacy fallback for any state the
+    classifier above didn't match. Treat as idle.
+
+  Use the `details.pending_approval_count` / `blocked_count` /
+  `fresh_in_progress_count` / `active_state_count` fields for telemetry —
+  they tell the operator at a glance whether the board is genuinely idle or
+  parked on someone else's action.
 - The per-tick cap of **5 applied actions** is reached. Print
   `LEAD_NEXT_ACTION_DRAIN_CAP_REACHED <count>` with the list of applied
   task ids and stop the drain. The next heartbeat tick will pick up the
@@ -133,6 +150,23 @@ holds:
   or hits the per-action failure path in `Failure Handling`. Record the
   friction once with `LEAD_NEXT_ACTION_DRAIN_FRICTION <count>` and stop.
   Do not retry the failed action in the same tick.
+- The previous iteration's `(action, reason_code, task_id)` tuple
+  matches the current one. Several mapped actions are pure
+  comment/nudge operations (`inspect_stale_in_progress`,
+  `cancel_orphan_child` when the child needs operator cancel,
+  `materialize_decomposition_plan` when no plan comment exists yet) and
+  do not change the gate's selector ranking — so two consecutive
+  identical tuples mean the loop is wedged. The check is **consecutive
+  only**, not "ever seen before": a non-consecutive repeat (A→B→A) is
+  fine because something else changed in between. Implementation:
+  - Hold a single `prev_tuple` slot, not a set.
+  - Before applying the action, compute the current tuple. If
+    `current_tuple == prev_tuple`, stop the drain with
+    `LEAD_NEXT_ACTION_DRAIN_NOOP_REPEAT <count> <action> <task_id>`.
+  - Otherwise apply the action, set `prev_tuple = current_tuple`,
+    and re-fetch the gate.
+  - The next heartbeat tick starts fresh; per-tick scope is the only
+    scope that matters for tight-loop prevention.
 
 Each drain iteration fetches fresh state, so transitions that unblock other
 tasks (e.g. moving one approved task to `done` clears it from the queue and
@@ -143,7 +177,7 @@ The drain loop **only** re-applies actions the lead would normally apply in
 a single tick. It is not a retry mechanism. Operator approvals that landed
 during the tick are visible to subsequent iterations because the gate fetches
 authoritative state each call. Do not exit to Memory Intake after the first
-successful action — keep draining until one of the three exit conditions
+successful action — keep draining until one of the four exit conditions
 above holds.
 
 ## Failure Handling
