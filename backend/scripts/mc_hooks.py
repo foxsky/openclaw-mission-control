@@ -80,11 +80,38 @@ def _read_token_file(path: str) -> str | None:
                 if "=" not in stripped:
                     continue
                 key, _, value = stripped.partition("=")
-                if key.strip() == "OPENCLAW_HOOK_TOKEN":
-                    return value.strip().strip("\"'")
+                if key.strip() != "OPENCLAW_HOOK_TOKEN":
+                    continue
+                return _parse_env_value(value)
     except OSError:
         return None
     return None
+
+
+def _parse_env_value(raw: str) -> str:
+    """Parse the right-hand side of an env-file ``KEY=...`` line.
+
+    - Quoted values (single or double) preserve their inner content
+      verbatim — including ``#``, trailing spaces, etc.
+    - Unquoted values are everything up to the first ``#`` (inline
+      comment), then trimmed of surrounding whitespace.
+    """
+    value = raw.lstrip()
+    if value.startswith('"'):
+        end = value.find('"', 1)
+        if end != -1:
+            return value[1:end]
+        return value[1:]
+    if value.startswith("'"):
+        end = value.find("'", 1)
+        if end != -1:
+            return value[1:end]
+        return value[1:]
+    # Unquoted: drop inline comment, then trim.
+    hash_idx = value.find("#")
+    if hash_idx != -1:
+        value = value[:hash_idx]
+    return value.strip()
 
 
 def _resolve_base_url(args: argparse.Namespace) -> str:

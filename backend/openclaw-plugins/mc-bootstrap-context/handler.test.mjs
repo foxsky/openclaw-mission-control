@@ -136,7 +136,7 @@ const TOK = "test-agent-token-abc123";
 
 // --- 4. lead bootstrap with token from TOOLS.md → injects MC_RUNTIME_BRIEF.md
 {
-  const agentId = "lead-test1234";
+  const agentId = "lead-aaaa1234-1111-2222-3333-444444444444";
   const mcAgentId = "11111111-2222-3333-4444-555555555555";
   const wsRoot = await makeTempWorkspaceWithToolsMd(agentId, TOK, mcAgentId);
   await withStubServer(
@@ -175,7 +175,7 @@ const TOK = "test-agent-token-abc123";
 // MC `agents.id` UUID lives in TOOLS.md as `AGENT_ID=<bare-uuid>`
 // alongside the AUTH_TOKEN, and that's what the URL must use.
 {
-  const openclawAgentId = "mc-test1234abcd";
+  const openclawAgentId = "mc-aaaa1234-1111-2222-3333-444444444444";
   const mcAgentId = "abcd1234-5678-9012-3456-7890abcdefab";
   const wsRoot = await makeTempWorkspaceWithToolsMd(openclawAgentId, TOK, mcAgentId);
   await withStubServer(
@@ -210,7 +210,7 @@ const TOK = "test-agent-token-abc123";
 // --- 5b. worker without AGENT_ID in TOOLS.md → no-op (can't build a
 // valid query without the MC UUID)
 {
-  const openclawAgentId = "mc-noagentid12";
+  const openclawAgentId = "mc-bbbb0000-1111-2222-3333-444444444444";
   const wsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mc-bootstrap-test-"));
   const wsDir = path.join(wsRoot, `workspace-${openclawAgentId}`);
   await fs.mkdir(wsDir, { recursive: true });
@@ -229,7 +229,7 @@ const TOK = "test-agent-token-abc123";
 
 // --- 6. HTTP error → no injection, no throw
 {
-  const agentId = "lead-err1234";
+  const agentId = "lead-eeee0000-1111-2222-3333-444444444444";
   const wsRoot = await makeTempWorkspaceWithToolsMd(agentId, TOK);
   await withStubServer(
     async (baseUrl) => {
@@ -248,7 +248,7 @@ const TOK = "test-agent-token-abc123";
 
 // --- 7. missing TOOLS.md → no-op (no throw, no injection)
 {
-  const agentId = "lead-notools999";
+  const agentId = "lead-cccc9999-1111-2222-3333-444444444444";
   const wsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mc-bootstrap-test-"));
   // intentionally no workspace-<id>/TOOLS.md created
   const ev = makeBootstrapEvent({
@@ -262,7 +262,7 @@ const TOK = "test-agent-token-abc123";
 
 // --- 8. TOOLS.md without AUTH_TOKEN line → no-op
 {
-  const agentId = "lead-notoken888";
+  const agentId = "lead-dddd8888-1111-2222-3333-444444444444";
   const wsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mc-bootstrap-test-"));
   const wsDir = path.join(wsRoot, `workspace-${agentId}`);
   await fs.mkdir(wsDir, { recursive: true });
@@ -284,7 +284,7 @@ const TOK = "test-agent-token-abc123";
 // like "injected MC_RUNTIME_BRIEF.md for <agent_id> (lead, 215ms)"
 // makes deploy / drift verification a journalctl-grep away.
 {
-  const agentId = "lead-log1234";
+  const agentId = "lead-a0a0a0a0-1111-2222-3333-444444444444";
   const mcAgentId = "11111111-2222-3333-4444-555555555555";
   const wsRoot = await makeTempWorkspaceWithToolsMd(agentId, TOK, mcAgentId);
   const calls = [];
@@ -310,6 +310,120 @@ const TOK = "test-agent-token-abc123";
   expect("success path emits an observability log line", calls, (c) => c.some((line) => line.includes("[mc-bootstrap-context]") && line.includes("injected") && line.includes(agentId)));
   expect("success log includes role tag", calls, (c) => c.some((line) => line.includes("(lead")));
   expect("success log includes elapsed time", calls, (c) => c.some((line) => /\d+ms/.test(line)));
+  await fs.rm(wsRoot, { recursive: true, force: true });
+}
+
+// --- 10. (codex #4) path traversal via agent id refuses to read victim TOOLS.md
+//
+// Stand up a victim workspace inside the same WORKSPACE_ROOT, give it
+// a valid TOOLS.md the handler would happily use if it reached it,
+// and then bootstrap an attacker agent whose id contains `..`. The
+// rejection contract: handler MUST NOT make any HTTP request even
+// though a victim file exists at the relative path.
+{
+  const wsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mc-bootstrap-test-"));
+  // Real victim: workspace-mc-victim with valid creds.
+  const victimDir = path.join(wsRoot, "workspace-mc-victim");
+  await fs.mkdir(victimDir, { recursive: true });
+  await fs.writeFile(
+    path.join(victimDir, "TOOLS.md"),
+    `# TOOLS.md\n- \`AUTH_TOKEN=victim-token-DO-NOT-LEAK\`\n- \`AGENT_ID=victim-uuid\`\n`,
+  );
+  // Real attacker: empty workspace, valid TOOLS.md path is via traversal.
+  await fs.mkdir(path.join(wsRoot, "workspace-mc-x"), { recursive: true });
+  // No legitimate TOOLS.md in attacker's workspace.
+
+  // Spin a stub HTTP server but ASSERT it gets zero requests. If the
+  // handler fails to reject the id, it would call MC with the victim's
+  // token via path traversal — captured.calls would go up.
+  let httpCallCount = 0;
+  const server = http.createServer((req, res) => {
+    httpCallCount++;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end("{}");
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const addr = server.address();
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+  const bogusIds = [
+    "mc-x/../workspace-mc-victim",
+    "lead-x/../workspace-mc-victim",
+    "mc-aaa\nmc-bbb",
+    "mc-aaa\tmc-bbb",
+    "mc-",
+    "mc-/etc/passwd",
+    "lead- ",
+    "mc-aaa%00bbb",
+    "mc-../etc",
+  ];
+  for (const id of bogusIds) {
+    const ev = makeBootstrapEvent({
+      agentId: id,
+      env: { MC_BASE_URL: baseUrl, BOARD_ID: "b", WORKSPACE_ROOT: wsRoot, TIMEOUT_MS: "1500" },
+    });
+    await handler(ev);
+    expect(`bogus id rejected: ${JSON.stringify(id)}`, ev.context.bootstrapFiles.length, 0);
+  }
+  expect("path-traversal attempts produce ZERO HTTP requests", httpCallCount, 0);
+
+  server.close();
+  await fs.rm(wsRoot, { recursive: true, force: true });
+}
+
+// --- 11. (codex #6) AUTH_TOKEN with surrounding quotes parses cleanly
+//
+// `AUTH_TOKEN="real-token"` previously captured `"real-token"`
+// (quotes included), which MC then rejected as a bad token. Strip
+// matching quotes.
+{
+  const agentId = "lead-b1b1b1b1-1111-2222-3333-444444444444";
+  const wsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mc-bootstrap-test-"));
+  const wsDir = path.join(wsRoot, `workspace-${agentId}`);
+  await fs.mkdir(wsDir, { recursive: true });
+  await fs.writeFile(
+    path.join(wsDir, "TOOLS.md"),
+    `# TOOLS.md\n\n- \`AUTH_TOKEN="${TOK}"\`\n- \`AGENT_ID="11111111-2222-3333-4444-555555555555"\`\n`,
+  );
+  await withStubServer(
+    async (baseUrl, captured) => {
+      const ev = makeBootstrapEvent({
+        agentId,
+        env: { MC_BASE_URL: baseUrl, BOARD_ID: "b", WORKSPACE_ROOT: wsRoot, TIMEOUT_MS: "1500" },
+      });
+      await handler(ev);
+      expect("quoted AUTH_TOKEN strips quotes from header", captured.headers, (h) => h?.["x-agent-token"] === TOK);
+    },
+    { action: "x", reason_code: "y", action_required: false },
+  );
+  await fs.rm(wsRoot, { recursive: true, force: true });
+}
+
+// --- 12. (codex #5) duplicate AUTH_TOKEN= lines pick the LAST value
+//
+// Matches MC backend behavior (which treats TOOLS.md as an env-style
+// file where later assignments win). Avoids silent 401s when an old
+// token line lingers near the top of TOOLS.md.
+{
+  const agentId = "lead-c2c2c2c2-1111-2222-3333-444444444444";
+  const wsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mc-bootstrap-test-"));
+  const wsDir = path.join(wsRoot, `workspace-${agentId}`);
+  await fs.mkdir(wsDir, { recursive: true });
+  await fs.writeFile(
+    path.join(wsDir, "TOOLS.md"),
+    `# TOOLS.md\n\n- \`AUTH_TOKEN=stale-old-token\`\n- \`AUTH_TOKEN=${TOK}\`\n- \`AGENT_ID=11111111-2222-3333-4444-555555555555\`\n`,
+  );
+  await withStubServer(
+    async (baseUrl, captured) => {
+      const ev = makeBootstrapEvent({
+        agentId,
+        env: { MC_BASE_URL: baseUrl, BOARD_ID: "b", WORKSPACE_ROOT: wsRoot, TIMEOUT_MS: "1500" },
+      });
+      await handler(ev);
+      expect("duplicate AUTH_TOKEN selects the LAST value", captured.headers, (h) => h?.["x-agent-token"] === TOK);
+    },
+    { action: "x", reason_code: "y", action_required: false },
+  );
   await fs.rm(wsRoot, { recursive: true, force: true });
 }
 

@@ -103,12 +103,32 @@ async function readPerAgentCreds(agentId, workspaceRoot) {
   } catch {
     return null;
   }
-  const tokenMatch = body.match(/^[\s-]*`?AUTH_TOKEN=([^\s`\n]+)`?/m);
-  const idMatch = body.match(/^[\s-]*`?AGENT_ID=([^\s`\n]+)`?/m);
   return {
-    token: tokenMatch ? tokenMatch[1] : null,
-    mcAgentId: idMatch ? idMatch[1] : null,
+    token: _extractEnvLikeValue(body, "AUTH_TOKEN"),
+    mcAgentId: _extractEnvLikeValue(body, "AGENT_ID"),
   };
+}
+
+// Extract the LAST value of ``<KEY>=...`` in TOOLS.md-style content.
+// MC's TOOLS.md is shell-env-shaped lines wrapped in markdown list/
+// backtick decoration. Both ``- `KEY=value` `` and bare ``KEY=value``
+// are supported. Surrounding double or single quotes on the value are
+// stripped. Picking the LAST occurrence matches the env-style "later
+// assignment wins" contract MC's own parser uses, so a stale token
+// line lingering near the top of the file doesn't shadow the fresh one.
+function _extractEnvLikeValue(body, key) {
+  const re = new RegExp(`^[\\s-]*\`?${key}=([^\\s\`\\n]+)\`?`, "gm");
+  let last = null;
+  for (const m of body.matchAll(re)) {
+    last = m[1];
+  }
+  if (last == null) return null;
+  // Strip a single matching pair of surrounding quotes, if present.
+  if ((last.startsWith('"') && last.endsWith('"') && last.length >= 2) ||
+      (last.startsWith("'") && last.endsWith("'") && last.length >= 2)) {
+    return last.slice(1, -1);
+  }
+  return last;
 }
 
 function inferMcAgentId(sessionKey, workspaceDir) {
@@ -126,11 +146,17 @@ function inferMcAgentId(sessionKey, workspaceDir) {
   return null;
 }
 
+// MC openclaw agent IDs are exactly ``<prefix>-<uuid>``. Anything with
+// path separators, control chars, percent encoding, or whitespace is
+// rejected — this blocks ``mc-x/../workspace-mc-victim``-style path
+// traversal where ``readPerAgentCreds`` would otherwise read a
+// neighboring agent's TOOLS.md.
+const _MC_AGENT_ID_PATTERN = /^(lead|mc)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function isMcAgentId(id) {
   if (!id || typeof id !== "string") return false;
-  if (id.startsWith("lead-")) return true;
-  if (id.startsWith("mc-") && !id.startsWith("mc-gateway-")) return true;
-  return false;
+  if (id.startsWith("mc-gateway-")) return false;
+  return _MC_AGENT_ID_PATTERN.test(id);
 }
 
 function inferRole(agentId) {

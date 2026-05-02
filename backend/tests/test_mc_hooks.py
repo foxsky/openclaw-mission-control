@@ -138,6 +138,70 @@ class TestTokenResolution:
         monkeypatch.setattr(_module, "DEFAULT_TOKEN_FILE", str(env_file))
         assert _module._resolve_token(_namespace(token=None)) == "t"
 
+    # --- (codex #11) env-file value-parsing edge cases ---
+
+    def test_token_file_strips_double_quotes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``OPENCLAW_HOOK_TOKEN="abc123"`` must yield ``abc123`` (no quotes
+        in the Authorization header).
+        """
+        monkeypatch.delenv("OPENCLAW_HOOK_TOKEN", raising=False)
+        env_file = tmp_path / "env"
+        env_file.write_text('OPENCLAW_HOOK_TOKEN="abc123"\n', encoding="utf-8")
+        monkeypatch.setattr(_module, "DEFAULT_TOKEN_FILE", str(env_file))
+        assert _module._resolve_token(_namespace(token=None)) == "abc123"
+
+    def test_token_file_strips_single_quotes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.delenv("OPENCLAW_HOOK_TOKEN", raising=False)
+        env_file = tmp_path / "env"
+        env_file.write_text("OPENCLAW_HOOK_TOKEN='abc123'\n", encoding="utf-8")
+        monkeypatch.setattr(_module, "DEFAULT_TOKEN_FILE", str(env_file))
+        assert _module._resolve_token(_namespace(token=None)) == "abc123"
+
+    def test_token_file_drops_inline_comment(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``OPENCLAW_HOOK_TOKEN=abc # prod`` must yield ``abc``, not
+        ``abc # prod``. Inline comments are env-file convention.
+        """
+        monkeypatch.delenv("OPENCLAW_HOOK_TOKEN", raising=False)
+        env_file = tmp_path / "env"
+        env_file.write_text(
+            "OPENCLAW_HOOK_TOKEN=abc123 # prod token\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(_module, "DEFAULT_TOKEN_FILE", str(env_file))
+        assert _module._resolve_token(_namespace(token=None)) == "abc123"
+
+    def test_token_file_quoted_value_preserves_inline_hash(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Inside a quoted value, ``#`` is part of the token (unlike the
+        bare-value case). ``OPENCLAW_HOOK_TOKEN="abc#123"`` yields
+        ``abc#123``.
+        """
+        monkeypatch.delenv("OPENCLAW_HOOK_TOKEN", raising=False)
+        env_file = tmp_path / "env"
+        env_file.write_text(
+            'OPENCLAW_HOOK_TOKEN="abc#123"\n', encoding="utf-8"
+        )
+        monkeypatch.setattr(_module, "DEFAULT_TOKEN_FILE", str(env_file))
+        assert _module._resolve_token(_namespace(token=None)) == "abc#123"
+
+    def test_token_file_handles_crlf(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Windows-style line endings shouldn't bleed CR into the token."""
+        monkeypatch.delenv("OPENCLAW_HOOK_TOKEN", raising=False)
+        env_file = tmp_path / "env"
+        env_file.write_bytes(b"OPENCLAW_HOOK_TOKEN=abc123\r\n")
+        monkeypatch.setattr(_module, "DEFAULT_TOKEN_FILE", str(env_file))
+        token = _module._resolve_token(_namespace(token=None))
+        assert token == "abc123"
+        assert "\r" not in token
+
 
 class TestBaseUrlResolution:
     def test_explicit_flag_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
