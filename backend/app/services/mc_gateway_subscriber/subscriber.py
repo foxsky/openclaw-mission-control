@@ -33,8 +33,9 @@ from uuid import uuid4
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from app.services.openclaw.gateway_rpc import (
+from app.services.openclaw.protocol_constants import (
     GATEWAY_OPERATOR_SCOPES,
+    OPERATOR_ROLE,
     PROTOCOL_VERSION,
 )
 
@@ -51,20 +52,13 @@ FRAME_TYPE_EVENT = "event"
 EVENT_CONNECT_CHALLENGE = "connect.challenge"
 METHOD_CONNECT = "connect"
 
-# Connect-frame defaults. Role + scopes match what
-# ``gateway_rpc._build_connect_params`` sends for operator clients;
-# ``OPERATOR_ROLE`` is mirrored here as a string because the upstream
-# definition is a function-local literal.
-OPERATOR_ROLE = "operator"
-
-# A connection that survives this many seconds is "healthy" for backoff
-# purposes — only such connections reset the reconnect delay. Picked
-# to be longer than a typical bad-token close (which happens within
-# ~1s of the handshake) but short enough that legitimate slow streams
-# still get the benefit of a reset.
-HEALTHY_CONNECTION_SECONDS = 5.0
-
+# Per-connection healthy signal: at least one event delivered AFTER
+# the handshake. Connection uptime alone is misleading — a silent
+# gateway that times out the handshake at the same threshold would
+# look "healthy" by uptime and reset backoff (codex post-cleanup
+# review, 2026-05-03).
 _HANDSHAKE_TIMEOUT_SECONDS = 5.0
+_CONNECT_RES_TIMEOUT_SECONDS = 5.0
 
 
 class Subscriber:
@@ -104,6 +98,17 @@ class Subscriber:
         self._client_id = client_id
         self._protocol_version = protocol_version
         self._handlers: dict[str, EventHandler] = {}
+        # Per-connection state used by run() to decide whether the
+        # connection was healthy enough to reset backoff. Reset to 0
+        # at the start of each connect attempt; incremented in
+        # _dispatch when an event is successfully delivered to a
+        # handler (or matches a registered handler — even no-op
+        # match counts).
+        self._events_dispatched_this_connection = 0
+        # Per-instance handshake timeout knob. Production default is
+        # `_HANDSHAKE_TIMEOUT_SECONDS`; tests override to keep the
+        # silent-gateway scenario fast.
+        self._handshake_timeout_seconds = _HANDSHAKE_TIMEOUT_SECONDS
 
     def on(self, event_name: str, handler: EventHandler) -> None:
         """Register an async handler for events whose ``event`` field matches."""
@@ -112,32 +117,31 @@ class Subscriber:
     async def run(self, stop: asyncio.Event) -> None:
         """Connect, handshake, subscribe, listen, dispatch — until ``stop``."""
         delay = self._initial_delay
-        loop = asyncio.get_event_loop()
         while not stop.is_set():
-            connection_started_at = loop.time()
+            self._events_dispatched_this_connection = 0
             try:
                 async with websockets.connect(
                     self._url,
                     additional_headers={"Authorization": f"Bearer {self._token}"},
                 ) as ws:
-                    if not await self._handshake_and_subscribe(ws):
-                        # Bad challenge / silent gateway / non-protocol
-                        # first frame. Don't subscribe; let the WS
-                        # close and back off.
-                        continue
-                    await self._listen(ws, stop)
+                    if await self._handshake_and_subscribe(ws):
+                        await self._listen(ws, stop)
+                    # Else: bad challenge / silent gateway / non-protocol
+                    # first frame / connect res not ok. Don't subscribe;
+                    # exit the context manager (closes WS) and fall
+                    # through to the backoff path below.
             except ConnectionClosed:
                 logger.info("gateway WS connection closed; will reconnect")
             except Exception:
                 logger.exception("gateway WS connect failed; will retry")
             if stop.is_set():
                 return
-            # Only reset backoff after a connection that lived long
-            # enough to be considered healthy. Otherwise an immediate
-            # post-handshake close (bad token, scope mismatch) would
-            # hammer the gateway forever at the initial delay.
-            connection_uptime = loop.time() - connection_started_at
-            if connection_uptime >= HEALTHY_CONNECTION_SECONDS:
+            # Reset backoff only after a connection that ACTUALLY
+            # delivered work — handshake completion alone isn't enough
+            # because a misconfigured token or silent gateway can
+            # complete the handshake (or time it out at the same
+            # threshold) without ever streaming events.
+            if self._events_dispatched_this_connection > 0:
                 delay = self._initial_delay
             await self._sleep_with_stop(delay, stop)
             delay = min(delay * 2, self._max_delay)
@@ -156,10 +160,10 @@ class Subscriber:
         backoff).
         """
         try:
-            first_raw = await asyncio.wait_for(ws.recv(), timeout=_HANDSHAKE_TIMEOUT_SECONDS)
+            first_raw = await asyncio.wait_for(ws.recv(), timeout=self._handshake_timeout_seconds)
         except asyncio.TimeoutError:
             logger.warning("gateway did not send %s within %ss",
-                           EVENT_CONNECT_CHALLENGE, _HANDSHAKE_TIMEOUT_SECONDS)
+                           EVENT_CONNECT_CHALLENGE, self._handshake_timeout_seconds)
             return False
         try:
             first = json.loads(first_raw if isinstance(first_raw, str) else first_raw.decode())
@@ -199,19 +203,63 @@ class Subscriber:
         }
         if connect_nonce is not None:
             connect_params["connectNonce"] = connect_nonce
-        await self._send_req(ws, METHOD_CONNECT, connect_params)
+        connect_id = await self._send_req(ws, METHOD_CONNECT, connect_params)
+        if not await self._await_ok_res(ws, connect_id):
+            return False
         for method in self._subscriptions:
             await self._send_req(ws, method, {})
         return True
 
-    async def _send_req(self, ws: Any, method: str, params: dict[str, Any]) -> None:
+    async def _send_req(self, ws: Any, method: str, params: dict[str, Any]) -> str:
+        request_id = str(uuid4())
         message = {
             "type": FRAME_TYPE_REQ,
-            "id": str(uuid4()),
+            "id": request_id,
             "method": method,
             "params": params,
         }
         await ws.send(json.dumps(message))
+        return request_id
+
+    async def _await_ok_res(self, ws: Any, request_id: str) -> bool:
+        """Wait for ``{"type":"res","id":<request_id>,"ok":true}``.
+
+        Returns ``False`` on timeout, on ``ok:false`` with logged
+        error detail, or on a closed connection. Frames that aren't
+        the matching res are skipped (events arriving pre-subscribe
+        are rare but possible — the subscriber does not buffer them
+        for later dispatch since ``_dispatch`` will see them on the
+        next iteration if the connection survives, which it won't if
+        we returned False here).
+        """
+        deadline = asyncio.get_event_loop().time() + _CONNECT_RES_TIMEOUT_SECONDS
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                logger.warning("no res for connect req within %ss; aborting",
+                               _CONNECT_RES_TIMEOUT_SECONDS)
+                return False
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            except asyncio.TimeoutError:
+                logger.warning("no res for connect req within %ss; aborting",
+                               _CONNECT_RES_TIMEOUT_SECONDS)
+                return False
+            try:
+                msg = json.loads(raw if isinstance(raw, str) else raw.decode())
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("type") != FRAME_TYPE_RES or msg.get("id") != request_id:
+                # Skip unrelated frames (events, other res), keep waiting.
+                continue
+            if msg.get("ok") is False:
+                err = msg.get("error") or {}
+                err_msg = err.get("message") if isinstance(err, dict) else None
+                logger.warning("connect rejected by gateway: %s", err_msg or "no message")
+                return False
+            return True
 
     # --- listen + dispatch ---
 
@@ -224,6 +272,15 @@ class Subscriber:
             )
             if stop_task in done:
                 await ws.close()
+            # If recv_task finished by raising (transport OSError,
+            # TimeoutError mid-stream, etc.), pull the exception so it
+            # gets logged instead of asyncio's "Task exception was
+            # never retrieved" warning at GC time. Codex post-cleanup
+            # finding (2026-05-03).
+            if recv_task in done:
+                exc = recv_task.exception()
+                if exc is not None and not isinstance(exc, ConnectionClosed):
+                    logger.warning("recv loop raised: %s", exc)
         finally:
             for t in (recv_task, stop_task):
                 if not t.done():
@@ -254,6 +311,11 @@ class Subscriber:
         handler = self._handlers.get(event_name)
         if handler is None:
             return
+        # Track that the connection actually delivered work — used by
+        # ``run()`` to decide whether to reset reconnect backoff.
+        # Increment BEFORE calling the handler so a handler raising
+        # still counts as "the gateway gave us a real event".
+        self._events_dispatched_this_connection += 1
         try:
             await handler(payload)
         except Exception:

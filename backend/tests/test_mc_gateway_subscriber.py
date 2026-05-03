@@ -469,6 +469,167 @@ async def test_subscriber_aborts_handshake_when_first_frame_is_not_challenge(
 
 
 @pytest.mark.asyncio
+async def test_subscriber_does_not_subscribe_when_connect_res_is_not_ok(
+    stub_gateway,
+) -> None:
+    """Codex post-cleanup finding: subscriber sent the ``connect`` req
+    but never awaited the gateway's response. If the gateway replies
+    ``{"type":"res","ok":false,...}`` (bad token, scope mismatch,
+    expired pairing), the subscriber proceeded to send subscribe reqs
+    anyway — and ``_dispatch`` ignored the error res because it wasn't
+    an event. The worker sat "connected" with auth actually failed.
+
+    Contract: when the connect res returns ``ok:false``, NO subscribe
+    req leaves the wire.
+    """
+    sent_to_server: list[dict[str, Any]] = []
+
+    async def auth_failing_handler(ws):
+        await ws.send(json.dumps({
+            "type": "event",
+            "event": "connect.challenge",
+            "payload": {"nonce": "n"},
+        }))
+        try:
+            async for raw in ws:
+                if isinstance(raw, bytes):
+                    raw = raw.decode()
+                msg = json.loads(raw)
+                sent_to_server.append(msg)
+                if msg.get("type") == "req" and msg.get("method") == "connect":
+                    await ws.send(json.dumps({
+                        "type": "res",
+                        "id": msg["id"],
+                        "ok": False,
+                        "error": {"message": "bad token"},
+                    }))
+                    # Keep the connection open after the failed res so
+                    # the subscriber has a clear opportunity to send
+                    # subscribe reqs (which it MUST NOT do). The test
+                    # asserts after a fixed wait below.
+        except websockets.exceptions.ConnectionClosed:
+            pass
+
+    server = await websockets.serve(auth_failing_handler, "127.0.0.1", 0)
+    sock = next(iter(server.sockets))
+    port = sock.getsockname()[1]
+    url = f"ws://127.0.0.1:{port}"
+
+    sub = Subscriber(
+        url=url,
+        token="bad",
+        subscriptions=["sessions.subscribe"],
+        reconnect_initial_delay=0.05,
+        reconnect_max_delay=0.2,
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(sub.run(stop))
+    await asyncio.sleep(0.4)
+    stop.set()
+    await asyncio.wait_for(task, timeout=2.0)
+    server.close()
+    await server.wait_closed()
+
+    methods = [m.get("method") for m in sent_to_server if m.get("type") == "req"]
+    assert "sessions.subscribe" not in methods, (
+        f"subscriber sent subscribe after a failed connect: methods={methods}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_subscriber_silent_gateway_backs_off_geometrically(
+    stub_gateway,
+) -> None:
+    """Codex post-cleanup finding: ``HEALTHY_CONNECTION_SECONDS`` (5s)
+    equals the handshake timeout (5s), so a gateway that accepts the
+    WS but sends nothing makes the connection look "healthy" by
+    uptime alone — and backoff resets every cycle.
+
+    Real signal of "healthy" should be at least one event delivered.
+    Test: silent gateway → backoff escalates between attempts
+    (geometric, not flat).
+    """
+    accept_times: list[float] = []
+
+    async def silent_handler(ws):
+        accept_times.append(asyncio.get_event_loop().time())
+        # Don't send the challenge. Just close the connection after the
+        # subscriber's handshake timeout fires (subscriber will return
+        # False from _handshake_and_subscribe and reconnect). A long
+        # sleep here would block fixture teardown.
+        try:
+            await asyncio.wait_for(ws.wait_closed(), timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+
+    server = await websockets.serve(silent_handler, "127.0.0.1", 0)
+    sock = next(iter(server.sockets))
+    port = sock.getsockname()[1]
+    url = f"ws://127.0.0.1:{port}"
+
+    # Tight timeout + tight initial delay so the test runs fast.
+    # Override the production handshake timeout via a per-instance
+    # field if available; otherwise we measure with the default.
+    sub = Subscriber(
+        url=url,
+        token="t",
+        subscriptions=[],
+        reconnect_initial_delay=0.05,
+        reconnect_max_delay=2.0,
+    )
+    # Shrink the handshake timeout for this test specifically.
+    sub._handshake_timeout_seconds = 0.1
+    stop = asyncio.Event()
+    task = asyncio.create_task(sub.run(stop))
+    # Wait long enough for at least 3 accepts.
+    await _wait_for(lambda: len(accept_times) >= 3, timeout=5.0)
+    stop.set()
+    await asyncio.wait_for(task, timeout=2.0)
+    server.close()
+    await server.wait_closed()
+
+    deltas = [accept_times[i + 1] - accept_times[i] for i in range(len(accept_times) - 1)]
+    assert len(deltas) >= 2
+    # Bug version: each attempt waits ~handshake_timeout + initial_delay,
+    # roughly flat. Fixed version: deltas escalate geometrically.
+    assert deltas[1] > deltas[0], (
+        f"silent-gateway path did not escalate backoff: deltas={deltas}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_subscriber_module_imports_with_minimal_env() -> None:
+    """Codex post-cleanup finding: importing the subscriber pulled in
+    ``app.services.openclaw.gateway_rpc`` → ``app.core.logging`` →
+    ``app.core.config``, which instantiates ``Settings()`` requiring
+    ``auth_mode`` and ``BASE_URL``. The subscriber is supposed to
+    deploy with just ``OPENCLAW_GATEWAY_WS_URL`` /
+    ``OPENCLAW_GATEWAY_TOKEN`` per its README. Importing must not
+    require the full MC backend env.
+
+    Contract: ``import app.services.mc_gateway_subscriber.subscriber``
+    succeeds in a process with NO MC config env vars.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.services.mc_gateway_subscriber.subscriber"],
+        cwd=str(repo_root),
+        env={"PATH": "/usr/bin:/bin", "HOME": "/tmp", "PYTHONPATH": str(repo_root)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, (
+        f"subscriber import failed without MC env:\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_subscriber_echoes_connect_nonce(stub_gateway) -> None:
     """The gateway sends a nonce on ``connect.challenge``; the client's
     ``connect`` req must include it under ``params.connectNonce`` so the

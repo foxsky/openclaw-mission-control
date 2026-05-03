@@ -29,17 +29,18 @@ from app.services.openclaw.device_identity import (
     sign_device_payload,
 )
 
-PROTOCOL_VERSION = 3
+# Re-exported from the dependency-free protocol_constants module so
+# the long-lived event subscriber can share these without dragging
+# app.core.* settings into its import chain.
+from app.services.openclaw.protocol_constants import (  # noqa: E402
+    GATEWAY_OPERATOR_SCOPES,
+    PROTOCOL_VERSION,
+)
+
 # Resolved once at import time; matches the value written by the openclaw CLI
 # during pairing ("linux", "darwin", or "windows").
 _HOST_PLATFORM: str = _platform.system().lower()
 logger = get_logger(__name__)
-GATEWAY_OPERATOR_SCOPES = (
-    "operator.read",
-    "operator.admin",
-    "operator.approvals",
-    "operator.pairing",
-)
 DEFAULT_GATEWAY_CLIENT_ID = "gateway-client"
 DEFAULT_GATEWAY_CLIENT_MODE = "backend"
 CONTROL_UI_CLIENT_ID = "openclaw-control-ui"
