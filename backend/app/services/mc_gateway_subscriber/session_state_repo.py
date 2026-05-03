@@ -15,13 +15,15 @@ writes in one event-loop tick can share a transaction.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.core.time import utcnow
 from app.db import crud
+from app.models.agents import Agent
 from app.models.gateway_session_state import GatewaySessionState
 from app.services.mc_gateway_subscriber.session_state_projector import (
     SessionState,
@@ -172,3 +174,69 @@ async def list_session_states_for_agent_ids(
     )
     result = await session.exec(stmt)
     return list(result.scalars().all())
+
+
+_ORPHAN_AGENT_PREFIX = "mc-"
+_PRESERVED_PREFIXES = ("mc-gateway-",)
+
+
+async def cleanup_orphaned_session_states(session) -> int:
+    """Delete projection rows whose ``agent_id`` is ``mc-<uuid>`` and
+    whose UUID has no matching ``agents.id`` row. Returns the number
+    of rows deleted.
+
+    Operational scope:
+
+    * ``mc-<uuid>`` rows are MC-tracked agent sessions. If the agent is
+      hard-deleted from MC, the projection row is now an orphan and
+      should be purged so the table doesn't accumulate unbounded
+      historical state.
+    * ``mc-gateway-<gateway_id>`` rows represent the gateway's own
+      internal agent — there's no MC agents row to JOIN against, and
+      the operator typically wants the historical record to persist.
+      Skipped.
+    * ``lead-<board_id>`` rows are board-lead sessions; again, no
+      MC agents row to JOIN against on this naming convention. Skipped.
+    * Any agent_id NOT starting with ``mc-`` is left alone (operator
+      should investigate manually).
+
+    Caller owns transaction commit. Designed for periodic invocation
+    (systemd timer / cron / manual operator script) — see README.
+    """
+    candidate_rows_stmt = select(GatewaySessionState.agent_id).where(
+        GatewaySessionState.agent_id.startswith(_ORPHAN_AGENT_PREFIX),  # type: ignore[attr-defined]
+    )
+    candidate_result = await session.exec(candidate_rows_stmt)
+    candidate_ids = list(candidate_result.scalars().all())
+    parsed_uuid_by_agent_id: dict[str, UUID] = {}
+    for agent_id in candidate_ids:
+        if any(agent_id.startswith(p) for p in _PRESERVED_PREFIXES):
+            continue
+        # Strip the ``mc-`` prefix and try to parse as UUID. If the
+        # tail isn't UUID-shaped (defensive), skip — this row will
+        # need manual operator review, not a silent delete.
+        try:
+            parsed_uuid_by_agent_id[agent_id] = UUID(
+                agent_id[len(_ORPHAN_AGENT_PREFIX):]
+            )
+        except ValueError:
+            continue
+    if not parsed_uuid_by_agent_id:
+        return 0
+    existing_agents_stmt = select(Agent.id).where(
+        Agent.id.in_(parsed_uuid_by_agent_id.values()),  # type: ignore[attr-defined]
+    )
+    existing_result = await session.exec(existing_agents_stmt)
+    existing_uuids = set(existing_result.scalars().all())
+    orphan_agent_ids = [
+        agent_id
+        for agent_id, parsed in parsed_uuid_by_agent_id.items()
+        if parsed not in existing_uuids
+    ]
+    if not orphan_agent_ids:
+        return 0
+    delete_stmt = delete(GatewaySessionState).where(
+        GatewaySessionState.agent_id.in_(orphan_agent_ids),  # type: ignore[attr-defined]
+    )
+    result = await session.execute(delete_stmt)
+    return int(result.rowcount or 0)

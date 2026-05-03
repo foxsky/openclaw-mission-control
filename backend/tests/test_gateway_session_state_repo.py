@@ -13,6 +13,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.gateway_session_state import GatewaySessionState
 from app.services.mc_gateway_subscriber.session_state_projector import SessionState
 from app.services.mc_gateway_subscriber.session_state_repo import (
+    cleanup_orphaned_session_states,
     get_session_state,
     list_all_session_states,
     list_main_session_states_for_agent_ids,
@@ -242,3 +243,123 @@ async def test_upsert_writes_updated_at_on_each_call(
     # which honours datetime(timezone=True) but doesn't enforce
     # microsecond resolution. Don't assert strict >= equality on the
     # second write completing within the same wall-clock tick.
+
+
+# ---------------------------------------------------------------------------
+# cleanup_orphaned_session_states — purge mc-<uuid> rows whose UUID has
+# no matching MC agents row. Operator wires this into a periodic job so
+# the projection table doesn't accumulate state for hard-deleted agents.
+# ---------------------------------------------------------------------------
+
+from uuid import uuid4
+
+from app.models.agents import Agent
+from app.models.gateways import Gateway
+from app.models.organizations import Organization
+
+
+async def _seed_org_and_gateway(session: AsyncSession) -> Gateway:
+    org = Organization(name="cleanup-org")
+    session.add(org)
+    await session.flush()
+    gateway = Gateway(
+        organization_id=org.id, name="gw", url="ws://x", workspace_root="/tmp"
+    )
+    session.add(gateway)
+    await session.flush()
+    return gateway
+
+
+@pytest.mark.asyncio
+async def test_cleanup_preserves_rows_for_existing_org_agents(
+    sqlite_session: AsyncSession,
+) -> None:
+    gateway = await _seed_org_and_gateway(sqlite_session)
+    agent_uuid = uuid4()
+    sqlite_session.add(
+        Agent(
+            id=agent_uuid,
+            gateway_id=gateway.id,
+            name="Worker",
+            openclaw_session_id=f"agent:mc-{agent_uuid}:main",
+        )
+    )
+    await upsert_session_state(
+        sqlite_session, _state(agent_id=f"mc-{agent_uuid}")
+    )
+    await sqlite_session.commit()
+
+    deleted_count = await cleanup_orphaned_session_states(sqlite_session)
+    await sqlite_session.commit()
+
+    assert deleted_count == 0
+    rows = await list_all_session_states(sqlite_session)
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_cleanup_deletes_mc_uuid_rows_with_no_matching_agent(
+    sqlite_session: AsyncSession,
+) -> None:
+    """The agent was hard-deleted from MC; the projection row stayed
+    behind. Cleanup must purge it."""
+    await upsert_session_state(
+        sqlite_session,
+        _state(agent_id="mc-deadbeef-1111-2222-3333-444444444444"),
+    )
+    await sqlite_session.commit()
+
+    deleted_count = await cleanup_orphaned_session_states(sqlite_session)
+    await sqlite_session.commit()
+
+    assert deleted_count == 1
+    rows = await list_all_session_states(sqlite_session)
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_cleanup_preserves_gateway_internal_rows(
+    sqlite_session: AsyncSession,
+) -> None:
+    """``mc-gateway-<uuid>`` rows are gateway-internal sessions —
+    cleanup must NOT touch them on the basis of "no agents row". The
+    operator needs them to stay until they explicitly clear gateway
+    state. Same rule for ``lead-<board_id>``."""
+    await upsert_session_state(
+        sqlite_session,
+        _state(agent_id="mc-gateway-3821a85a-984c-412a-9340-cda50eaf174e"),
+    )
+    await upsert_session_state(
+        sqlite_session,
+        _state(agent_id="lead-some-board-uuid-1234"),
+    )
+    await sqlite_session.commit()
+
+    deleted_count = await cleanup_orphaned_session_states(sqlite_session)
+    await sqlite_session.commit()
+
+    assert deleted_count == 0
+    rows = await list_all_session_states(sqlite_session)
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_cleanup_handles_unparseable_agent_id_safely(
+    sqlite_session: AsyncSession,
+) -> None:
+    """Defensive: if the projection table somehow contains a row whose
+    agent_id doesn't fit any expected pattern (mc-<uuid> /
+    lead-<id> / mc-gateway-<id>), cleanup must not crash and must not
+    delete it — operator should investigate manually."""
+    await upsert_session_state(
+        sqlite_session,
+        _state(agent_id="this-is-not-a-pattern-we-recognise"),
+    )
+    await sqlite_session.commit()
+
+    deleted_count = await cleanup_orphaned_session_states(sqlite_session)
+    await sqlite_session.commit()
+
+    assert deleted_count == 0
+    rows = await list_all_session_states(sqlite_session)
+    assert len(rows) == 1

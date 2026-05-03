@@ -79,6 +79,53 @@ On the host that hosts MC backend (`.64` in current topology):
 | Stop | `sudo systemctl stop mc-gateway-subscriber.service` |
 | Rotate token | edit `/etc/mc-gateway-subscriber/env`, then restart |
 
+## Periodic cleanup
+
+The projection table accumulates rows for hard-deleted MC agents
+(`mc-<uuid>` projection rows whose UUID has no matching `agents.id`).
+At the current scale (~100 active sessions) this is a slow leak, but
+running the cleanup periodically keeps the table bounded:
+
+```python
+# scripts/cleanup_gateway_session_state.py
+import asyncio
+import os
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlmodel.ext.asyncio.session import AsyncSession
+from app.db.url import normalize_database_url
+from app.services.mc_gateway_subscriber.session_state_repo import (
+    cleanup_orphaned_session_states,
+)
+
+async def main() -> None:
+    engine = create_async_engine(normalize_database_url(os.environ["DATABASE_URL"]))
+    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with sm() as session:
+        deleted = await cleanup_orphaned_session_states(session)
+        await session.commit()
+        print(f"deleted {deleted} orphaned rows")
+    await engine.dispose()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Schedule via systemd timer (daily is fine):
+```
+[Unit]
+Description=Purge gateway_session_state rows for hard-deleted agents
+[Timer]
+OnCalendar=daily
+[Install]
+WantedBy=timers.target
+```
+
+`mc-gateway-*` and `lead-*` rows are intentionally preserved — they
+represent gateway-internal and lead-namespace sessions with no MC
+agents row to JOIN against, and operators typically want the
+historical record to persist. Operator must clear them manually if
+no longer wanted.
+
 ## Module map
 
 - `subscriber.py` — `Subscriber` class. Pure protocol; no env, no
