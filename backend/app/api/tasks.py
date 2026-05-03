@@ -2892,6 +2892,32 @@ def _pipeline_event_missing_required_fields_error(
     )
 
 
+def _pipeline_event_requires_in_progress_error(*, current_status: str) -> HTTPException:
+    # E.3 incident 2026-05-03: PF posted six pipeline events while
+    # status="rework" (200 OK on each), then PATCHed rework→in_progress.
+    # The cycle anchor reset to the new in_progress_at and the
+    # previously-posted events fell outside the new window, silently
+    # invisible to pipeline.ready. Closing the silent-discard footgun:
+    # surface the workflow violation at the FIRST offending event so the
+    # agent retries with the correct sequence (rework → in_progress, then
+    # post events under the fresh cycle anchor). Cycle scope itself
+    # (Phase V §I9 Fix 2) stays — it's load-bearing against stale-event
+    # auto-resolve.
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": (
+                f"Pipeline events cannot be recorded while task status is "
+                f"`{current_status}`. PATCH the task to `in_progress` first "
+                f"so the new cycle anchor is in place; events posted under "
+                f"`rework` are silently discarded by the next cycle reset."
+            ),
+            "code": "pipeline_event_requires_in_progress",
+            "current_status": current_status,
+        },
+    )
+
+
 def _allowed_reviewer_roles_for_agent(agent: Agent) -> set[str]:
     profile = agent.identity_profile if isinstance(agent.identity_profile, dict) else {}
     role = str(profile.get("role") or "").strip().lower()
@@ -2998,6 +3024,8 @@ async def record_task_pipeline_event(
         task=task,
         actor=actor,
     )
+    if task.status == "rework":
+        raise _pipeline_event_requires_in_progress_error(current_status=task.status)
     missing_fields = pipeline_missing_required_fields(
         state=payload.state,
         values={
