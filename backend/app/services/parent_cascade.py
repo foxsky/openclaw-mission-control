@@ -26,6 +26,10 @@ from app.models.tasks import Task
 from app.services.activity_log import record_activity
 
 TERMINAL_STATUSES: frozenset[str] = frozenset({"done", "cancelled"})
+# Decomposition depth in practice is 2-3 levels (umbrella -> phase ->
+# track). 10 is generous and bounds runaway recursion if a cycle ever
+# slips into ``parent_task_id`` (no DB-level DAG enforcement).
+_UMBRELLA_CASCADE_MAX_DEPTH: int = 10
 
 
 async def non_terminal_children_of(
@@ -152,6 +156,7 @@ async def maybe_cascade_umbrella_close(
     session: AsyncSession,
     *,
     task: Task,
+    _depth: int = 0,
 ) -> Task | None:
     """Auto-cancel a never-executed parent when its last child terminates.
 
@@ -172,8 +177,14 @@ async def maybe_cascade_umbrella_close(
     do work after its children; auto-cancelling it would silently delete
     operator-attributed work.
 
+    **Depth limit** — recursion stops at ``_UMBRELLA_CASCADE_MAX_DEPTH``
+    levels so a pathological ``parent_task_id`` cycle (DB does not
+    enforce DAG) cannot loop unbounded.
+
     Caller must ``session.commit()`` if the result is non-None.
     """
+    if _depth >= _UMBRELLA_CASCADE_MAX_DEPTH:
+        return None
     if task.status not in TERMINAL_STATUSES:
         return None
     parent_id = task.parent_task_id
@@ -198,6 +209,19 @@ async def maybe_cascade_umbrella_close(
     if any(sib.status not in TERMINAL_STATUSES for sib in siblings):
         return None
 
+    # Tightening (codex 2026-05-03): require explicit UMBRELLA_RETIRED
+    # marker before auto-cancelling. The never-executed heuristic alone
+    # is too broad — a parent that was simply never picked up but
+    # intends to do real post-child integration work would be silently
+    # cancelled. The marker is the lead's commitment that the parent
+    # is decomposition-completed and its work shipped via children.
+    if parent.board_id is not None:
+        retired_ids = await task_ids_with_umbrella_retired_marker(
+            session, board_id=parent.board_id, task_ids=[parent.id],
+        )
+        if parent.id not in retired_ids:
+            return None
+
     parent.status = "cancelled"
     parent.cancelled_at = utcnow()
     parent.updated_at = parent.cancelled_at
@@ -221,7 +245,9 @@ async def maybe_cascade_umbrella_close(
     # Recurse: if grandparent is also a retired umbrella whose only
     # non-terminal child was this parent, cancel it too. Without this,
     # multi-level decomposition chains leak.
-    grandparent = await maybe_cascade_umbrella_close(session, task=parent)
+    grandparent = await maybe_cascade_umbrella_close(
+        session, task=parent, _depth=_depth + 1
+    )
     return grandparent if grandparent is not None else parent
 
 

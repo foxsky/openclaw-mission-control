@@ -68,8 +68,20 @@ async def _seed_umbrella_with_children(
     child_status: str = "done",
     parent_in_progress_at: datetime | None = None,
     parent_previous_in_progress_at: datetime | None = None,
+    add_retired_marker: bool = True,
 ) -> tuple[Task, list[Task]]:
-    """Seed an umbrella parent and N children at the requested status."""
+    """Seed an umbrella parent and N children at the requested status.
+
+    Default ``add_retired_marker=True`` mirrors the production discipline:
+    the lead's ``lead-inbox-routing`` skill posts ``UMBRELLA_RETIRED``
+    after decomposing an umbrella into children. Tests opting out
+    (``add_retired_marker=False``) cover the safety case where no
+    marker means no auto-cascade — a parent without the explicit
+    retired-marker is treated as a regular task whose work might still
+    happen.
+    """
+    from app.models.activity_events import ActivityEvent
+
     parent = Task(
         id=uuid4(),
         board_id=board.id,
@@ -90,6 +102,18 @@ async def _seed_umbrella_with_children(
         )
         session.add(child)
         children.append(child)
+    if add_retired_marker:
+        session.add(
+            ActivityEvent(
+                event_type="task.comment",
+                task_id=parent.id,
+                board_id=board.id,
+                message=(
+                    "UMBRELLA_RETIRED: materialized Architect plan into "
+                    "child tasks. Parent retired."
+                ),
+            ),
+        )
     await session.commit()
     await session.refresh(parent)
     for c in children:
@@ -269,6 +293,89 @@ async def test_cascade_records_activity_event(
 
 
 @pytest.mark.asyncio
+async def test_cascade_skips_parent_without_umbrella_retired_marker(
+    sqlite_session: AsyncSession,
+) -> None:
+    """Tightening from codex review: the never-executed heuristic alone
+    is too broad. A parent that was simply never-picked-up but doesn't
+    carry the explicit ``UMBRELLA_RETIRED`` comment must NOT auto-cancel
+    just because its children happen to be done. The marker is the
+    operator/lead's commitment that the parent's work shipped via
+    children and the parent itself is decomposition-completed."""
+    board = await _seed_board(sqlite_session, slug="cascade-no-marker")
+    parent, children = await _seed_umbrella_with_children(
+        sqlite_session, board=board, n_children=2, child_status="done",
+        add_retired_marker=False,
+    )
+    cascaded = await maybe_cascade_umbrella_close(sqlite_session, task=children[-1])
+    assert cascaded is None, (
+        "parent without UMBRELLA_RETIRED marker must NOT auto-cancel, even "
+        "with all-terminal children + no execution history"
+    )
+    await sqlite_session.refresh(parent)
+    assert parent.status == "inbox"
+
+
+@pytest.mark.asyncio
+async def test_cascade_stops_at_max_depth(
+    sqlite_session: AsyncSession,
+) -> None:
+    """Belt+suspenders against pathological parent_task_id graphs (DB
+    doesn't enforce DAG). Deep recursion must terminate at MAX_DEPTH
+    even if every level qualifies."""
+    board = await _seed_board(sqlite_session, slug="cascade-max-depth")
+    # Build a 12-level chain: child -> p1 -> p2 -> ... -> p11
+    # with each parent never-executed and its only-child terminal.
+    from app.models.activity_events import ActivityEvent
+    chain: list[Task] = []
+    parent_id = None
+    for i in range(11):
+        node = Task(
+            id=uuid4(), board_id=board.id, title=f"chain-{i}",
+            status="inbox", in_progress_at=None, previous_in_progress_at=None,
+            parent_task_id=parent_id,
+        )
+        sqlite_session.add(node)
+        chain.append(node)
+        # Each chain node is a retired umbrella so the cascade qualifies.
+        sqlite_session.add(ActivityEvent(
+            event_type="task.comment", task_id=node.id, board_id=board.id,
+            message=f"UMBRELLA_RETIRED: chain level {i}.",
+        ))
+        parent_id = node.id
+    # Bottom child (12th node) is the terminal trigger.
+    bottom = Task(
+        id=uuid4(), board_id=board.id, title="bottom",
+        status="done", parent_task_id=parent_id,
+    )
+    sqlite_session.add(bottom)
+    await sqlite_session.commit()
+    for n in chain + [bottom]:
+        await sqlite_session.refresh(n)
+
+    cascaded_top = await maybe_cascade_umbrella_close(sqlite_session, task=bottom)
+    assert cascaded_top is not None
+    # Chain layout: chain[0] is the TOP ancestor (parent=None), chain[10]
+    # is bottom's direct parent. Cascade walks bottom -> chain[10] ->
+    # chain[9] -> ... cancelling each. With MAX_DEPTH=10, exactly 10
+    # levels (chain[10] down to chain[1]) get cancelled; chain[0] stays
+    # in inbox because the recursion hits the depth limit before
+    # processing it.
+    cancelled_count = 0
+    for n in chain:
+        await sqlite_session.refresh(n)
+        if n.status == "cancelled":
+            cancelled_count += 1
+    assert cancelled_count == 10, (
+        f"expected exactly MAX_DEPTH=10 levels cancelled, got {cancelled_count}"
+    )
+    assert chain[0].status == "inbox", (
+        "max-depth safety must stop recursion before walking all 11 levels; "
+        f"top ancestor chain[0].status={chain[0].status}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_cascade_recurses_through_multi_level_chain(
     sqlite_session: AsyncSession,
 ) -> None:
@@ -295,6 +402,17 @@ async def test_cascade_recurses_through_multi_level_chain(
     sqlite_session.add(grandparent)
     sqlite_session.add(parent)
     sqlite_session.add(child)
+    # Both ancestor levels need the UMBRELLA_RETIRED marker for the
+    # cascade to walk through them.
+    from app.models.activity_events import ActivityEvent
+    sqlite_session.add(ActivityEvent(
+        event_type="task.comment", task_id=grandparent.id, board_id=board.id,
+        message="UMBRELLA_RETIRED: top-level umbrella decomposed.",
+    ))
+    sqlite_session.add(ActivityEvent(
+        event_type="task.comment", task_id=parent.id, board_id=board.id,
+        message="UMBRELLA_RETIRED: mid-level umbrella decomposed.",
+    ))
     await sqlite_session.commit()
     await sqlite_session.refresh(grandparent)
     await sqlite_session.refresh(parent)

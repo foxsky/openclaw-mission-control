@@ -25,6 +25,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api import tasks as tasks_api
 from app.api.deps import ActorContext
+from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
 from app.models.boards import Board
 from app.models.gateways import Gateway
@@ -115,6 +116,18 @@ async def test_lead_path_patch_to_done_triggers_umbrella_cascade() -> None:
                     review_packet_type="review_only",
                     parent_task_id=parent_id,
                     assigned_agent_id=lead_id,
+                ),
+            )
+            # UMBRELLA_RETIRED marker on the parent — per the production
+            # lead-inbox-routing skill, this is the explicit "decomposition
+            # done, parent is a coordination landmark" signal that
+            # qualifies the parent for auto-cascade.
+            session.add(
+                ActivityEvent(
+                    event_type="task.comment",
+                    task_id=parent_id,
+                    board_id=board_id,
+                    message="UMBRELLA_RETIRED: parent decomposed into child tasks.",
                 ),
             )
             await session.commit()
