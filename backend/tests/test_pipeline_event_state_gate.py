@@ -214,3 +214,53 @@ async def test_pipeline_event_post_allowed_when_task_status_is_done(
     await _attempt_post_event(
         sqlite_session, task=task, actor=worker, state="code_changed",
     )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_event_post_rejected_when_task_status_is_inbox(
+    sqlite_session: AsyncSession,
+) -> None:
+    """Inbox tasks have no in_progress cycle anchor — same cycle-anchor
+    bug as rework. Posting events here lumps them under None/null and
+    the next cycle reset silently discards them. Reject upstream so
+    the agent transitions inbox → in_progress first."""
+    _, worker, task = await _seed_task_with_status(
+        sqlite_session,
+        board_slug="gate-inbox-rejected",
+        status="inbox",
+        in_progress_at=None,
+        previous_in_progress_at=None,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _attempt_post_event(
+            sqlite_session, task=task, actor=worker, state="code_changed",
+        )
+    assert exc_info.value.status_code == 409
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    assert detail.get("code") == "pipeline_event_requires_in_progress"
+    assert detail.get("current_status") == "inbox"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_event_post_rejected_when_task_status_is_cancelled(
+    sqlite_session: AsyncSession,
+) -> None:
+    """Cancelled tasks are dead — posting new pipeline events on them
+    is suspect at best (retroactive evidence on abandoned work). Reject
+    so the agent doesn't accidentally pollute audit trails on tasks
+    that operator/lead has explicitly removed from scope."""
+    _, worker, task = await _seed_task_with_status(
+        sqlite_session,
+        board_slug="gate-cancelled-rejected",
+        status="cancelled",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _attempt_post_event(
+            sqlite_session, task=task, actor=worker, state="code_changed",
+        )
+    assert exc_info.value.status_code == 409
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    assert detail.get("code") == "pipeline_event_requires_in_progress"
+    assert detail.get("current_status") == "cancelled"

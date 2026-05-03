@@ -8,7 +8,7 @@ import re
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -2894,11 +2894,20 @@ def _pipeline_event_missing_required_fields_error(
     )
 
 
+# Statuses where posting pipeline events is rejected because the task
+# has no valid in_progress cycle anchor (or has been removed from scope).
+# - rework: events posted here get silently discarded by the next cycle
+#   reset on rework→in_progress (E.3 incident 2026-05-03).
+# - inbox: same cycle-anchor problem; agent should PATCH inbox→in_progress
+#   first.
+# - cancelled: task is dead; new pipeline events would pollute audit
+#   trails on work the operator/lead explicitly removed from scope.
+_PIPELINE_EVENT_REJECTED_STATUSES: Final[frozenset[str]] = frozenset(
+    {"rework", "inbox", "cancelled"},
+)
+
+
 def _pipeline_event_requires_in_progress_error(*, current_status: str) -> HTTPException:
-    # rework → in_progress resets the cycle anchor; events posted under
-    # rework are silently discarded by the next cycle reset. Surface
-    # the violation at the first offending POST instead of letting it
-    # land as a phantom 200.
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={
@@ -2906,7 +2915,8 @@ def _pipeline_event_requires_in_progress_error(*, current_status: str) -> HTTPEx
                 f"Pipeline events cannot be recorded while task status is "
                 f"`{current_status}`. PATCH the task to `in_progress` first "
                 f"so the new cycle anchor is in place; events posted under "
-                f"`rework` are silently discarded by the next cycle reset."
+                f"non-active statuses are silently discarded or pollute "
+                f"audit trails on dead work."
             ),
             "code": "pipeline_event_requires_in_progress",
             "current_status": current_status,
@@ -3020,7 +3030,7 @@ async def record_task_pipeline_event(
         task=task,
         actor=actor,
     )
-    if task.status == "rework":
+    if task.status in _PIPELINE_EVENT_REJECTED_STATUSES:
         raise _pipeline_event_requires_in_progress_error(current_status=task.status)
     missing_fields = pipeline_missing_required_fields(
         state=payload.state,
