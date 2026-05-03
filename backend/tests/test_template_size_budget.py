@@ -1121,6 +1121,16 @@ def test_custom_lead_skills_match_template_boundaries() -> None:
     assert "Decomposition Gate" in inbox
     assert "ARCHITECT_ID" in inbox
     assert "Umbrella Lifecycle" in inbox
+    # Pin the lead-inbox-shortcut contract: lead PATCHing an inbox task
+    # to a validator (Architect/QA) MUST use status=in_progress so the
+    # backend's auto-correct converts it to review. Direct status=review
+    # is rejected by the lead-path validator at tasks.py:4081-4087
+    # (production failure 2026-05-03 on QA gate 5b7abdd2).
+    assert '"assigned_agent_id":"ARCHITECT_ID","status":"in_progress"' in inbox
+    assert (
+        '`{"assigned_agent_id":"ARCHITECT_ID","status":"review"}`' not in inbox
+    ), "Architect route must NOT instruct status=review for inbox tasks"
+    assert "auto-converts the target to `review`" in inbox
 
     memory = _read_skill_text_or_skip("lead-memory-intake")
     assert "Step 2" in memory
@@ -1170,11 +1180,22 @@ def test_extracted_worker_review_skills_match_template_boundaries() -> None:
     assert "Architect Review Verdict" in architect
     assert "planned_child_task_ids" in architect
     assert "no_child_tasks_required:true" in architect
+    # Per the 3-subagent triage 2026-05-03: Architect review is structurally
+    # different from QA's per-AC matrix. Lifted only the verbatim AC-quoting
+    # rule + Scope/AC coverage lines (no matrix). These literals pin those
+    # additions so future skill edits don't silently drop them.
+    assert "AC Quoting Rule (verbatim, no paraphrase)" in architect
+    assert "Scope: cross-cutting | per-AC" in architect
+    assert "AC coverage:" in architect
+    assert "Verdict basis:" in architect
 
     recheck = _read_skill_text_or_skip("reviewer-recheck")
     assert "QA RECHECK for $TASK_ID" in recheck
     assert "ARCHITECT RECHECK for $TASK_ID" in recheck
     assert "Re-citing a previous PASS is forbidden" in recheck
+    # ARCHITECT RECHECK adds a single Diff from previous narrative line
+    # (not a per-AC delta column — see triage on architect skill above).
+    assert "Diff from previous:" in recheck
 
     devops = _read_skill_text_or_skip("devops-deploy-validation")
     assert "DEVOPS DIAGNOSIS for $TASK_ID rejection" in devops

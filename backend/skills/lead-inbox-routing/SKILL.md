@@ -39,8 +39,15 @@ decision. If skipping, record `[NO-DECOMPOSE: <reason>]`.
 Architect route:
 
 ```json
-{"assigned_agent_id":"ARCHITECT_ID","status":"review"}
+{"assigned_agent_id":"ARCHITECT_ID","status":"in_progress"}
 ```
+
+The backend's lead-path validator only allows the `inbox → in_progress`
+shortcut on the lead path; it then **auto-corrects** the target to
+`review` when the assigned agent is a review-only validator (Architect
+or QA). PATCHing `status:"review"` directly returns 403 with
+`Lead status gate failed: board leads can only change status when the
+current task status is review`.
 
 Nudge text:
 
@@ -90,7 +97,17 @@ different board or at the subtask itself.
 - Frontend/UI/product surface work -> Programmer-Frontend.
 - Backend/API/persistence/auth/service work -> Programmer-Backend.
 - Infra/deploy/live-target/build-drift/operator-target work -> DevOps.
-- Review, QA, or Architect validation tasks -> status `review`.
+- Review, QA, or Architect validation tasks already in `review` status -> just
+  assign: `{"assigned_agent_id":"UUID"}` (no status change). The current `review`
+  status accepts assignment without re-PATCHing status.
+- Inbox task being routed to a validator (Architect, QA-Unit, QA-E2E) -> patch
+  `{"assigned_agent_id":"UUID","status":"in_progress"}`. The lead-path validator
+  ONLY accepts the inbox-shortcut to `in_progress`; the backend then
+  auto-converts the target to `review` when the assignee has
+  `validation_flow=qa_validation` or `dev_acp_flow=review_only`. PATCHing
+  `status:"review"` directly on an inbox task returns 403 with `Lead status
+  gate failed: board leads can only change status when the current task status
+  is review`.
 - Unassigned implementation inbox task plus idle implementation agent -> patch
   `{"assigned_agent_id":"UUID","status":"in_progress"}` and nudge once.
 

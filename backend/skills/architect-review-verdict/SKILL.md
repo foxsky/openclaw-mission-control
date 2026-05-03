@@ -47,6 +47,23 @@ fill the gap with source-level inference.
   with `blocking_owner` set to the implementer, not PASS with a non-blocking
   note.
 
+## AC Quoting Rule (verbatim, no paraphrase)
+
+When you cite an acceptance criterion in your verdict — whether in
+`Blocking findings`, `Non-blocking findings`, or the `AC coverage` line —
+the AC text must be **copied verbatim** from the task description's
+`Acceptance criteria:` section. Do not summarize, reword, simplify, or
+describe what the live state shows in place of the AC text — that lets a
+deviation pass review by quietly matching what was implemented instead of
+what was specified.
+
+If the spec AC says `Preserve/verify dashboard wrapper perspective tilt
+from VP-13: rotateY(-14deg), transform-origin: left center`, your finding
+quotes exactly that. If the live state has `rotateY(+14deg)` at
+`right center`, your finding reports the live value and your verdict is
+FAIL — not a reworded AC like "right edge near / left edge recedes" that
+turns a deviation into a description.
+
 ## Comment Format
 
 Post one task comment:
@@ -55,15 +72,35 @@ Post one task comment:
 $AGENT_NAME review for $TASK_ID
 Verdict: PASS/FAIL/INCONCLUSIVE
 Target: <review target, validation_target*, commit/build>
+Scope: cross-cutting | per-AC
+AC coverage: <e.g., 1, 3, 5 (architecture); ALL (freshness)>
 Evidence reviewed: <worker packet, browser/runtime output, tests, diff>
 Blocking findings:
-- <file:line or AC> <finding> <required evidence/fix>
+- <file:line or verbatim AC quote> <finding> <required evidence/fix>
 Non-blocking findings:
 - <item or none>
 Evidence gaps:
 - <missing packet/output or none>
+Verdict basis: PASS means no blocking findings AND every spec-value/AC quoted
+verbatim matched the live observation; FAIL means any blocking finding or
+verbatim deviation; INCONCLUSIVE means missing evidence packet or source drift.
+Suggested routing: lead keep in review / lead move to rework for <owner/reason>
+/ lead route operator
 Lead wake: structured-review-verdict review event
 ```
+
+**`Scope:` line.** Choose `per-AC` when each acceptance criterion has
+its own observable artifact (e.g. each AC names a specific component or
+behavior). Choose `cross-cutting` when the finding applies to the change
+as a whole (e.g. freshness, traceability, regression, architecture
+coherence) — Architect review is often structural rather than checklist-
+shaped, and this line tells the lead which lens you used.
+
+**`AC coverage:` line.** Names the acceptance criteria you actually
+inspected, by number, with the lens used for each. Use `ALL` when the
+finding (typically cross-cutting) applies to every AC. This preserves
+per-AC traceability without forcing every cross-cutting finding into a
+table row that distorts its scope.
 
 Then use `structured-review-verdict` with `reviewer_role="architect"` and the
 matching verdict. The review-events API wakes the lead after the structured

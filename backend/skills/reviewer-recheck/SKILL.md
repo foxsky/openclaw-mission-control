@@ -39,13 +39,22 @@ Map `INFRA BLOCKED` to `infra_blocked` when posting the structured event.
 ```text
 ARCHITECT RECHECK for $TASK_ID:
   Challenge/rejection quoted: "<paste issue word-for-word>"
-  Previous verdict: PASS/FAIL/INCONCLUSIVE
+  Previous verdict: PASS/FAIL/INCONCLUSIVE on <packet/build>
   New evidence reviewed: <commit/build/evidence packet or "none">
+  Diff from previous: <one-line summary, e.g. "AC3 lighthouserc threshold
+                       fixed; AC1 still missing webp coverage" or
+                       "scope unchanged, evidence updated">
   Corrected verdict: PASS/FAIL/INCONCLUSIVE
   Blocking findings: <list or "none">
   Evidence gaps: <list or "none">
   Lead wake: structured-review-verdict review event
 ```
+
+The `Diff from previous` line replaces the fragility of a per-AC delta
+column — Architect findings often regress on one dimension and improve
+on another, which a single classification can't capture. A one-line
+narrative summary lets the lead/operator scan the change without
+parsing a column of mostly `unchanged` entries.
 
 If the corrected verdict changes required roles, blocking owner, or routing,
 include those fields in the structured review event.
