@@ -7,10 +7,22 @@ runtime; projection / DB writes live in sibling modules added as
 each event type's handler ships.
 """
 
+from app.services.mc_gateway_subscriber.db_session_state_projector import (
+    DbSessionStateProjector,
+)
 from app.services.mc_gateway_subscriber.session_state_projector import (
     SessionState,
     SessionStateProjector,
 )
+from app.services.mc_gateway_subscriber.session_state_repo import (
+    SessionStateRepo,
+)
 from app.services.mc_gateway_subscriber.subscriber import Subscriber
 
-__all__ = ["SessionState", "SessionStateProjector", "Subscriber"]
+__all__ = [
+    "DbSessionStateProjector",
+    "SessionState",
+    "SessionStateProjector",
+    "SessionStateRepo",
+    "Subscriber",
+]

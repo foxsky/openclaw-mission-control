@@ -66,6 +66,44 @@ def parse_session_key(key: Any) -> tuple[str, str] | None:
     return agent_id, label
 
 
+def build_state_from_frame(frame: dict[str, Any]) -> SessionState | None:
+    """Pure function: extract a ``SessionState`` from a sessions.changed
+    event frame, or ``None`` if the frame is malformed / off-namespace.
+
+    Shared by both projector implementations (in-memory + DB) so the
+    parsing contract has exactly one source of truth. No side effects;
+    no last-write-wins ordering — that lives in the projector callers
+    that own the storage layer.
+    """
+    payload = frame.get("payload")
+    if not isinstance(payload, dict):
+        return None
+
+    parsed = parse_session_key(payload.get("sessionKey"))
+    if parsed is None:
+        return None
+    agent_id, label = parsed
+
+    ts = payload.get("ts")
+    if not isinstance(ts, int):
+        return None
+
+    session = payload.get("session") or {}
+    return SessionState(
+        agent_id=agent_id,
+        session_label=label,
+        session_id=_optional_str(session.get("sessionId")),
+        last_phase=_optional_str(payload.get("phase")),
+        last_message_seq=_optional_int(payload.get("messageSeq")),
+        last_changed_at_ms=ts,
+        input_tokens=_optional_int(session.get("inputTokens")),
+        output_tokens=_optional_int(session.get("outputTokens")),
+        total_tokens=_optional_int(session.get("totalTokens")),
+        channel=_optional_str(session.get("channel")),
+        aborted_last_run=bool(session.get("abortedLastRun", False)),
+    )
+
+
 @dataclass
 class SessionStateProjector:
     """In-memory projector for ``sessions.changed`` events."""
@@ -78,43 +116,20 @@ class SessionStateProjector:
         seq}``; the projector unwraps ``frame["payload"]`` internally so
         it can be wired directly via
         ``Subscriber.on('sessions.changed', projector)``."""
-        payload = frame.get("payload")
-        if not isinstance(payload, dict):
+        new_state = build_state_from_frame(frame)
+        if new_state is None:
             return
 
-        session_key = payload.get("sessionKey")
-        parsed = parse_session_key(session_key)
-        if parsed is None:
-            return
-        agent_id, label = parsed
-
-        ts = payload.get("ts")
-        if not isinstance(ts, int):
+        key = (new_state.agent_id, new_state.session_label)
+        existing = self._state.get(key)
+        if existing is not None and new_state.last_changed_at_ms <= existing.last_changed_at_ms:
             return
 
-        existing = self._state.get((agent_id, label))
-        if existing is not None and ts <= existing.last_changed_at_ms:
-            return
-
-        session = payload.get("session") or {}
-        new_state = SessionState(
-            agent_id=agent_id,
-            session_label=label,
-            session_id=_optional_str(session.get("sessionId")),
-            last_phase=_optional_str(payload.get("phase")),
-            last_message_seq=_optional_int(payload.get("messageSeq")),
-            last_changed_at_ms=ts,
-            input_tokens=_optional_int(session.get("inputTokens")),
-            output_tokens=_optional_int(session.get("outputTokens")),
-            total_tokens=_optional_int(session.get("totalTokens")),
-            channel=_optional_str(session.get("channel")),
-            aborted_last_run=bool(session.get("abortedLastRun", False)),
-        )
-        # Slice 4 note: when wiring side-effects here (DB write, fan-out
-        # callback), diff `new_state` against `existing` first — heartbeat
-        # ticks emit sessions.changed every ~10s with the same field
-        # values and would otherwise cause write/notify amplification.
-        self._state[(agent_id, label)] = new_state
+        # Slice-4 note (now realised by DbSessionStateProjector): when
+        # wiring side-effects, diff against `existing` first — heartbeat
+        # ticks emit sessions.changed every ~10s with identical field
+        # values, so unguarded write/notify amplifies pointlessly.
+        self._state[key] = new_state
 
     def get(self, agent_id: str) -> tuple[SessionState, ...]:
         """Return all session snapshots for ``agent_id`` (empty tuple if
