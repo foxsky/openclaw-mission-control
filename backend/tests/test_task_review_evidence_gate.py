@@ -773,3 +773,240 @@ async def test_implementation_rework_on_review_only_task_is_rejected() -> None:
             assert exc.value.detail["code"] == "review_only_rework_requires_packet_type_change"
     finally:
         await engine.dispose()
+
+
+async def _board_lead(session: AsyncSession, board: Board) -> Agent:
+    lead = (
+        await session.exec(
+            select(Agent).where(
+                col(Agent.board_id) == board.id,
+                col(Agent.is_board_lead).is_(True),
+            ),
+        )
+    ).first()
+    assert lead is not None
+    return lead
+
+
+async def _disable_review_comment_requirement(
+    session: AsyncSession, board: Board,
+) -> None:
+    board.comment_required_for_review = False
+    session.add(board)
+    await session.commit()
+
+
+async def _seed_validator_for_board(
+    session: AsyncSession, board: Board,
+) -> Agent:
+    """Add an Architect (dev_acp_flow=review_only) to the board so the
+    lead's inbox→in_progress auto-correct routes the task into
+    ``review``."""
+    validator = Agent(
+        id=uuid4(),
+        name="Architect",
+        board_id=board.id,
+        gateway_id=board.gateway_id,
+        status="online",
+        identity_profile={"dev_acp_flow": "review_only"},
+    )
+    session.add(validator)
+    await session.commit()
+    return validator
+
+
+@pytest.mark.asyncio
+async def test_lead_inbox_to_review_autocorrect_rejects_incomplete_pipeline() -> None:
+    """When a lead assigns a validator (Architect/QA) to an inbox
+    frontend_ui task with status=in_progress, the lead-path
+    auto-correct rewrites the target status to ``review``. Without a
+    pipeline gate at this boundary, an unstarted task lands in
+    ``review`` and the lead-next-action gate later surfaces the
+    reactive ``pipeline_missing_review_gate`` Blocker. Option A: reject
+    at write time so the lead must wait for the worker to complete the
+    pipeline before routing for review."""
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            board, _worker, task = await _seed_worker_task(
+                session, status="inbox",
+            )
+            await _disable_review_comment_requirement(session, board)
+            validator = await _seed_validator_for_board(session, board)
+            lead = await _board_lead(session, board)
+
+            with pytest.raises(HTTPException) as exc:
+                await tasks_api.update_task(
+                    payload=TaskUpdate(
+                        status="in_progress",
+                        assigned_agent_id=validator.id,
+                    ),
+                    task=await _reload_task(session, task.id),
+                    session=session,
+                    actor=ActorContext(actor_type="agent", agent=lead),
+                )
+
+            assert exc.value.status_code == 409
+            assert exc.value.detail["code"] == "task_pipeline_incomplete"
+            assert exc.value.detail["first_missing_state"] == "code_changed"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_lead_inbox_to_review_autocorrect_accepts_complete_pipeline() -> None:
+    """Positive control for the auto-correct path: when the pipeline
+    is complete, the lead-driven route to review lands cleanly."""
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            board, worker, task = await _seed_worker_task(
+                session, status="inbox",
+            )
+            await _disable_review_comment_requirement(session, board)
+            await _record_frontend_pipeline_ready(
+                session, board=board, worker=worker, task=task,
+            )
+            validator = await _seed_validator_for_board(session, board)
+            lead = await _board_lead(session, board)
+
+            updated = await tasks_api.update_task(
+                payload=TaskUpdate(
+                    status="in_progress",
+                    assigned_agent_id=validator.id,
+                ),
+                task=await _reload_task(session, task.id),
+                session=session,
+                actor=ActorContext(actor_type="agent", agent=lead),
+            )
+            assert updated.status == "review"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_lead_inbox_to_review_autocorrect_skips_gate_for_review_only_packet() -> None:
+    """``review_only`` packets don't have a code/build/deploy pipeline
+    by design (architecture/docs review). The auto-correct path must
+    continue to allow them through on inbox→in_progress assignment to
+    a validator."""
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            board, _worker, task = await _seed_worker_task(
+                session, status="inbox", review_packet_type="review_only",
+            )
+            await _disable_review_comment_requirement(session, board)
+            task.validation_target = None
+            task.validation_target_kind = None
+            task.validation_target_scope = None
+            session.add(task)
+            await session.commit()
+            validator = await _seed_validator_for_board(session, board)
+            lead = await _board_lead(session, board)
+
+            updated = await tasks_api.update_task(
+                payload=TaskUpdate(
+                    status="in_progress",
+                    assigned_agent_id=validator.id,
+                ),
+                task=await _reload_task(session, task.id),
+                session=session,
+                actor=ActorContext(actor_type="agent", agent=lead),
+            )
+            assert updated.status == "review"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_lead_packet_type_change_into_pipeline_required_rejects_when_pipeline_incomplete() -> None:
+    """An already-``review`` task with ``review_packet_type=review_only``
+    has no pipeline contract. A lead PATCH that flips it to
+    ``frontend_ui`` introduces the pipeline contract — the gate must
+    fire even though the task was already in ``review``. Without this,
+    a packet-type change re-introduces the reactive Blocker pattern
+    Option A removes."""
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            board, _worker, task = await _seed_worker_task(
+                session, status="review", review_packet_type="review_only",
+            )
+            await _disable_review_comment_requirement(session, board)
+            lead = await _board_lead(session, board)
+
+            with pytest.raises(HTTPException) as exc:
+                await tasks_api.update_task(
+                    payload=TaskUpdate(review_packet_type="frontend_ui"),
+                    task=await _reload_task(session, task.id),
+                    session=session,
+                    actor=ActorContext(actor_type="agent", agent=lead),
+                )
+            assert exc.value.status_code == 409
+            assert exc.value.detail["code"] == "task_pipeline_incomplete"
+            assert exc.value.detail["first_missing_state"] == "code_changed"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_lead_packet_type_change_relaxing_contract_does_not_fire_gate() -> None:
+    """Lead flipping a review task's packet from ``frontend_ui`` (with
+    incomplete pipeline) to ``review_only`` must succeed — the new
+    contract no longer requires pipeline evidence. Documents that the
+    gate only fires on transitions INTO a pipeline-required contract,
+    not on every packet-type change."""
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            board, _worker, task = await _seed_worker_task(
+                session, status="review", review_packet_type="frontend_ui",
+            )
+            await _disable_review_comment_requirement(session, board)
+            lead = await _board_lead(session, board)
+
+            updated = await tasks_api.update_task(
+                payload=TaskUpdate(review_packet_type="review_only"),
+                task=await _reload_task(session, task.id),
+                session=session,
+                actor=ActorContext(actor_type="agent", agent=lead),
+            )
+            assert updated.review_packet_type == "review_only"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_lead_idempotent_review_patch_does_not_fire_gate_on_legacy_state() -> None:
+    """A lead PATCH on an already-``review`` ``frontend_ui`` task that
+    does NOT change the packet type must not re-fire the gate (the
+    contract did not transition). This avoids spuriously rejecting
+    PATCHes that touch other fields on legacy review tasks that
+    pre-date the gate."""
+    engine = await _make_engine()
+    try:
+        async with await _make_session(engine) as session:
+            board, _worker, task = await _seed_worker_task(
+                session, status="review", review_packet_type="frontend_ui",
+            )
+            await _disable_review_comment_requirement(session, board)
+            lead = await _board_lead(session, board)
+            other = Agent(
+                id=uuid4(), name="Programmer-Frontend",
+                board_id=board.id, gateway_id=board.gateway_id,
+                status="online",
+                identity_profile={"dev_acp_flow": "claude_then_codex_review"},
+            )
+            session.add(other)
+            await session.commit()
+
+            updated = await tasks_api.update_task(
+                payload=TaskUpdate(assigned_agent_id=other.id),
+                task=await _reload_task(session, task.id),
+                session=session,
+                actor=ActorContext(actor_type="agent", agent=lead),
+            )
+            assert updated.assigned_agent_id == other.id
+    finally:
+        await engine.dispose()

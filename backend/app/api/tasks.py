@@ -146,7 +146,10 @@ from app.services.task_pipeline import (
     require_frontend_pipeline_ready_for_review,
 )
 from app.services.task_review_events import (
+    coerce_uuid_list,
     get_task_review_readiness,
+    qa_e2e_pass_evidence_issues,
+    required_review_roles,
     task_review_event_read,
 )
 
@@ -3280,57 +3283,130 @@ async def _notify_lead_on_review_event(
     await session.commit()
 
 
-def _require_review_event_artifact_completeness(
-    payload: TaskReviewEventCreate, task: Task,
+async def _require_review_event_artifact_completeness(
+    payload: TaskReviewEventCreate,
+    task: Task,
+    session: AsyncSession,
 ) -> None:
     """Reject Architect PASS on a review_only packet that lacks
     child-task evidence at write time.
 
-    Production gap 2026-05-03: Architect (with stale skill content)
-    posted a structured PASS without ``planned_child_task_ids`` /
-    ``no_child_tasks_required:true``. The structured event committed
-    cleanly; review-readiness then computed ``ready=false`` and
-    Supervisor reactively filed a Blocker. Reactive blockers in agent
-    prose are exactly the layer the architectural critique flagged as
-    wrong — invariants belong at the write boundary, not after-the-fact
-    reactive blockers.
-
-    The rule (mirrors ``_review_only_artifact_state`` in
-    ``services.task_review_events``): when reviewer_role=architect AND
-    verdict=pass AND task.review_packet_type=review_only, the evidence
-    dict must carry either non-empty ``planned_child_task_ids`` OR
-    ``no_child_tasks_required:true``. Other reviewer roles, other
-    packet types, and FAIL/INCONCLUSIVE verdicts are unaffected.
+    Mirrors ``_review_only_artifact_state`` in
+    ``services.task_review_events`` so the readiness gate and the write
+    boundary share the same rule set: UUID-coerced
+    ``planned_child_task_ids``, no parent self-reference, and every
+    declared child must belong to the parent's board. The legacy
+    "list non-empty" check accepted strings that the read-side then
+    rejected, leaving the verdict committed but ``ready=false`` —
+    exactly the reactive-Blocker loop Option A removes.
     """
+    if payload.verdict != "pass":
+        return
+
+    if (
+        payload.reviewer_role == "qa_e2e"
+        and "qa_e2e" in required_review_roles(task.review_packet_type)
+    ):
+        issues = qa_e2e_pass_evidence_issues(
+            evidence_type=payload.evidence_type,
+            target=payload.target,
+            build_hash=payload.build_hash,
+            evidence=payload.evidence,
+        )
+        if issues:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "message": (
+                        "QA-E2E PASS evidence is incomplete. The "
+                        "review-readiness gate requires "
+                        "evidence_type='browser', a non-empty target "
+                        "and build_hash, plus per-AC and per-route "
+                        "browser-matrix rows that all PASS with zero "
+                        "console errors and network failures. See "
+                        "qa-validation-verdict skill."
+                    ),
+                    "code": "qa_e2e_pass_invalid_evidence",
+                    "reviewer_role": payload.reviewer_role,
+                    "review_packet_type": task.review_packet_type,
+                    "issues": issues,
+                },
+            )
+
     if (
         payload.reviewer_role != "architect"
-        or payload.verdict != "pass"
         or task.review_packet_type != "review_only"
     ):
         return
     evidence = payload.evidence if isinstance(payload.evidence, dict) else {}
     if evidence.get("no_child_tasks_required") is True:
         return
-    planned = evidence.get("planned_child_task_ids")
-    if isinstance(planned, list) and len(planned) > 0:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        detail={
-            "message": (
-                "Architect PASS on a review_only packet must carry "
-                "either non-empty `planned_child_task_ids` (the child "
-                "tasks the parent decomposed into) or "
-                "`no_child_tasks_required: true` (intentionally "
-                "non-decomposed scope). Otherwise the review-readiness "
-                "gate cannot determine whether the parent is "
-                "approvable. See architect-review-verdict skill."
+
+    declared = coerce_uuid_list(evidence.get("planned_child_task_ids"))
+    if not declared:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "message": (
+                    "Architect PASS on a review_only packet must carry "
+                    "either non-empty `planned_child_task_ids` (a list "
+                    "of valid child task UUIDs) or "
+                    "`no_child_tasks_required: true` (intentionally "
+                    "non-decomposed scope). Empty lists, non-list "
+                    "values, and non-UUID strings all fail the "
+                    "review-readiness gate downstream. See "
+                    "architect-review-verdict skill."
+                ),
+                "code": "review_only_pass_requires_child_task_evidence",
+                "reviewer_role": payload.reviewer_role,
+                "review_packet_type": task.review_packet_type,
+            },
+        )
+
+    if task.id in declared:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "message": (
+                    "Architect PASS on a review_only packet listed the "
+                    "parent task's own ID inside `planned_child_task_ids`. "
+                    "The parent cannot decompose into itself; remove the "
+                    "self-reference or replace it with the actual child "
+                    "task IDs."
+                ),
+                "code": "review_only_pass_includes_parent_task_id",
+                "reviewer_role": payload.reviewer_role,
+                "review_packet_type": task.review_packet_type,
+                "parent_task_id": str(task.id),
+            },
+        )
+
+    existing = set(
+        await session.exec(
+            select(col(Task.id)).where(
+                col(Task.board_id) == task.board_id,
+                col(Task.id).in_(declared),
             ),
-            "code": "review_only_pass_requires_child_task_evidence",
-            "reviewer_role": payload.reviewer_role,
-            "review_packet_type": task.review_packet_type,
-        },
+        ),
     )
+    missing = [tid for tid in declared if tid not in existing]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "message": (
+                    "Architect PASS on a review_only packet declared "
+                    "child task IDs that do not exist on this board. "
+                    "Create the child tasks on the parent's board "
+                    "before posting the structured PASS, or remove the "
+                    "missing IDs from `planned_child_task_ids`."
+                ),
+                "code": "review_only_pass_child_tasks_not_found",
+                "reviewer_role": payload.reviewer_role,
+                "review_packet_type": task.review_packet_type,
+                "missing_child_task_ids": [str(tid) for tid in missing],
+            },
+        )
 
 
 @router.post("/{task_id}/review-events", response_model=TaskReviewEventRead)
@@ -3349,7 +3425,7 @@ async def record_task_review_event(
         actor=actor,
     )
     _require_reviewer_role_allowed(actor=actor, reviewer_role=payload.reviewer_role)
-    _require_review_event_artifact_completeness(payload, task)
+    await _require_review_event_artifact_completeness(payload, task, session)
     event = TaskReviewEvent(
         board_id=task.board_id,
         task_id=task.id,
@@ -3493,6 +3569,7 @@ async def update_task(
         )
     previous_status = task.status
     previous_assigned = task.assigned_agent_id
+    previous_review_packet_type = task.review_packet_type
     updates = payload.model_dump(exclude_unset=True)
     comment = payload.comment if "comment" in payload.model_fields_set else None
     depends_on_task_ids = (
@@ -3515,6 +3592,7 @@ async def update_task(
         previous_status=previous_status,
         previous_assigned=previous_assigned,
         previous_in_progress_at=task.in_progress_at,
+        previous_review_packet_type=previous_review_packet_type,
         status_requested=(requested_status is not None and requested_status != previous_status),
         updates=updates,
         comment=comment,
@@ -3825,6 +3903,7 @@ class _TaskUpdateInput:
     tag_ids: list[UUID] | None
     custom_field_values: TaskCustomFieldValues
     custom_field_values_set: bool
+    previous_review_packet_type: str | None
     previous_in_progress_at: datetime | None = None
     normalized_tag_ids: list[UUID] | None = None
 
@@ -4480,6 +4559,9 @@ async def _apply_lead_task_update(
         )
 
     await _require_validator_status_invariant(session, update.task)
+    await _require_pipeline_complete_for_review(
+        session, update=update,
+    )
     await _require_no_pending_approval_for_status_change_when_enabled(
         session,
         board_id=update.board_id,
@@ -4945,6 +5027,55 @@ async def _assign_review_task_to_lead(
     update.task.assigned_agent_id = lead.id
 
 
+async def _require_pipeline_complete_for_review(
+    session: AsyncSession,
+    *,
+    update: _TaskUpdateInput,
+) -> None:
+    """Universal write-time pipeline gate. Fires on the boundary where
+    a task becomes a pipeline-required review:
+
+    1. status just entered ``review`` (worker submission, lead inbox→
+       in_progress validator-assignment auto-correct, admin push), OR
+    2. an already-``review`` task's ``review_packet_type`` was just
+       changed into a pipeline-required type (e.g., ``review_only`` →
+       ``frontend_ui`` / ``mixed``). Codex 2026-05-03 caught that
+       leads can PATCH ``review_packet_type`` on an already-review
+       task; without (2), the gate would skip and the task would sit
+       in review with a contract that requires pipeline evidence it
+       doesn't have.
+
+    Runs for every actor — workers, leads, admins. Worker-specific
+    rework / FINAL_EVIDENCE_PACKET / packet_commit_sha checks stay
+    in ``_require_worker_review_evidence_packet`` and run BEFORE
+    this gate so worker-specific error codes take precedence when
+    both apply.
+
+    Uses ``update.task.status`` / ``update.task.review_packet_type``
+    (post-mutation) so the lead-path auto-corrected status and the
+    just-applied packet type are what's checked.
+    """
+    if update.task.status != "review":
+        return
+    if not frontend_pipeline_required(update.task.review_packet_type):
+        return
+    pre_required = frontend_pipeline_required(update.previous_review_packet_type)
+    just_entered_review = update.previous_status != "review"
+    contract_just_required_pipeline = not pre_required
+    if not (just_entered_review or contract_just_required_pipeline):
+        return
+    review_comment_since = (
+        update.task.previous_in_progress_at
+        if update.task.previous_in_progress_at is not None
+        else update.previous_in_progress_at
+    )
+    await require_frontend_pipeline_ready_for_review(
+        session,
+        task=update.task,
+        since=review_comment_since,
+    )
+
+
 async def _require_worker_review_evidence_packet(
     session: AsyncSession,
     *,
@@ -5025,11 +5156,6 @@ async def _require_worker_review_evidence_packet(
                     "`Active blocker cleared:` and evidence that clears the reviewer blocker."
                 ),
             )
-        await require_frontend_pipeline_ready_for_review(
-            session,
-            task=update.task,
-            since=review_comment_since,
-        )
         return
     if packet is not None:
         return
@@ -5262,6 +5388,9 @@ async def _finalize_updated_task(
         ):
             raise _comment_validation_error()
     await _require_worker_review_evidence_packet(session, update=update)
+    await _require_pipeline_complete_for_review(
+        session, update=update,
+    )
     if status_raw == "review" and _actor_is_implementation_agent(update.actor):
         update.task.rework_started_at = None
     await _assign_review_task_to_lead(session, update=update)

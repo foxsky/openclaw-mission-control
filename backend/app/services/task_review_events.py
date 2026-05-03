@@ -80,7 +80,16 @@ def task_review_event_read(event: TaskReviewEvent) -> TaskReviewEventRead:
     )
 
 
-def _coerce_uuid_list(value: object) -> list[UUID] | None:
+def coerce_uuid_list(value: object) -> list[UUID] | None:
+    """Coerce a JSON evidence value to a list of UUIDs.
+
+    Returns ``None`` if the value is not a list, contains non-string
+    non-UUID items, or contains strings that don't parse as UUIDs.
+    Empty input list returns ``[]`` (caller decides whether empty is
+    acceptable). Used by both the read-side review-readiness gate and
+    the write-side ``/review-events`` POST guard so both layers reject
+    the same malformed payloads.
+    """
     if not isinstance(value, list):
         return None
     parsed: list[UUID] = []
@@ -120,34 +129,35 @@ def _non_empty_dict_rows(value: object) -> list[dict[str, object]] | None:
     return rows
 
 
-def _qa_e2e_pass_artifact_issues(
+def qa_e2e_pass_evidence_issues(
     *,
-    latest_by_role: dict[str, TaskReviewEvent],
-    required_roles: Sequence[str],
+    evidence_type: str | None,
+    target: str | None,
+    build_hash: str | None,
+    evidence: object,
 ) -> list[str]:
-    if "qa_e2e" not in required_roles:
-        return []
-
-    event = latest_by_role.get("qa_e2e")
-    if event is None or event.verdict != PASS_VERDICT:
-        return []
-
+    """Return the list of QA-E2E PASS evidence issues for a given
+    record's fields. Pure — operates on the same field shape exposed
+    by both ``TaskReviewEvent`` (read-side) and
+    ``TaskReviewEventCreate`` (write-side) so the two paths share one
+    rule set.
+    """
     issues: list[str] = []
-    if event.evidence_type != "browser":
+    if evidence_type != "browser":
         issues.append("qa_e2e_pass_wrong_evidence_type")
-    if not _is_present_text(event.target):
+    if not _is_present_text(target):
         issues.append("qa_e2e_pass_missing_target")
-    if not _is_present_text(event.build_hash):
+    if not _is_present_text(build_hash):
         issues.append("qa_e2e_pass_missing_build_hash")
 
-    evidence = event.evidence if isinstance(event.evidence, dict) else {}
-    ac_rows = _non_empty_dict_rows(evidence.get("ac_rows"))
+    evidence_dict = evidence if isinstance(evidence, dict) else {}
+    ac_rows = _non_empty_dict_rows(evidence_dict.get("ac_rows"))
     if ac_rows is None:
         issues.append("qa_e2e_pass_missing_ac_rows")
     elif any(not _is_pass_value(row.get("result")) for row in ac_rows):
         issues.append("qa_e2e_pass_ac_rows_have_failures")
 
-    browser_matrix = _non_empty_dict_rows(evidence.get("browser_matrix"))
+    browser_matrix = _non_empty_dict_rows(evidence_dict.get("browser_matrix"))
     if browser_matrix is None:
         issues.append("qa_e2e_pass_missing_browser_matrix")
     elif any(
@@ -161,6 +171,26 @@ def _qa_e2e_pass_artifact_issues(
         issues.append("qa_e2e_pass_browser_matrix_has_failures")
 
     return issues
+
+
+def _qa_e2e_pass_artifact_issues(
+    *,
+    latest_by_role: dict[str, TaskReviewEvent],
+    required_roles: Sequence[str],
+) -> list[str]:
+    if "qa_e2e" not in required_roles:
+        return []
+
+    event = latest_by_role.get("qa_e2e")
+    if event is None or event.verdict != PASS_VERDICT:
+        return []
+
+    return qa_e2e_pass_evidence_issues(
+        evidence_type=event.evidence_type,
+        target=event.target,
+        build_hash=event.build_hash,
+        evidence=event.evidence,
+    )
 
 
 def _review_only_artifact_state(
@@ -183,7 +213,7 @@ def _review_only_artifact_state(
     if evidence.get("no_child_tasks_required") is True:
         return [], [], []
 
-    declared_child_task_ids = _coerce_uuid_list(evidence.get("planned_child_task_ids"))
+    declared_child_task_ids = coerce_uuid_list(evidence.get("planned_child_task_ids"))
     if not declared_child_task_ids:
         return ["review_only_architect_pass_missing_child_task_evidence"], [], []
 

@@ -222,6 +222,7 @@ async def test_patch_lane_gate_runs_before_task_mutation_commits(
         actor=actor,  # type: ignore[arg-type]
         board_id=board.id,
         previous_status=original_status,
+        previous_review_packet_type=task.review_packet_type,
         previous_assigned=task.assigned_agent_id,
         status_requested=True,
         updates={"status": "review"},

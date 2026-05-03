@@ -117,9 +117,9 @@ FILED` and use the decision's question/options shape.
 **Why mandatory:** the structured row drives `/lead/next-action` routing
 correctly, but operators/operators-dashboards/Slack-pipes that consume
 prose comments would otherwise see a task transition to `is_blocked=true`
-without context, and start asking "where did this come from?" The comment
-takes 1 line of skill output — cheap insurance against the visibility
-gap.
+without context, and start asking "where did this come from?" The paired
+comment is one short block (5 lines using the template above) — cheap
+insurance against the visibility gap.
 
 **Forbidden duplicate:** do NOT also post a separate "still blocked"
 nudge later in the same loop iteration. The one filing comment IS the

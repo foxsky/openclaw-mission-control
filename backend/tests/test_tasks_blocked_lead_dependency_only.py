@@ -92,6 +92,7 @@ async def test_lead_dependency_only_update_allowed_when_task_blocked(
         actor=ActorContext(actor_type="agent", agent=lead),
         board_id=board_id,
         previous_status=task.status,
+        previous_review_packet_type=task.review_packet_type,
         previous_assigned=task.assigned_agent_id,
         status_requested=False,
         updates={},

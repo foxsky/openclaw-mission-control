@@ -161,6 +161,7 @@ async def _apply_manifest(
                 previous_status=task.status,
                 previous_assigned=task.assigned_agent_id,
                 previous_in_progress_at=task.in_progress_at,
+                previous_review_packet_type=task.review_packet_type,
                 status_requested=(requested_status is not None and requested_status != task.status),
                 updates=updates,
                 comment=comment,
