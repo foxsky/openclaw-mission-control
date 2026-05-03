@@ -47,12 +47,20 @@ class GatewaySessionState(QueryModel, table=True):
     # Slice-6 ACP-completion projection. ``parent_session_key`` links
     # this row to the parent agent's session when this session is an
     # ACP child; null for top-level sessions. Indexed because the lead
-    # next-action surface filters on it ("show me agent X's spawned
-    # children"). ``last_status`` and ``last_lifecycle_reason`` carry
-    # the per-run state and the gateway's lifecycle vocabulary —
-    # together they let MC derive ACP child completion (parent set +
-    # reason in {"completed","abort","expiry","spawn-failed",...})
-    # without falling back to session-jsonl mtime inference.
+    # next-action surface (slice 7+) will filter on it.
+    # ``last_status`` is the per-run state from the broadcast snapshot
+    # (``"running"`` / ``"done"`` / ...).
+    # ``last_lifecycle_reason`` captures the gateway's broadcast
+    # lifecycle vocabulary, verified against the source on .60:
+    # ``"create"``, ``"subagent-status"``, ``"abort"``, ``"reset"``,
+    # ``"patch"``, ``"deleted"``. NOTE: the gateway's INTERNAL
+    # ``endedReason`` ("completed"|"expiry"|"spawn-failed"|"retry-limit")
+    # is NOT broadcast — slice 6 cannot fully replace MC's "infer ACP
+    # done from session jsonl mtimes" hack on its own; the broadcast
+    # signals "child status changed" via ``"subagent-status"``, but the
+    # rich completion outcome stays local to the gateway. Treat this
+    # field as raw telemetry; the lead playbook derivation rule is
+    # under design.
     parent_session_key: str | None = Field(default=None, index=True)
     last_status: str | None = Field(default=None)
     last_lifecycle_reason: str | None = Field(default=None)

@@ -109,10 +109,12 @@ class ProjectedGatewaySession(SQLModel):
     total_tokens: int | None = None
     channel: str | None = None
     aborted_last_run: bool
-    # Slice-6 ACP-completion fields. ``parent_session_key`` lets the
-    # operator dashboard render parent→child spawn graphs;
-    # ``last_status`` and ``last_lifecycle_reason`` carry the gateway
-    # vocabulary the lead playbook reads to derive ACP-child completion.
+    # Slice-6 lifecycle-projection fields. ``parent_session_key`` lets
+    # operator tooling render parent→child spawn graphs.
+    # ``last_status`` and ``last_lifecycle_reason`` carry whatever the
+    # gateway broadcasts in the latest sessions.changed snapshot.
+    # Lead next-action integration is a future slice; today these are
+    # raw telemetry exposed for operator-dashboard consumption.
     parent_session_key: str | None = None
     last_status: str | None = None
     last_lifecycle_reason: str | None = None

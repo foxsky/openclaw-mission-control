@@ -46,45 +46,62 @@ class SessionState:
     total_tokens: int | None
     channel: str | None
     aborted_last_run: bool
-    # Slice-6 ACP-completion signals captured from sessions.changed
-    # lifecycle events. ``parent_session_key`` is set when this session
-    # is an ACP child spawned by another agent — lets MC answer "what
-    # are agent X's spawned children?" by querying for matching parents.
-    # ``last_status`` is the per-run state ("running"|"done"|...).
-    # ``last_lifecycle_reason`` carries the gateway's lifecycle vocabulary
-    # ("create"|"completed"|"abort"|"expiry"|"spawn-failed"|"deleted"|
-    # "retry-limit"|"subagent-status"|"reset"|"patch") — terminal
-    # values are how the lead derives ACP-child completion without
-    # falling back to the session-jsonl mtime hack.
+    # Slice-6 lifecycle-projection fields captured from
+    # ``sessions.changed`` events. ``parent_session_key`` links a child
+    # session to its parent agent's session (null for top-level).
+    # ``last_status`` carries the per-run state from the broadcast
+    # snapshot. ``last_lifecycle_reason`` carries the gateway's
+    # actually-broadcast vocabulary (create / subagent-status / abort /
+    # reset / patch / deleted) — verified against gateway source on
+    # .60. The internal ``endedReason`` outcomes ("completed"/"expiry"/
+    # "spawn-failed"/"retry-limit") are NOT broadcast, so this field
+    # alone can't tell success-vs-failure for child completion.
     parent_session_key: str | None = None
     last_status: str | None = None
     last_lifecycle_reason: str | None = None
 
 
+_STABLE_SUB_LABELS = frozenset({"heartbeat"})
+
+
 def parse_session_key(key: Any) -> tuple[str, str] | None:
-    """Parse a gateway sessionKey of the form ``agent:<agent_id>:<label>``
-    or ``agent:<agent_id>:<label>:<sub>``.
+    """Parse a gateway sessionKey into ``(agent_id, label)``.
 
-    Returns ``(agent_id, label)`` on success — for 4-segment keys, the
-    label is the colon-joined tail (e.g. ``main:heartbeat``) so the
-    sub-label rides as a discriminator on the same row. Live capture
-    (2026-05-03) showed lead/worker agents emit
-    ``agent:lead-<board>:main:heartbeat`` for tick sessions; treating
-    them as their own labelled rows preserves the per-bucket projection.
+    Accepts:
 
-    Returns ``None`` for any input that doesn't match the expected
-    shape (wrong namespace, missing parts, empty fields, non-string,
-    or 5+ segments — the latter blocks cron-run sub-session keys
-    ``agent:<id>:cron:<job>:run:<run>`` that would pollute the table
-    with one ephemeral row per heartbeat tick).
+    * 3-segment keys ``agent:<agent_id>:<label>`` — the canonical form
+      for top-level agent sessions (``main``, ``debug``, etc.).
+    * 4-segment keys ``agent:<agent_id>:<label>:<sub>`` — but ONLY when
+      ``<sub>`` is a known STABLE bucket (currently ``{"heartbeat"}``).
+      Live capture (2026-05-03) showed lead/worker agents emit
+      ``agent:lead-<board>:main:heartbeat`` for tick sessions; the
+      label rides as ``"main:heartbeat"`` so the row gets its own bucket.
+
+    Rejects:
+
+    * 4-segment keys with non-allowlisted sub-labels — codex
+      finding 2026-05-03: ``agent:<id>:acp:<uuid>`` (per-run ACP child
+      cardinality, see ``acp-spawn.ts:1048``) would pollute the table
+      with one row per ACP run AND evade cleanup_orphaned_session_states
+      (the cleanup function only owns ``mc-/mc-gateway-/lead-`` prefixes).
+      Add new stable sub-labels to ``_STABLE_SUB_LABELS`` as discovered.
+    * 5+ segment keys — blocks cron-run sub-session keys
+      ``agent:<id>:cron:<job>:run:<run>`` and 6-segment ACP binding keys
+      from ``persistent-bindings.types.ts``.
+    * Wrong namespace, empty parts, non-string input.
     """
     if not isinstance(key, str):
         return None
     parts = key.split(":")
-    if len(parts) not in (3, 4):
+    if len(parts) == 3:
+        namespace, agent_id, label = parts
+    elif len(parts) == 4:
+        namespace, agent_id, label_main, label_sub = parts
+        if label_sub not in _STABLE_SUB_LABELS:
+            return None
+        label = f"{label_main}:{label_sub}"
+    else:
         return None
-    namespace, agent_id = parts[0], parts[1]
-    label = ":".join(parts[2:])
     if namespace != AGENT_SESSION_PREFIX or not agent_id or not label:
         return None
     return agent_id, label

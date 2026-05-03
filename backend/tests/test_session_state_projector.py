@@ -60,14 +60,16 @@ def test_parse_session_key_accepts_4_segment_sub_label() -> None:
     4-segment session keys for sub-runs, e.g.
     ``agent:lead-<board>:main:heartbeat`` for heartbeat tick sessions.
     Slice-3 parser dropped these as malformed and the projector silently
-    missed them. Treat the trailing ``:<sub>`` as part of the label
-    so the row IS captured under its full discriminator."""
+    missed them. Treat the trailing ``:heartbeat`` as part of the label
+    so the row IS captured under its full discriminator. ``heartbeat``
+    is on the ``_STABLE_SUB_LABELS`` allowlist; per-run sub-labels
+    (e.g. ``acp:<uuid>``) are rejected separately."""
     assert parse_session_key(
         "agent:lead-05002170-201b-4c66-bae1-26c0c833f206:main:heartbeat"
     ) == ("lead-05002170-201b-4c66-bae1-26c0c833f206", "main:heartbeat")
     assert parse_session_key(
-        "agent:mc-3461451b-5824-4ed0-872c-d14d5d2be107:main:replay"
-    ) == ("mc-3461451b-5824-4ed0-872c-d14d5d2be107", "main:replay")
+        "agent:mc-3461451b-5824-4ed0-872c-d14d5d2be107:debug:heartbeat"
+    ) == ("mc-3461451b-5824-4ed0-872c-d14d5d2be107", "debug:heartbeat")
 
 
 @pytest.mark.parametrize(
@@ -83,6 +85,21 @@ def test_parse_session_key_accepts_4_segment_sub_label() -> None:
 )
 def test_parse_session_key_returns_none_for_unparseable_keys(key: str) -> None:
     assert parse_session_key(key) is None
+
+
+def test_parse_session_key_drops_per_run_acp_child_keys() -> None:
+    """Codex finding 2026-05-03: gateway's ``acp-spawn.ts:1048`` builds
+    child keys as ``agent:<id>:acp:<uuid>`` — per-run cardinality.
+    A naive 4-segment-accepts parser captured one projection row per
+    ACP run AND those rows evade ``cleanup_orphaned_session_states``
+    because the cleanup namespace allowlist is mc-/mc-gateway-/lead-.
+    Verify per-run ACP child keys are dropped at the parser."""
+    assert parse_session_key(
+        "agent:claude:acp:019de388-26cb-79e0-95f5-72a424d8e152"
+    ) is None
+    assert parse_session_key(
+        "agent:codex:acp:019ddc4c-b027-7ce0-9e49-aa10435bea59"
+    ) is None
 
 
 def test_parse_session_key_drops_cron_run_keys() -> None:
@@ -363,22 +380,36 @@ async def test_projector_records_status_and_reason_for_acp_completion() -> None:
 
 
 @pytest.mark.asyncio
-async def test_projector_records_terminal_failure_reasons() -> None:
-    """The gateway lifecycle vocabulary includes failure reasons:
-    ``abort``, ``expiry``, ``spawn-failed``, ``deleted``, ``retry-limit``.
-    Each must round-trip into ``last_lifecycle_reason`` so the lead
-    can distinguish "completed cleanly" from "failed/aborted" without
-    reading session jsonl files."""
-    for reason in ("abort", "expiry", "spawn-failed", "deleted", "retry-limit"):
+async def test_projector_records_actually_broadcast_lifecycle_reasons() -> None:
+    """Verified by grep against gateway source on .60: the actual
+    broadcast vocabulary for lifecycle reasons is the union of:
+
+    * ``"create"`` — top-level session start (sessions.ts:943,
+      agent.ts:810) and subagent spawn (subagent-spawn.ts:877).
+    * ``"subagent-status"`` — every status mutation on a child
+      session (subagent-registry-lifecycle.ts:604).
+    * ``"abort"`` — explicit session abort (sessions.ts:1253).
+    * ``"reset"`` — session reset (session-reset-service.ts:661).
+    * ``"patch"`` — session patch (sessions.ts:1319).
+    * ``"deleted"`` — session deletion.
+
+    The internal ``endedReason`` strings (``completed`` / ``expiry`` /
+    ``spawn-failed`` / ``retry-limit``) are stored on the gateway side
+    but NEVER broadcast — projector callers can't see them. Pin the
+    actually-observed vocabulary so the round-trip contract is clear.
+    Use a 3-segment session key per spawn so the slice-6 cardinality
+    guard (``acp:`` 4-segment drop) doesn't reject the test fixture.
+    """
+    for reason in ("create", "subagent-status", "abort", "reset", "patch", "deleted"):
         p = SessionStateProjector()
         await p(
             _make_event(
-                session_key=f"agent:mc-child-{reason}:spawn",
+                session_key=f"agent:mc-child-{reason.replace('-', '_')}:main",
                 parent_session_key="agent:mc-parent-5678:main",
                 reason=reason,
             )
         )
-        states = p.get(f"mc-child-{reason}")
+        states = p.get(f"mc-child-{reason.replace('-', '_')}")
         assert len(states) == 1
         assert states[0].last_lifecycle_reason == reason
 
