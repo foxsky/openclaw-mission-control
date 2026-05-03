@@ -350,6 +350,125 @@ async def test_subscriber_skips_unknown_events(stub_gateway) -> None:
 
 
 @pytest.mark.asyncio
+async def test_subscriber_does_not_reset_backoff_on_handshake_then_close(stub_gateway) -> None:
+    """Codex-found bug: ``delay = self._initial_delay`` in ``run()`` was
+    being reset BEFORE ``_listen`` started receiving real events.
+    A misconfigured token (gateway accepts handshake then closes
+    immediately) caused a 1-Hz reconnect storm. Backoff must escalate
+    when a connection drops without ever delivering an event.
+
+    Repro: configure the stub to close every connection right after the
+    handshake. Capture the elapsed time across N reconnects; with the
+    bug it's roughly N * initial_delay (linear in attempts), with the
+    fix it's a geometric series (exponential).
+    """
+    # Counts how many times the stub server accepts a connection.
+    accept_count = 0
+    delays_observed: list[float] = []
+    last_accept_time: list[float] = []
+
+    async def closing_handler(ws):
+        nonlocal accept_count
+        now = asyncio.get_event_loop().time()
+        if last_accept_time:
+            delays_observed.append(now - last_accept_time[-1])
+        last_accept_time.append(now)
+        accept_count += 1
+        # Send the challenge so handshake proceeds (so reconnect logic is
+        # exercised AFTER a handshake). Then immediately close.
+        await ws.send(json.dumps({
+            "type": "event",
+            "event": "connect.challenge",
+            "payload": {"nonce": "stub-n"},
+        }))
+        await asyncio.sleep(0.01)  # let subscriber send connect req
+        await ws.close()
+
+    server = await websockets.serve(closing_handler, "127.0.0.1", 0)
+    sock = next(iter(server.sockets))
+    port = sock.getsockname()[1]
+    url = f"ws://127.0.0.1:{port}"
+
+    sub = Subscriber(
+        url=url,
+        token="t",
+        subscriptions=[],
+        reconnect_initial_delay=0.05,
+        reconnect_max_delay=5.0,
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(sub.run(stop))
+
+    # Wait until we've observed enough reconnects to compare delays.
+    await _wait_for(lambda: accept_count >= 4, timeout=4.0, interval=0.02)
+    stop.set()
+    await asyncio.wait_for(task, timeout=2.0)
+    server.close()
+    await server.wait_closed()
+
+    # Bug version (delay reset every connect): delays_observed[1] ≈ delays_observed[0] (both ~0.05s).
+    # Fixed version (delay escalates while connection is unhealthy): delays_observed[1] > delays_observed[0].
+    assert len(delays_observed) >= 2, f"need at least 2 inter-connect deltas, got {delays_observed}"
+    assert delays_observed[1] > delays_observed[0] * 1.5, (
+        f"backoff did not escalate after handshake-then-close: deltas={delays_observed}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_subscriber_aborts_handshake_when_first_frame_is_not_challenge(
+    stub_gateway,
+) -> None:
+    """Codex-found bug: if the gateway's first frame is valid JSON but not
+    a ``connect.challenge`` event, the subscriber used to fall through and
+    send the ``connect`` req anyway. That hides protocol drift behind a
+    silent reconnect loop. Subscriber must NOT send ``connect`` (or any
+    subscribe) on a bad first frame, and must close the WS to trigger
+    backoff.
+    """
+    sent_to_server: list[dict[str, Any]] = []
+
+    async def confused_handler(ws):
+        # First frame: valid JSON but completely wrong shape.
+        await ws.send(json.dumps({"type": "event", "event": "presence", "payload": {}}))
+        try:
+            async for raw in ws:
+                if isinstance(raw, bytes):
+                    raw = raw.decode()
+                sent_to_server.append(json.loads(raw))
+        except websockets.exceptions.ConnectionClosed:
+            pass
+
+    server = await websockets.serve(confused_handler, "127.0.0.1", 0)
+    sock = next(iter(server.sockets))
+    port = sock.getsockname()[1]
+    url = f"ws://127.0.0.1:{port}"
+
+    sub = Subscriber(
+        url=url,
+        token="t",
+        subscriptions=["sessions.subscribe"],
+        reconnect_initial_delay=0.05,
+        reconnect_max_delay=0.2,
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(sub.run(stop))
+
+    # Give it 0.5s — long enough to attempt the handshake, abort, and
+    # try at least one reconnect.
+    await asyncio.sleep(0.5)
+    stop.set()
+    await asyncio.wait_for(task, timeout=2.0)
+    server.close()
+    await server.wait_closed()
+
+    # The bug version sent a `connect` req anyway. The fix must not.
+    methods = [m.get("method") for m in sent_to_server if m.get("type") == "req"]
+    assert "connect" not in methods, (
+        f"subscriber sent connect req against a non-challenge first frame: methods={methods}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_subscriber_echoes_connect_nonce(stub_gateway) -> None:
     """The gateway sends a nonce on ``connect.challenge``; the client's
     ``connect`` req must include it under ``params.connectNonce`` so the

@@ -71,6 +71,16 @@ def _resolve_token(args: argparse.Namespace) -> str:
 
 
 def _read_token_file(path: str) -> str | None:
+    """Extract ``OPENCLAW_HOOK_TOKEN`` from an env-style file.
+
+    Returns ``None`` if the file is missing or the key isn't present.
+
+    Inlined env-file parsing (rather than importing from
+    ``app.core.env_file``) because this script is deployed standalone
+    at ``/usr/local/bin/mc_hooks.py`` on the gateway host and has no
+    PYTHONPATH access to the MC backend package. Keep semantics in
+    sync with ``app/core/env_file.py``.
+    """
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
@@ -91,10 +101,10 @@ def _read_token_file(path: str) -> str | None:
 def _parse_env_value(raw: str) -> str:
     """Parse the right-hand side of an env-file ``KEY=...`` line.
 
-    - Quoted values (single or double) preserve their inner content
-      verbatim — including ``#``, trailing spaces, etc.
-    - Unquoted values are everything up to the first ``#`` (inline
-      comment), then trimmed of surrounding whitespace.
+    See ``app/core/env_file.py`` for the canonical implementation;
+    this one is duplicated only because mc_hooks.py is a standalone
+    script (deployed at ``/usr/local/bin/`` outside the MC backend
+    package).
     """
     value = raw.lstrip()
     if value.startswith('"'):
@@ -107,7 +117,6 @@ def _parse_env_value(raw: str) -> str:
         if end != -1:
             return value[1:end]
         return value[1:]
-    # Unquoted: drop inline comment, then trim.
     hash_idx = value.find("#")
     if hash_idx != -1:
         value = value[:hash_idx]

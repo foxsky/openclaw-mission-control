@@ -25,6 +25,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from app.core.env_file import load_env_file
 from app.services.mc_gateway_subscriber.subscriber import Subscriber
 
 logger = logging.getLogger(__name__)
@@ -38,50 +39,6 @@ class SubscriberConfig:
     url: str
     token: str
     subscriptions: tuple[str, ...] = DEFAULT_SUBSCRIPTIONS
-
-
-def load_env_file(path: str) -> dict[str, str]:
-    """Parse a shell-env-style file. Returns ``{}`` if the file is missing.
-
-    Unquoted values: everything up to first ``#`` (inline comment),
-    then trimmed. Quoted values (``"..."`` or ``'...'``): preserved
-    verbatim. CRLF normalized.
-    """
-    out: dict[str, str] = {}
-    try:
-        with open(path, encoding="utf-8") as fh:
-            for raw in fh:
-                line = raw.rstrip("\r\n").strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key = key.strip()
-                if not key:
-                    continue
-                out[key] = _parse_env_value(value)
-    except OSError:
-        return {}
-    return out
-
-
-def _parse_env_value(raw: str) -> str:
-    value = raw.lstrip()
-    if value.startswith('"'):
-        end = value.find('"', 1)
-        if end != -1:
-            return value[1:end]
-        return value[1:]
-    if value.startswith("'"):
-        end = value.find("'", 1)
-        if end != -1:
-            return value[1:end]
-        return value[1:]
-    hash_idx = value.find("#")
-    if hash_idx != -1:
-        value = value[:hash_idx]
-    return value.strip()
 
 
 def resolve_config(
@@ -118,7 +75,7 @@ async def run_async(stop: asyncio.Event, config: SubscriberConfig) -> None:
     await sub.run(stop)
 
 
-def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
+def main() -> int:
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
