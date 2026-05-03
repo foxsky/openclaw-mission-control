@@ -34,9 +34,9 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from app.services.openclaw.protocol_constants import (
-    GATEWAY_OPERATOR_SCOPES,
-    OPERATOR_ROLE,
     PROTOCOL_VERSION,
+    build_control_ui_connect_params,
+    build_control_ui_origin,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,9 +74,15 @@ class Subscriber:
             handshake.
         reconnect_initial_delay: first backoff duration in seconds.
         reconnect_max_delay: cap on backoff duration in seconds.
-        client_id: identifier announced in the connect payload.
         protocol_version: min/max protocol version sent in connect.
-            Defaults to the upstream constant from ``gateway_rpc``.
+            Defaults to the upstream constant from
+            ``protocol_constants``.
+
+    Connect mode is fixed at ``control_ui`` (no device-pairing
+    crypto). The gateway accepts that mode via the ``CONTROL_UI``
+    client identity + ``Origin`` header — which means pairing-disabled
+    operator workflows. If we ever need device-pairing mode, that's a
+    separate code path.
     """
 
     def __init__(
@@ -87,7 +93,6 @@ class Subscriber:
         subscriptions: Sequence[str] = (),
         reconnect_initial_delay: float = 1.0,
         reconnect_max_delay: float = 30.0,
-        client_id: str = "mc-gateway-subscriber",
         protocol_version: int = PROTOCOL_VERSION,
     ) -> None:
         self._url = url
@@ -95,7 +100,6 @@ class Subscriber:
         self._subscriptions = tuple(subscriptions)
         self._initial_delay = reconnect_initial_delay
         self._max_delay = reconnect_max_delay
-        self._client_id = client_id
         self._protocol_version = protocol_version
         self._handlers: dict[str, EventHandler] = {}
         # Per-connection state used by run() to decide whether the
@@ -117,13 +121,20 @@ class Subscriber:
     async def run(self, stop: asyncio.Event) -> None:
         """Connect, handshake, subscribe, listen, dispatch — until ``stop``."""
         delay = self._initial_delay
+        connect_kwargs: dict[str, Any] = {
+            "additional_headers": {"Authorization": f"Bearer {self._token}"},
+        }
+        # Control-UI mode requires an Origin header matching the gateway
+        # host. The gateway rejects connect frames from clients without
+        # one when ``disable_device_pairing`` is the operator profile
+        # (which is the only mode this subscriber implements).
+        origin = build_control_ui_origin(self._url)
+        if origin:
+            connect_kwargs["origin"] = origin
         while not stop.is_set():
             self._events_dispatched_this_connection = 0
             try:
-                async with websockets.connect(
-                    self._url,
-                    additional_headers={"Authorization": f"Bearer {self._token}"},
-                ) as ws:
+                async with websockets.connect(self._url, **connect_kwargs) as ws:
                     if await self._handshake_and_subscribe(ws):
                         await self._listen(ws, stop)
                     # Else: bad challenge / silent gateway / non-protocol
@@ -182,27 +193,15 @@ class Subscriber:
                 first.get("event") if isinstance(first, dict) else None,
             )
             return False
-        connect_nonce: str | None = None
-        payload = first.get("payload")
-        if isinstance(payload, dict):
-            nonce = payload.get("nonce")
-            if isinstance(nonce, str) and nonce.strip():
-                connect_nonce = nonce.strip()
+        # The challenge nonce is read but discarded in control-UI mode:
+        # the gateway only validates the nonce inside a `device` payload
+        # (which we don't send). Reading it here keeps the recv stream
+        # advanced past the challenge frame.
 
-        connect_params: dict[str, Any] = {
-            "minProtocol": self._protocol_version,
-            "maxProtocol": self._protocol_version,
-            "role": OPERATOR_ROLE,
-            "scopes": list(GATEWAY_OPERATOR_SCOPES),
-            "client": {
-                "id": self._client_id,
-                "version": "1.0.0",
-                "mode": "subscriber",
-            },
-            "auth": {"token": self._token},
-        }
-        if connect_nonce is not None:
-            connect_params["connectNonce"] = connect_nonce
+        connect_params = build_control_ui_connect_params(
+            token=self._token,
+            protocol_version=self._protocol_version,
+        )
         connect_id = await self._send_req(ws, METHOD_CONNECT, connect_params)
         if not await self._await_ok_res(ws, connect_id):
             return False

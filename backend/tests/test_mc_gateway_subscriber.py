@@ -630,10 +630,13 @@ async def test_subscriber_module_imports_with_minimal_env() -> None:
 
 
 @pytest.mark.asyncio
-async def test_subscriber_echoes_connect_nonce(stub_gateway) -> None:
-    """The gateway sends a nonce on ``connect.challenge``; the client's
-    ``connect`` req must include it under ``params.connectNonce`` so the
-    server can correlate the handshake.
+async def test_subscriber_sends_control_ui_client_identity(stub_gateway) -> None:
+    """The gateway only accepts a fixed allow-list of ``client.id`` /
+    ``client.mode`` values and requires ``client.platform``. Backend
+    subscribers connect in control-UI mode (no device-pairing crypto), so
+    the connect req must carry the canonical control-UI identity and
+    drop ``connectNonce`` (which is only valid inside the ``device``
+    payload that control-UI mode doesn't send).
     """
     handle = stub_gateway
     sub = Subscriber(
@@ -648,6 +651,12 @@ async def test_subscriber_echoes_connect_nonce(stub_gateway) -> None:
     connect_req = handle.server_received()[0]
     assert connect_req["method"] == "connect"
     params = connect_req.get("params", {})
-    assert params.get("connectNonce") == "stub-nonce-xyz"
+    client = params.get("client", {})
+    assert client.get("id") == "openclaw-control-ui"
+    assert client.get("mode") == "ui"
+    assert client.get("platform"), "client.platform is required by the gateway"
+    assert "connectNonce" not in params, (
+        "connectNonce at root is rejected by the gateway in control-UI mode"
+    )
     stop.set()
     await asyncio.wait_for(task, timeout=2.0)
