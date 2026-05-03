@@ -13,7 +13,11 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.gateway_session_state import GatewaySessionState
 from app.services.mc_gateway_subscriber.session_state_projector import SessionState
 from app.services.mc_gateway_subscriber.session_state_repo import (
-    SessionStateRepo,
+    get_session_state,
+    list_all_session_states,
+    list_main_session_states_for_agent_ids,
+    list_session_states_for_agent,
+    upsert_session_state,
 )
 
 
@@ -51,10 +55,10 @@ async def test_upsert_inserts_when_no_row_exists(
     sqlite_session: AsyncSession,
 ) -> None:
     state = _state()
-    await SessionStateRepo.upsert(sqlite_session, state)
+    await upsert_session_state(sqlite_session, state)
     await sqlite_session.commit()
 
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert len(rows) == 1
     row = rows[0]
     assert row.agent_id == state.agent_id
@@ -75,17 +79,17 @@ async def test_upsert_updates_in_place_for_existing_key(
     """Composite PK (agent_id, session_label) — second upsert with the
     same key must overwrite, not duplicate. Otherwise the projection
     table grows by one row per heartbeat tick."""
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session,
         _state(last_changed_at_ms=1, total_tokens=100, last_phase="created"),
     )
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session,
         _state(last_changed_at_ms=2, total_tokens=200, last_phase="message"),
     )
     await sqlite_session.commit()
 
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert len(rows) == 1
     assert rows[0].last_changed_at_ms == 2
     assert rows[0].total_tokens == 200
@@ -96,10 +100,10 @@ async def test_upsert_updates_in_place_for_existing_key(
 async def test_get_returns_row_for_existing_key(
     sqlite_session: AsyncSession,
 ) -> None:
-    await SessionStateRepo.upsert(sqlite_session, _state())
+    await upsert_session_state(sqlite_session, _state())
     await sqlite_session.commit()
 
-    row = await SessionStateRepo.get(
+    row = await get_session_state(
         sqlite_session,
         agent_id="mc-aaaaaaaa-1111-2222-3333-444444444444",
         session_label="main",
@@ -112,7 +116,7 @@ async def test_get_returns_row_for_existing_key(
 async def test_get_returns_none_for_missing_key(
     sqlite_session: AsyncSession,
 ) -> None:
-    row = await SessionStateRepo.get(
+    row = await get_session_state(
         sqlite_session,
         agent_id="mc-nonexistent",
         session_label="main",
@@ -129,12 +133,12 @@ async def test_list_for_agent_filters_to_matching_agent_id(
     them."""
     a_id = "mc-aaaaaaaa-1111-2222-3333-444444444444"
     b_id = "mc-bbbbbbbb-1111-2222-3333-444444444444"
-    await SessionStateRepo.upsert(sqlite_session, _state(agent_id=a_id, session_label="main"))
-    await SessionStateRepo.upsert(sqlite_session, _state(agent_id=a_id, session_label="debug"))
-    await SessionStateRepo.upsert(sqlite_session, _state(agent_id=b_id, session_label="main"))
+    await upsert_session_state(sqlite_session, _state(agent_id=a_id, session_label="main"))
+    await upsert_session_state(sqlite_session, _state(agent_id=a_id, session_label="debug"))
+    await upsert_session_state(sqlite_session, _state(agent_id=b_id, session_label="main"))
     await sqlite_session.commit()
 
-    rows = await SessionStateRepo.list_for_agent(sqlite_session, agent_id=a_id)
+    rows = await list_session_states_for_agent(sqlite_session, agent_id=a_id)
     assert len(rows) == 2
     labels = {r.session_label for r in rows}
     assert labels == {"main", "debug"}
@@ -144,7 +148,7 @@ async def test_list_for_agent_filters_to_matching_agent_id(
 async def test_list_for_agent_empty_for_unknown_agent(
     sqlite_session: AsyncSession,
 ) -> None:
-    rows = await SessionStateRepo.list_for_agent(
+    rows = await list_session_states_for_agent(
         sqlite_session, agent_id="mc-nonexistent"
     )
     assert rows == []
@@ -154,7 +158,7 @@ async def test_list_for_agent_empty_for_unknown_agent(
 async def test_list_all_empty_when_no_rows(
     sqlite_session: AsyncSession,
 ) -> None:
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert rows == []
 
 
@@ -165,11 +169,11 @@ async def test_upsert_persists_aborted_flag(
     """``aborted_last_run`` is the operator-visible "this session crashed"
     flag — must round-trip through the DB faithfully even when the
     column default would otherwise mask it."""
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session, _state(aborted_last_run=True)
     )
     await sqlite_session.commit()
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert rows[0].aborted_last_run is True
 
 
@@ -183,19 +187,19 @@ async def test_list_main_for_agent_ids_batched(
     a_id = "mc-aaaaaaaa-1111-2222-3333-444444444444"
     b_id = "mc-bbbbbbbb-1111-2222-3333-444444444444"
     c_id = "mc-cccccccc-1111-2222-3333-444444444444"
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session, _state(agent_id=a_id, session_label="main")
     )
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session, _state(agent_id=a_id, session_label="debug")
     )
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session, _state(agent_id=b_id, session_label="main")
     )
     # c_id has no row at all
     await sqlite_session.commit()
 
-    rows = await SessionStateRepo.list_main_for_agent_ids(
+    rows = await list_main_session_states_for_agent_ids(
         sqlite_session, agent_ids=[a_id, b_id, c_id, "mc-unknown"]
     )
     assert set(rows.keys()) == {a_id, b_id}
@@ -210,7 +214,7 @@ async def test_list_main_for_agent_ids_empty_input_returns_empty(
     """Defensive: handler may pass an empty list when no in-progress
     tasks have assigned agents — must not run a `WHERE agent_id IN ()`
     query, which Postgres rejects as a syntax error."""
-    rows = await SessionStateRepo.list_main_for_agent_ids(
+    rows = await list_main_session_states_for_agent_ids(
         sqlite_session, agent_ids=[]
     )
     assert rows == {}
@@ -224,13 +228,13 @@ async def test_upsert_writes_updated_at_on_each_call(
     ``last_changed_at_ms`` which is the gateway's ms epoch). Each
     upsert must refresh it so operators can tell when the projector
     last touched a row."""
-    await SessionStateRepo.upsert(sqlite_session, _state(last_changed_at_ms=1))
+    await upsert_session_state(sqlite_session, _state(last_changed_at_ms=1))
     await sqlite_session.commit()
-    first = (await SessionStateRepo.list_all(sqlite_session))[0].updated_at
+    first = (await list_all_session_states(sqlite_session))[0].updated_at
 
-    await SessionStateRepo.upsert(sqlite_session, _state(last_changed_at_ms=2))
+    await upsert_session_state(sqlite_session, _state(last_changed_at_ms=2))
     await sqlite_session.commit()
-    second = (await SessionStateRepo.list_all(sqlite_session))[0].updated_at
+    second = (await list_all_session_states(sqlite_session))[0].updated_at
 
     assert second >= first
     # Inserted GatewaySessionState rows are returned with their server-

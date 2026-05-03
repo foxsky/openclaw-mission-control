@@ -28,7 +28,9 @@ from app.models.gateways import Gateway
 from app.models.organization_members import OrganizationMember
 from app.models.organizations import Organization
 from app.services.mc_gateway_subscriber.session_state_projector import SessionState
-from app.services.mc_gateway_subscriber.session_state_repo import SessionStateRepo
+from app.services.mc_gateway_subscriber.session_state_repo import (
+    upsert_session_state,
+)
 from app.services.organizations import OrganizationContext
 
 
@@ -127,7 +129,7 @@ async def test_projected_sessions_empty_when_no_org_agents(
 ) -> None:
     """Org has no MC agents — endpoint must return empty even if the
     projection table has rows for some other org's agents."""
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session,
         _state(agent_id="mc-stranger-1111-2222-3333-444444444444"),
     )
@@ -148,8 +150,8 @@ async def test_projected_sessions_returns_org_scoped_rows(
     b_id = "mc-bbbbbbbb-1111-2222-3333-444444444444"
     await _seed_org_agent(sqlite_session, org_ctx=caller_org_ctx, agent_id=a_id)
     await _seed_org_agent(sqlite_session, org_ctx=caller_org_ctx, agent_id=b_id)
-    await SessionStateRepo.upsert(sqlite_session, _state(agent_id=a_id))
-    await SessionStateRepo.upsert(sqlite_session, _state(agent_id=b_id))
+    await upsert_session_state(sqlite_session, _state(agent_id=a_id))
+    await upsert_session_state(sqlite_session, _state(agent_id=b_id))
     await sqlite_session.commit()
 
     response = await projected_gateway_sessions(
@@ -170,7 +172,7 @@ async def test_projected_sessions_excludes_other_orgs(
     # Caller's org agent + row.
     a_id = "mc-aaaaaaaa-1111-2222-3333-444444444444"
     await _seed_org_agent(sqlite_session, org_ctx=caller_org_ctx, agent_id=a_id)
-    await SessionStateRepo.upsert(sqlite_session, _state(agent_id=a_id))
+    await upsert_session_state(sqlite_session, _state(agent_id=a_id))
 
     # Other org's gateway + agent + row — same projection table.
     other_org = Organization(name="other-org")
@@ -192,7 +194,7 @@ async def test_projected_sessions_excludes_other_orgs(
             openclaw_session_id=f"agent:{other_agent_id}:main",
         )
     )
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session, _state(agent_id=other_agent_id)
     )
     await sqlite_session.commit()
@@ -232,7 +234,7 @@ async def test_projected_sessions_agent_id_filter_cannot_widen_across_orgs(
             openclaw_session_id=f"agent:{other_agent_id}:main",
         )
     )
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session, _state(agent_id=other_agent_id)
     )
     await sqlite_session.commit()
@@ -255,15 +257,15 @@ async def test_projected_sessions_excludes_unregistered_agents(
     mc-gateway-* and lead-* unless the operator has registered an
     MC agent for them under the caller's gateway. (Earlier docstring
     incorrectly claimed those prefixes were permanently excluded.)"""
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session,
         _state(agent_id="mc-gateway-3821a85a-984c-412a-9340-cda50eaf174e"),
     )
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session,
         _state(agent_id="lead-some-board-uuid"),
     )
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session,
         _state(agent_id="mc-unregistered-1234"),
     )
@@ -311,7 +313,7 @@ async def test_projected_sessions_no_slug_collision_leak(
     )
     # Other-org projection row with agent_id="qa-e2e" — what the
     # buggy slug fallback would have matched.
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session,
         _state(agent_id="qa-e2e"),
     )

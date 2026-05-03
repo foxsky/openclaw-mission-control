@@ -29,7 +29,9 @@ from app.models.organizations import Organization
 from app.models.tasks import Task
 from app.services.lead_next_action import IN_PROGRESS_PIPELINE_NUDGE_GRACE
 from app.services.mc_gateway_subscriber.session_state_projector import SessionState
-from app.services.mc_gateway_subscriber.session_state_repo import SessionStateRepo
+from app.services.mc_gateway_subscriber.session_state_repo import (
+    upsert_session_state,
+)
 
 
 def _stale_in_progress_at():
@@ -94,7 +96,7 @@ async def test_get_lead_next_action_populates_gateway_session_from_repo(
     )
     sqlite_session.add(task)
 
-    await SessionStateRepo.upsert(
+    await upsert_session_state(
         sqlite_session,
         SessionState(
             agent_id=f"mc-{worker_uuid}",

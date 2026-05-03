@@ -18,7 +18,8 @@ from app.services.mc_gateway_subscriber.db_session_state_projector import (
     DbSessionStateProjector,
 )
 from app.services.mc_gateway_subscriber.session_state_repo import (
-    SessionStateRepo,
+    list_all_session_states,
+    list_session_states_for_agent,
 )
 
 
@@ -103,7 +104,7 @@ async def test_db_projector_writes_first_event(
     p = DbSessionStateProjector(session_factory=session_factory)
     await p(_frame())
 
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert len(rows) == 1
     assert rows[0].agent_id == "mc-aaaaaaaa-1111-2222-3333-444444444444"
     assert rows[0].session_label == "main"
@@ -120,7 +121,7 @@ async def test_db_projector_overwrites_on_newer_event(
     await p(_frame(ts=1, total_tokens=100, phase="created"))
     await p(_frame(ts=2, total_tokens=200, phase="message"))
 
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert len(rows) == 1
     assert rows[0].last_changed_at_ms == 2
     assert rows[0].total_tokens == 200
@@ -139,7 +140,7 @@ async def test_db_projector_drops_older_or_equal_timestamp(
     await p(_frame(ts=100, total_tokens=1000))
     await p(_frame(ts=200, total_tokens=999))  # equal-ts is also a drop
 
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert len(rows) == 1
     assert rows[0].last_changed_at_ms == 200
     assert rows[0].total_tokens == 2000
@@ -162,7 +163,7 @@ async def test_db_projector_advances_ts_on_same_field_newer_event(
     p = DbSessionStateProjector(session_factory=session_factory)
     await p(_frame(ts=100, total_tokens=100))
     await p(_frame(ts=200, total_tokens=100))  # same fields, newer ts
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert len(rows) == 1
     assert rows[0].last_changed_at_ms == 200
 
@@ -179,7 +180,7 @@ async def test_db_projector_writes_when_a_real_field_changed(
     # message_seq advancing from None -> 5 IS a real change
     await p(_frame(ts=2, total_tokens=100, message_seq=5))
 
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert rows[0].last_message_seq == 5
     assert rows[0].last_changed_at_ms == 2
 
@@ -193,7 +194,7 @@ async def test_db_projector_drops_unparseable_session_key(
     await p(_frame(session_key="not-an-agent-key"))
     await p(_frame(session_key="agent:x:cron:y:run:z"))  # 5-segment cron run
 
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert rows == []
 
 
@@ -207,7 +208,7 @@ async def test_db_projector_tracks_multiple_sessions_per_agent(
     await p(_frame(session_key=f"agent:{aid}:main"))
     await p(_frame(session_key=f"agent:{aid}:debug"))
 
-    rows = await SessionStateRepo.list_for_agent(sqlite_session, agent_id=aid)
+    rows = await list_session_states_for_agent(sqlite_session, agent_id=aid)
     assert {r.session_label for r in rows} == {"main", "debug"}
 
 
@@ -226,5 +227,5 @@ async def test_db_projector_handler_does_not_raise_on_malformed_frame(
     await p({"type": "event", "event": "sessions.changed", "payload": "oops"})
     await p({"type": "event", "event": "sessions.changed",
              "payload": {"phase": "message"}})  # no sessionKey
-    rows = await SessionStateRepo.list_all(sqlite_session)
+    rows = await list_all_session_states(sqlite_session)
     assert rows == []

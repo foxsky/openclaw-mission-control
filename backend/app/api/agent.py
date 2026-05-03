@@ -73,7 +73,7 @@ from app.services.openclaw.internal.agent_key import projection_lookup_id
 from app.services.openclaw.policies import OpenClawAuthorizationPolicy
 from app.services.openclaw.provisioning_db import AgentLifecycleService
 from app.services.mc_gateway_subscriber.session_state_repo import (
-    SessionStateRepo,
+    list_main_session_states_for_agent_ids,
 )
 from app.services.lead_next_action import (
     ApprovalState,
@@ -912,7 +912,7 @@ async def get_lead_next_action(
         for a in in_progress_agents
         if (lookup := projection_lookup_id(a)) is not None
     }
-    gateway_state_by_lookup_id = await SessionStateRepo.list_main_for_agent_ids(
+    gateway_state_by_lookup_id = await list_main_session_states_for_agent_ids(
         session, agent_ids=list(gateway_lookup_id_by_agent_uuid.values())
     )
     gateway_session_by_agent_id = {

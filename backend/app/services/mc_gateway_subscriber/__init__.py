@@ -14,15 +14,11 @@ from app.services.mc_gateway_subscriber.session_state_projector import (
     SessionState,
     SessionStateProjector,
 )
-from app.services.mc_gateway_subscriber.session_state_repo import (
-    SessionStateRepo,
-)
 from app.services.mc_gateway_subscriber.subscriber import Subscriber
 
 __all__ = [
     "DbSessionStateProjector",
     "SessionState",
     "SessionStateProjector",
-    "SessionStateRepo",
     "Subscriber",
 ]

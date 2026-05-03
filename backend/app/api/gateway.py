@@ -28,7 +28,7 @@ from app.schemas.gateway_api import (
     ProjectedGatewaySessionsResponse,
 )
 from app.services.mc_gateway_subscriber.session_state_repo import (
-    SessionStateRepo,
+    list_session_states_for_agent_ids,
 )
 from app.services.openclaw.gateway_rpc import GATEWAY_EVENTS, GATEWAY_METHODS, PROTOCOL_VERSION
 from app.services.openclaw.internal.agent_key import projection_lookup_id
@@ -327,7 +327,7 @@ async def projected_gateway_sessions(
     }
     if agent_id is not None:
         org_gateway_ids = org_gateway_ids & {agent_id}
-    rows = await SessionStateRepo.list_for_agent_ids(
+    rows = await list_session_states_for_agent_ids(
         session, agent_ids=org_gateway_ids
     )
     return ProjectedGatewaySessionsResponse(

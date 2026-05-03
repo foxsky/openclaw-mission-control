@@ -24,7 +24,8 @@ from app.services.mc_gateway_subscriber.session_state_projector import (
     build_state_from_frame,
 )
 from app.services.mc_gateway_subscriber.session_state_repo import (
-    SessionStateRepo,
+    get_session_state,
+    upsert_session_state,
 )
 
 
@@ -42,7 +43,7 @@ class DbSessionStateProjector:
             return
 
         async with self._session_factory() as session:
-            existing = await SessionStateRepo.get(
+            existing = await get_session_state(
                 session,
                 agent_id=new_state.agent_id,
                 session_label=new_state.session_label,
@@ -52,5 +53,5 @@ class DbSessionStateProjector:
                 and new_state.last_changed_at_ms <= existing.last_changed_at_ms
             ):
                 return
-            await SessionStateRepo.upsert(session, new_state)
+            await upsert_session_state(session, new_state)
             await session.commit()
