@@ -192,3 +192,41 @@ class TestMainLifecycle:
         assert captured["kwargs"]["url"] == "ws://x"
         assert captured["kwargs"]["token"] == "t"
         assert captured["kwargs"]["subscriptions"] == ("sessions.subscribe",)
+
+    @pytest.mark.asyncio
+    async def test_run_async_registers_sessions_changed_handler(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The worker must register the persisting projector for
+        ``sessions.changed`` events; otherwise the gateway-event-
+        subscriber project ships a daemon that opens a WS and discards
+        every event it receives."""
+        captured: dict[str, Any] = {"on_calls": []}
+
+        class _StubSubscriber:
+            def __init__(self, **kwargs: Any) -> None:
+                pass
+
+            def on(self, event_name: str, handler: Any) -> None:
+                captured["on_calls"].append((event_name, handler))
+
+            async def run(self, stop: asyncio.Event) -> None:
+                await stop.wait()
+
+        monkeypatch.setattr(entry, "Subscriber", _StubSubscriber)
+
+        cfg = entry.SubscriberConfig(
+            url="ws://x", token="t", subscriptions=("sessions.subscribe",)
+        )
+        stop = asyncio.Event()
+
+        async def stopper() -> None:
+            await asyncio.sleep(0.05)
+            stop.set()
+
+        await asyncio.gather(entry.run_async(stop, cfg), stopper())
+
+        registered = [name for (name, _) in captured["on_calls"]]
+        assert "sessions.changed" in registered, (
+            f"sessions.changed handler not registered; on_calls={registered}"
+        )

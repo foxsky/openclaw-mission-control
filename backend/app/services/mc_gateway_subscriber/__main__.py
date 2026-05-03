@@ -26,7 +26,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.core.env_file import load_env_file
+from app.db.session import async_session_maker
+from app.services.mc_gateway_subscriber.db_session_state_projector import (
+    DbSessionStateProjector,
+)
 from app.services.mc_gateway_subscriber.subscriber import Subscriber
+from app.services.openclaw.protocol_constants import EVENT_SESSIONS_CHANGED
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +75,10 @@ async def run_async(stop: asyncio.Event, config: SubscriberConfig) -> None:
         token=config.token,
         subscriptions=config.subscriptions,
     )
-    # Future slices register handlers here, e.g.:
-    #   sub.on("sessions.changed", projector_for_sessions_changed)
+    sub.on(
+        EVENT_SESSIONS_CHANGED,
+        DbSessionStateProjector(session_factory=async_session_maker),
+    )
     await sub.run(stop)
 
 

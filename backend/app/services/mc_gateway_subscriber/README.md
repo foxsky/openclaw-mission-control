@@ -7,39 +7,44 @@ dispatches incoming events to registered handlers.
 Design rationale: see
 `docs/plans/2026-05-02-gateway-event-subscriber-design.md`.
 
-## What it does today (slice 2 of N)
+## What it does today (slice 4)
 
-Operational scaffold only:
 - Connects to gateway WS, completes handshake (`connect.challenge` →
-  `connect` req → `res`)
-- Sends configured subscription RPCs (default: `sessions.subscribe`)
-- Logs every dispatched event to the systemd journal at INFO
+  `connect` req → `res`) in control-UI mode.
+- Sends configured subscription RPCs (default: `sessions.subscribe`).
+- Persists every `sessions.changed` event into
+  `gateway_session_state` (composite PK `(agent_id, session_label)`)
+  via `DbSessionStateProjector`. Last-write-wins on `last_changed_at_ms`
+  and field-equal diff guard skip the heartbeat-tick no-op writes.
 - Reconnects with exponential backoff on drop; re-handshakes and
-  re-subscribes
-- SIGTERM / SIGINT → clean shutdown
+  re-subscribes.
+- SIGTERM / SIGINT → clean shutdown.
 
 What it does NOT do yet:
-- No real handler. Events are received and skipped (no registered
-  handler) until slice 3 wires the projector.
-- No DB writes. The Task table is unaffected.
-
-This slice exists so the deploy + operations surface (systemd unit,
-env file, log path) is in place before we add behaviors that mutate
-MC state.
+- No `/agent/next-action` integration — slice 5 surfaces the projected
+  state in lead signals.
 
 ## Install
 
 On the host that hosts MC backend (`.64` in current topology):
 
-1. Token: paste into `/etc/mc-gateway-subscriber/env` (mode 0600,
+1. Env file: paste into `/etc/mc-gateway-subscriber/env` (mode 0600,
    owner `mcontrol:mcontrol`):
 
    ```
    OPENCLAW_GATEWAY_WS_URL=ws://192.168.2.60:18789/ws
    OPENCLAW_GATEWAY_TOKEN=<paired-operator-token>
+
+   # Slice 4 added DB writes. The worker imports `app.db.session` so it
+   # needs the same MC settings the API process consumes; copy them
+   # from `/etc/mc/env` (or symlink the same file as the API uses):
+   DATABASE_URL=postgresql+asyncpg://...
+   AUTH_MODE=local
+   LOCAL_AUTH_TOKEN=<token>
+   BASE_URL=http://localhost:8000
    ```
 
-   The token comes from a paired operator device. To mint one:
+   The gateway token comes from a paired operator device. To mint one:
    ```
    ssh root@192.168.2.60 'openclaw node.pair.request --role operator --scopes operator.read'
    # operator approves on .60, copy the issued token
@@ -78,17 +83,23 @@ On the host that hosts MC backend (`.64` in current topology):
 
 - `subscriber.py` — `Subscriber` class. Pure protocol; no env, no
   signal handling. Tested by `tests/test_mc_gateway_subscriber.py`.
+- `session_state_projector.py` — in-memory projector + parser
+  (`SessionState`, `parse_session_key`, `build_state_from_frame`).
+  Test/dev scaffold. Tested by `tests/test_session_state_projector.py`.
+- `session_state_repo.py` — read/write layer for `gateway_session_state`
+  rows. Tested by `tests/test_gateway_session_state_repo.py`.
+- `db_session_state_projector.py` — production projector. Persists
+  via `SessionStateRepo` with last-write-wins ts ordering and a
+  field-equal diff guard. Tested by
+  `tests/test_db_session_state_projector.py`.
 - `__main__.py` — operator entry point (env resolution, signal
-  handlers). Tested by `tests/test_mc_gateway_subscriber_main.py`.
+  handlers, projector wiring). Tested by
+  `tests/test_mc_gateway_subscriber_main.py`.
 - `mc-gateway-subscriber.service` — systemd unit.
 
 ## Slices remaining
 
-- Slice 3: register first real handler (likely `sessions.changed` →
-  update `Task.runtime_status` field). Needs concrete event payload
-  shape from a live probe against the gateway.
-- Slice 4: surface the projected state in
-  `/agent/next-action` lead signals so the lead can distinguish
-  "agent is working" from "agent is wedged."
-
-Both slices land as separate commits with TDD-driven tests.
+- Slice 5: surface the projected state in `/agent/next-action` lead
+  signals so the lead can distinguish "agent is working" from "agent
+  is wedged" without polling the gateway directly. Adds a thin read
+  endpoint over `SessionStateRepo.list_for_agent`.
