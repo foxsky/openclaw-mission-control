@@ -57,7 +57,12 @@ HEARTBEAT_RECOVERY_GRACE_AFTER_INTERVAL = timedelta(minutes=1)
 # - allow up to 3 wake attempts before giving up
 CHECKIN_DEADLINE_AFTER_WAKE = timedelta(minutes=35)
 MAX_WAKE_ATTEMPTS_WITHOUT_CHECKIN = 3
-AGENT_SESSION_PREFIX = "agent"
+# Re-exported from protocol_constants (the dependency-free worker
+# import). Kept here as an alias so existing call-sites under
+# openclaw.* don't have to change their import path.
+from app.services.openclaw.protocol_constants import (  # noqa: E402
+    AGENT_SESSION_PREFIX as AGENT_SESSION_PREFIX,
+)
 
 DEFAULT_CHANNEL_HEARTBEAT_VISIBILITY: dict[str, bool] = {
     # Suppress routine HEARTBEAT_OK delivery by default.

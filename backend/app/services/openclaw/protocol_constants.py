@@ -44,6 +44,13 @@ CONTROL_UI_CLIENT_MODE = "ui"
 # string out of handler-registration sites and makes refactors greppable.
 EVENT_SESSIONS_CHANGED = "sessions.changed"
 
+# Namespace prefix on every gateway sessionKey, e.g. ``agent:<id>:main``.
+# Co-located with the rest of the protocol vocabulary so anything that
+# parses or builds session keys can stay on this minimal import — the
+# long-lived subscriber worker must not pull in the wider lifecycle
+# constants module to read a single string.
+AGENT_SESSION_PREFIX = "agent"
+
 # Resolved once at import time; matches the value the openclaw CLI
 # writes during pairing ("linux", "darwin", or "windows").
 HOST_PLATFORM: str = _platform.system().lower()

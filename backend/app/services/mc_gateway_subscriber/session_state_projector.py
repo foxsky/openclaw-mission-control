@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.services.openclaw.constants import AGENT_SESSION_PREFIX
+from app.services.openclaw.protocol_constants import AGENT_SESSION_PREFIX
 
 
 @dataclass(frozen=True)
