@@ -74,11 +74,15 @@ agent UUIDs from the scan, not `$AGENT_ID`.
   deploy/live target, credential, source artifact, API endpoint, or validation
   evidence), create or reuse one structured `Blocker` on the task with
   `reason_code`, `owner_role`, and the narrowest useful
-  `required_artifact`/`target_env`/`reopen_condition`. Then route one owner
-  action and stop touching that task thread until the blocker resolves.
+  `required_artifact`/`target_env`/`reopen_condition`. **Then post one
+  human-readable task comment alongside the Blocker** (see "Required
+  visibility comment" below). Route one owner action and stop touching that
+  task thread until the blocker resolves.
 - If the first friction is a human/operator choice, create or reuse one
-  first-class `OperatorDecision`, link dependent tasks, and stop touching those
-  task threads until the decision resolves.
+  first-class `OperatorDecision`, link dependent tasks, **post one
+  human-readable task comment naming the decision and the operator question**
+  (same visibility rule as Blockers), and stop touching those task threads
+  until the decision resolves.
 - Do not set legacy `operator_decision_required` on active assigned work.
 - If the first friction is code/test/review feedback, classify the owner first,
   then move exactly that task through `rework -> in_progress -> review`.
@@ -86,6 +90,42 @@ agent UUIDs from the scan, not `$AGENT_ID`.
   it still cannot move.
 
 Do not post another "still blocked" comment. A comment is not routing.
+
+## Required visibility comment when filing a Blocker or OperatorDecision
+
+When you create a structured `Blocker` (or first-class `OperatorDecision`)
+via the API, you MUST also post one human-readable task comment naming
+what was filed and why. The structured row exists in `/blockers` and
+`/operator-decisions` API responses, but the operator/dashboard reading
+the prose comment scroll has no inline view of the new entity. A blocker
+that "appears out of nowhere" is the exact UX failure mode the
+2026-05-03 QA gate incident produced.
+
+**Comment format** (one comment per Blocker/OperatorDecision filed):
+
+```text
+BLOCKER FILED: <reason_code>
+Owner: <owner_role> (@<agent name or operator>)
+Required artifact: <one-line summary of required_artifact>
+Reopen when: <one-line summary of reopen_condition>
+Citation: <one-line summary of citation, including request_id if from a 4xx>
+```
+
+For OperatorDecisions, replace `BLOCKER FILED` with `OPERATOR DECISION
+FILED` and use the decision's question/options shape.
+
+**Why mandatory:** the structured row drives `/lead/next-action` routing
+correctly, but operators/operators-dashboards/Slack-pipes that consume
+prose comments would otherwise see a task transition to `is_blocked=true`
+without context, and start asking "where did this come from?" The comment
+takes 1 line of skill output — cheap insurance against the visibility
+gap.
+
+**Forbidden duplicate:** do NOT also post a separate "still blocked"
+nudge later in the same loop iteration. The one filing comment IS the
+visibility surface; subsequent ticks should NOT re-comment unless the
+Blocker reason changes (per "Do not post another 'still blocked'
+comment" rule above).
 
 ## Stale Operator-Blocker Revalidation
 

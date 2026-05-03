@@ -333,6 +333,13 @@ def test_lead_board_playbook_includes_recovery_and_health_scan() -> None:
     assert "agent_status=" in health_skill
     assert "recover" in health_skill.lower()
     assert "A comment is not routing" in health_skill
+    # Filing a Blocker/OperatorDecision MUST be paired with a
+    # human-readable visibility comment so the operator/dashboard sees
+    # the routing intent in the comment scroll, not just the API row
+    # (production gap 2026-05-03: QA gate Blocker filed silently with
+    # no prose explanation, operator asked "where did this come from?").
+    assert "Required visibility comment" in health_skill
+    assert "BLOCKER FILED:" in health_skill
 
     # The HEARTBEAT heartbeat should reference the playbook by name so
     # the model knows where to find the actual curl commands.

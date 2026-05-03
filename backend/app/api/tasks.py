@@ -3280,6 +3280,59 @@ async def _notify_lead_on_review_event(
     await session.commit()
 
 
+def _require_review_event_artifact_completeness(
+    payload: TaskReviewEventCreate, task: Task,
+) -> None:
+    """Reject Architect PASS on a review_only packet that lacks
+    child-task evidence at write time.
+
+    Production gap 2026-05-03: Architect (with stale skill content)
+    posted a structured PASS without ``planned_child_task_ids`` /
+    ``no_child_tasks_required:true``. The structured event committed
+    cleanly; review-readiness then computed ``ready=false`` and
+    Supervisor reactively filed a Blocker. Reactive blockers in agent
+    prose are exactly the layer the architectural critique flagged as
+    wrong — invariants belong at the write boundary, not after-the-fact
+    reactive blockers.
+
+    The rule (mirrors ``_review_only_artifact_state`` in
+    ``services.task_review_events``): when reviewer_role=architect AND
+    verdict=pass AND task.review_packet_type=review_only, the evidence
+    dict must carry either non-empty ``planned_child_task_ids`` OR
+    ``no_child_tasks_required:true``. Other reviewer roles, other
+    packet types, and FAIL/INCONCLUSIVE verdicts are unaffected.
+    """
+    if (
+        payload.reviewer_role != "architect"
+        or payload.verdict != "pass"
+        or task.review_packet_type != "review_only"
+    ):
+        return
+    evidence = payload.evidence if isinstance(payload.evidence, dict) else {}
+    if evidence.get("no_child_tasks_required") is True:
+        return
+    planned = evidence.get("planned_child_task_ids")
+    if isinstance(planned, list) and len(planned) > 0:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail={
+            "message": (
+                "Architect PASS on a review_only packet must carry "
+                "either non-empty `planned_child_task_ids` (the child "
+                "tasks the parent decomposed into) or "
+                "`no_child_tasks_required: true` (intentionally "
+                "non-decomposed scope). Otherwise the review-readiness "
+                "gate cannot determine whether the parent is "
+                "approvable. See architect-review-verdict skill."
+            ),
+            "code": "review_only_pass_requires_child_task_evidence",
+            "reviewer_role": payload.reviewer_role,
+            "review_packet_type": task.review_packet_type,
+        },
+    )
+
+
 @router.post("/{task_id}/review-events", response_model=TaskReviewEventRead)
 async def record_task_review_event(
     payload: TaskReviewEventCreate,
@@ -3296,6 +3349,7 @@ async def record_task_review_event(
         actor=actor,
     )
     _require_reviewer_role_allowed(actor=actor, reviewer_role=payload.reviewer_role)
+    _require_review_event_artifact_completeness(payload, task)
     event = TaskReviewEvent(
         board_id=task.board_id,
         task_id=task.id,
