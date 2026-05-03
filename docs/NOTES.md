@@ -5,8 +5,26 @@ Investigate why the agents aren't nudging each other as instructed
 
 Review the custom skills, evaluate and point any weekness, gaps and strucutural fails
 
-/root/.openclaw/workspace/taskflow-web-presence-design.md
+ Recoverable space at a glance:                                                                                                                                                                                                                                                  
+                                         
+  ┌─────────────────────────────────────────────────────────────────────┬─────────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐                   
+  │                                Path                                 │              Size               │                                                                  Safe to clean?                                                                   │                 
+  ├─────────────────────────────────────────────────────────────────────┼─────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ /root/.openclaw/plugin-runtime-deps/openclaw-2026.4.{24,25,26,27}-* │ ~5.6 GB                         │ Yes — only 4.29 is the live version. 4.29 changelog explicitly added "version-scoped update caches" (cleanup logic), so older versions are stale. │
+  ├─────────────────────────────────────────────────────────────────────┼─────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ /var/log/journal                                                    │ 2.4 GB                          │ Yes — journalctl --vacuum-time=7d keeps last 7 days                                                                                               │                   
+  ├─────────────────────────────────────────────────────────────────────┼─────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤                   
+  │ /root/.openclaw/lcm.db                                              │ 5.4 GB                          │ Care needed — long-context memory DB. Vacuum requires gateway pause. Don't touch without planning.                                                │                   
+  ├─────────────────────────────────────────────────────────────────────┼─────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤                   
+  │ /root/.openclaw/agents/*/sessions                                   │ ~1.5 GB total, mostly mc-/lead- │ Care needed — session transcripts. Old .reset.* and pre-rotation files are typically prunable; live .jsonl are not.                               │                 
+  ├─────────────────────────────────────────────────────────────────────┼─────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤                   
+  │ /root/.openclaw/workspace                                           │ 3.8 GB                          │ Mixed — agent workspaces + git checkouts. Operator's call.                                                                                        │                 
+  └─────────────────────────────────────────────────────────────────────┴─────────────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘                   
+                                                                                                                                                                                                                                                                 
 
+
+/root/.openclaw/workspace/taskflow-web-presence-design.md
+ 
   Recommended combinations, ranked
 
   1. Recall-optimized free — MUTATION_MODEL=deepseek-v4-pro:cloud + RESPONSE_MODEL=deepseek-v4-pro:cloud. Both passes on pro. Total wall-clock ~17-20 min. Free. Maximum recall. Tradeoff: report lands later, ~14% FP rate visible.
