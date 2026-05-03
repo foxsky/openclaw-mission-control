@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal, NamedTuple
 from uuid import UUID
@@ -33,6 +34,32 @@ class OpenBlockerRow(NamedTuple):
     owner_role: str | None
     acknowledged_by_agent_id: UUID | None
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class LeadInputs:
+    """Bundle of board-state inputs to ``select_lead_next_action``.
+
+    Codex review of slices 4-5 flagged the selector's 13-kwarg signature
+    as past readable. The bundle keeps each field individually
+    documentable, lets the API handler pass the inputs as one named
+    object (``select_lead_next_action(inputs)``), and means the next
+    signal added doesn't bloat the function signature further. Optional
+    fields default to empty containers / ``None`` so callers only spell
+    out the inputs they actually have."""
+
+    tasks: Sequence[Task]
+    blocked_by_task_id: Mapping[UUID, Sequence[UUID]]
+    approval_state_by_task_id: Mapping[UUID, ApprovalState]
+    pipeline_missing_by_task_id: Mapping[UUID, Sequence[str]]
+    review_readiness_by_task_id: Mapping[UUID, object] | None = None
+    tasks_with_open_blocker: frozenset[UUID] | set[UUID] | None = None
+    tasks_with_pending_operator_decision: frozenset[UUID] | set[UUID] | None = None
+    orphan_children_with_terminal_parent: Mapping[UUID, UUID] | None = None
+    tasks_with_children: frozenset[UUID] | set[UUID] | None = None
+    tasks_with_umbrella_retired_marker: frozenset[UUID] | set[UUID] | None = None
+    open_blockers_by_task_id: Mapping[UUID, Sequence[OpenBlockerRow]] | None = None
+    gateway_session_by_agent_id: Mapping[UUID, GatewaySessionState] | None = None
 
 
 # Grace window after a worker picks up an in_progress task before the lead is
@@ -181,31 +208,34 @@ def _in_progress_age_minutes(task: Task, *, now: datetime) -> int | None:
 
 
 def select_lead_next_action(
+    inputs: LeadInputs,
     *,
-    tasks: Sequence[Task],
-    blocked_by_task_id: Mapping[UUID, Sequence[UUID]],
-    approval_state_by_task_id: Mapping[UUID, ApprovalState],
-    pipeline_missing_by_task_id: Mapping[UUID, Sequence[str]],
-    review_readiness_by_task_id: Mapping[UUID, object] | None = None,
-    tasks_with_open_blocker: frozenset[UUID] | set[UUID] | None = None,
-    tasks_with_pending_operator_decision: frozenset[UUID] | set[UUID] | None = None,
-    orphan_children_with_terminal_parent: Mapping[UUID, UUID] | None = None,
-    tasks_with_children: frozenset[UUID] | set[UUID] | None = None,
-    tasks_with_umbrella_retired_marker: frozenset[UUID] | set[UUID] | None = None,
-    open_blockers_by_task_id: Mapping[UUID, Sequence[OpenBlockerRow]] | None = None,
-    gateway_session_by_agent_id: Mapping[UUID, GatewaySessionState] | None = None,
     now: datetime | None = None,
 ) -> LeadNextActionRead:
     """Return the single closest-to-done lead action from structured state.
 
-    ``gateway_session_by_agent_id`` is the slice-4 projection of the
-    OpenClaw gateway's per-session state, keyed by ``task.assigned_agent_id``.
-    When provided, ``inspect_stale_in_progress`` actions include a
-    ``gateway_session`` field in details so the lead can distinguish
-    "agent silent on the gateway" (likely wedged) from "agent active but
-    task DB unmoved" (likely just slow). Optional — omitting it
-    preserves the pre-slice-5 details shape.
+    ``inputs.gateway_session_by_agent_id`` is the slice-4 projection of
+    the OpenClaw gateway's per-session state, keyed by
+    ``task.assigned_agent_id``. When provided,
+    ``inspect_stale_in_progress`` actions include a ``gateway_session``
+    field in details so the lead can distinguish "agent silent on the
+    gateway" (likely wedged) from "agent active but task DB unmoved"
+    (likely just slow). Optional — omitting it preserves the pre-slice-5
+    details shape.
     """
+
+    tasks = inputs.tasks
+    blocked_by_task_id = inputs.blocked_by_task_id
+    approval_state_by_task_id = inputs.approval_state_by_task_id
+    pipeline_missing_by_task_id = inputs.pipeline_missing_by_task_id
+    review_readiness_by_task_id = inputs.review_readiness_by_task_id
+    tasks_with_open_blocker = inputs.tasks_with_open_blocker
+    tasks_with_pending_operator_decision = inputs.tasks_with_pending_operator_decision
+    orphan_children_with_terminal_parent = inputs.orphan_children_with_terminal_parent
+    tasks_with_children = inputs.tasks_with_children
+    tasks_with_umbrella_retired_marker = inputs.tasks_with_umbrella_retired_marker
+    open_blockers_by_task_id = inputs.open_blockers_by_task_id
+    gateway_session_by_agent_id = inputs.gateway_session_by_agent_id
 
     if now is None:
         now = utcnow()

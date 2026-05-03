@@ -10,6 +10,7 @@ from app.core.time import utcnow
 from app.models.tasks import Task
 from app.services.lead_next_action import (
     IN_PROGRESS_PIPELINE_NUDGE_GRACE,
+    LeadInputs,
     latest_approval_state_by_task_id,
     select_lead_next_action,
 )
@@ -42,11 +43,13 @@ def test_selects_approved_review_task_for_gate_inspection_first() -> None:
     task = _task(status="review", title="Ready review")
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={task.id: "approved"},
-        pipeline_missing_by_task_id={},
-        review_readiness_by_task_id={task.id: {"ready": True}},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={task.id: "approved"},
+            pipeline_missing_by_task_id={},
+            review_readiness_by_task_id={task.id: {"ready": True}},
+        ),
     )
 
     assert action.action_required is True
@@ -61,10 +64,12 @@ def test_frontend_review_with_missing_pipeline_requires_gate_inspection() -> Non
     task = _task(status="review", title="Frontend review", review_packet_type="frontend_ui")
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={task.id: "none"},
-        pipeline_missing_by_task_id={task.id: ["deployed", "runtime_verified"]},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={task.id: "none"},
+            pipeline_missing_by_task_id={task.id: ["deployed", "runtime_verified"]},
+        ),
     )
 
     assert action.action_required is True
@@ -84,10 +89,12 @@ def test_ready_in_progress_frontend_nudges_worker_review_submission() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={task.id: []},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={task.id: []},
+        ),
     )
 
     assert action.action_required is True
@@ -109,10 +116,12 @@ def test_in_progress_frontend_missing_pipeline_names_pipeline_gate() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={task.id: ["runtime_verified"]},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={task.id: ["runtime_verified"]},
+        ),
     )
 
     assert action.action_required is True
@@ -139,19 +148,21 @@ def test_in_progress_pipeline_missing_splits_worker_and_deploy_states() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={
-            task.id: [
-                "code_changed",
-                "committed",
-                "built",
-                "deployed",
-                "live_build_verified",
-                "runtime_verified",
-            ],
-        },
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={
+                task.id: [
+                    "code_changed",
+                    "committed",
+                    "built",
+                    "deployed",
+                    "live_build_verified",
+                    "runtime_verified",
+                ],
+            },
+        ),
     )
 
     assert action.reason_code == "in_progress_pipeline_missing_review_gate"
@@ -174,10 +185,12 @@ def test_fresh_in_progress_frontend_missing_pipeline_skips_nudge() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={task.id: ["code_changed", "committed"]},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={task.id: ["code_changed", "committed"]},
+        ),
     )
 
     assert action.action_required is False
@@ -194,10 +207,12 @@ def test_generic_in_progress_grace_skips_nudge_for_fresh_task() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+        ),
     )
 
     assert action.action_required is False
@@ -214,10 +229,12 @@ def test_owner_split_includes_default_topology_assumption() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={task.id: ["built", "runtime_verified"]},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={task.id: ["built", "runtime_verified"]},
+        ),
     )
 
     assert action.details["pipeline_owner_assumption"] == "default_openclaw_topology"
@@ -233,10 +250,12 @@ def test_unknown_pipeline_state_defaults_to_worker_owner() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={task.id: ["unknown_state", "built"]},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={task.id: ["unknown_state", "built"]},
+        ),
     )
 
     assert action.details["missing_worker_pipeline_states"] == ["unknown_state"]
@@ -260,13 +279,15 @@ def test_fresh_then_stale_frontend_picks_stale_task() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[fresh_task, stale_task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={
-            fresh_task.id: ["code_changed"],
-            stale_task.id: ["committed"],
-        },
+        LeadInputs(
+            tasks=[fresh_task, stale_task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={
+                fresh_task.id: ["code_changed"],
+                stale_task.id: ["committed"],
+            },
+        ),
     )
 
     assert action.task_id == stale_task.id
@@ -284,10 +305,12 @@ def test_fresh_in_progress_with_inbox_routes_inbox() -> None:
     inbox_task = _task(status="inbox", title="New work")
 
     action = select_lead_next_action(
-        tasks=[fresh_task, inbox_task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={fresh_task.id: ["code_changed"]},
+        LeadInputs(
+            tasks=[fresh_task, inbox_task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={fresh_task.id: ["code_changed"]},
+        ),
     )
 
     assert action.action == "route_inbox"
@@ -305,10 +328,12 @@ def test_in_progress_age_at_grace_boundary_is_stale() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={task.id: ["committed"]},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={task.id: ["committed"]},
+        ),
         now=fixed_now,
     )
 
@@ -330,10 +355,12 @@ def test_aware_in_progress_at_with_offset_uses_utc_age() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={task.id: ["committed"]},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={task.id: ["committed"]},
+        ),
         now=fixed_now,
     )
 
@@ -355,10 +382,12 @@ def test_generic_in_progress_past_grace_fires_health_check() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+        ),
     )
 
     assert action.action_required is True
@@ -373,10 +402,12 @@ def test_routes_unassigned_inbox_when_no_review_or_active_work_exists() -> None:
     task = _task(status="inbox", title="New work")
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+        ),
     )
 
     assert action.action_required is True
@@ -390,10 +421,12 @@ def test_routes_unassigned_inbox_before_assigned_rework() -> None:
     rework = _task(status="rework", title="Existing rework", assigned=True)
 
     action = select_lead_next_action(
-        tasks=[rework, inbox],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
+        LeadInputs(
+            tasks=[rework, inbox],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+        ),
     )
 
     assert action.action_required is True
@@ -412,10 +445,12 @@ def test_routes_assigned_inbox_for_lead_triage() -> None:
     task = _task(status="inbox", title="Assigned inbox", assigned=True)
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+        ),
     )
 
     assert action.action_required is True
@@ -431,10 +466,12 @@ def test_routes_assigned_inbox_before_assigned_rework() -> None:
     rework = _task(status="rework", title="Existing rework", assigned=True)
 
     action = select_lead_next_action(
-        tasks=[rework, inbox],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
+        LeadInputs(
+            tasks=[rework, inbox],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+        ),
     )
 
     assert action.action_required is True
@@ -447,10 +484,12 @@ def test_returns_clear_when_only_known_blocked_work_remains() -> None:
     task = _task(status="in_progress", title="Blocked work", assigned=True)
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={task.id: [uuid4()]},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={task.id: [uuid4()]},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+        ),
     )
 
     assert action.action_required is False
@@ -474,11 +513,13 @@ def test_open_structured_blocker_excludes_task_from_active_queue() -> None:
     inbox_task = _task(status="inbox", title="Unassigned inbox work")
 
     action = select_lead_next_action(
-        tasks=[blocked_task, inbox_task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
-        tasks_with_open_blocker=frozenset({blocked_task.id}),
+        LeadInputs(
+            tasks=[blocked_task, inbox_task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+            tasks_with_open_blocker=frozenset({blocked_task.id}),
+        ),
     )
 
     assert action.action == "route_inbox"
@@ -499,11 +540,13 @@ def test_pending_operator_decision_excludes_task_from_active_queue() -> None:
     inbox_task = _task(status="inbox", title="Unassigned inbox work")
 
     action = select_lead_next_action(
-        tasks=[blocked_task, inbox_task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
-        tasks_with_pending_operator_decision=frozenset({blocked_task.id}),
+        LeadInputs(
+            tasks=[blocked_task, inbox_task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+            tasks_with_pending_operator_decision=frozenset({blocked_task.id}),
+        ),
     )
 
     assert action.action == "route_inbox"
@@ -532,12 +575,14 @@ def test_all_four_blocker_sources_filter_independently() -> None:
     inbox_task = _task(status="inbox", title="Available inbox work")
 
     action = select_lead_next_action(
-        tasks=[by_dependency, by_legacy_flag, by_open_blocker, by_pending_decision, inbox_task],
-        blocked_by_task_id={by_dependency.id: [uuid4()]},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
-        tasks_with_open_blocker=frozenset({by_open_blocker.id}),
-        tasks_with_pending_operator_decision=frozenset({by_pending_decision.id}),
+        LeadInputs(
+            tasks=[by_dependency, by_legacy_flag, by_open_blocker, by_pending_decision, inbox_task],
+            blocked_by_task_id={by_dependency.id: [uuid4()]},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+            tasks_with_open_blocker=frozenset({by_open_blocker.id}),
+            tasks_with_pending_operator_decision=frozenset({by_pending_decision.id}),
+        ),
     )
 
     assert action.action == "route_inbox"
@@ -555,11 +600,13 @@ def test_open_blocker_alone_yields_clear() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[blocked_task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
-        tasks_with_open_blocker=frozenset({blocked_task.id}),
+        LeadInputs(
+            tasks=[blocked_task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+            tasks_with_open_blocker=frozenset({blocked_task.id}),
+        ),
     )
 
     assert action.action_required is False
@@ -620,12 +667,14 @@ def test_inspect_stale_blocker_fires_for_aged_blocker_on_active_task() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
-        tasks_with_open_blocker=frozenset({task.id}),
-        open_blockers_by_task_id={task.id: [blocker_row]},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+            tasks_with_open_blocker=frozenset({task.id}),
+            open_blockers_by_task_id={task.id: [blocker_row]},
+        ),
     )
 
     assert action.action_required is True
@@ -660,12 +709,14 @@ def test_inspect_stale_blocker_skips_blocker_within_grace() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
-        tasks_with_open_blocker=frozenset({task.id}),
-        open_blockers_by_task_id={task.id: [fresh_row]},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+            tasks_with_open_blocker=frozenset({task.id}),
+            open_blockers_by_task_id={task.id: [fresh_row]},
+        ),
     )
 
     assert action.action_required is False
@@ -694,12 +745,14 @@ def test_inspect_stale_blocker_takes_precedence_over_route_inbox() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[blocked_task, inbox_task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
-        tasks_with_open_blocker=frozenset({blocked_task.id}),
-        open_blockers_by_task_id={blocked_task.id: [stale_row]},
+        LeadInputs(
+            tasks=[blocked_task, inbox_task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+            tasks_with_open_blocker=frozenset({blocked_task.id}),
+            open_blockers_by_task_id={blocked_task.id: [stale_row]},
+        ),
     )
 
     assert action.action == "inspect_stale_blocker"
@@ -728,13 +781,15 @@ def test_inspect_stale_blocker_yields_to_inspect_review_gates() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[review_task, blocked_task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={review_task.id: "approved"},
-        pipeline_missing_by_task_id={},
-        review_readiness_by_task_id={review_task.id: {"ready": True}},
-        tasks_with_open_blocker=frozenset({blocked_task.id}),
-        open_blockers_by_task_id={blocked_task.id: [stale_row]},
+        LeadInputs(
+            tasks=[review_task, blocked_task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={review_task.id: "approved"},
+            pipeline_missing_by_task_id={},
+            review_readiness_by_task_id={review_task.id: {"ready": True}},
+            tasks_with_open_blocker=frozenset({blocked_task.id}),
+            open_blockers_by_task_id={blocked_task.id: [stale_row]},
+        ),
     )
 
     assert action.action == "inspect_review_gates"
@@ -757,12 +812,14 @@ def test_inspect_stale_blocker_skips_terminal_tasks() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[done_task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
-        tasks_with_open_blocker=frozenset({done_task.id}),
-        open_blockers_by_task_id={done_task.id: [stale_row]},
+        LeadInputs(
+            tasks=[done_task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+            tasks_with_open_blocker=frozenset({done_task.id}),
+            open_blockers_by_task_id={done_task.id: [stale_row]},
+        ),
     )
 
     assert action.action == "clear"
@@ -820,11 +877,13 @@ def test_stale_in_progress_health_check_surfaces_gateway_state() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
-        gateway_session_by_agent_id={task.assigned_agent_id: gateway_state},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+            gateway_session_by_agent_id={task.assigned_agent_id: gateway_state},
+        ),
     )
 
     assert action.action == "inspect_stale_in_progress"
@@ -849,11 +908,13 @@ def test_stale_in_progress_health_check_marks_gateway_state_absent() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
-        gateway_session_by_agent_id={},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+            gateway_session_by_agent_id={},
+        ),
     )
 
     assert action.action == "inspect_stale_in_progress"
@@ -879,11 +940,13 @@ def test_stale_in_progress_pipeline_missing_surfaces_gateway_state() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={task.id: ["deployed"]},
-        gateway_session_by_agent_id={task.assigned_agent_id: gateway_state},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={task.id: ["deployed"]},
+            gateway_session_by_agent_id={task.assigned_agent_id: gateway_state},
+        ),
     )
 
     assert action.action == "inspect_stale_in_progress"
@@ -908,11 +971,13 @@ def test_in_progress_ready_for_review_surfaces_gateway_state() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={task.id: []},  # ready: empty list, not missing
-        gateway_session_by_agent_id={task.assigned_agent_id: gateway_state},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={task.id: []},  # ready: empty list, not missing
+            gateway_session_by_agent_id={task.assigned_agent_id: gateway_state},
+        ),
     )
 
     assert action.action == "inspect_stale_in_progress"
@@ -932,10 +997,12 @@ def test_omitting_gateway_session_param_preserves_existing_behavior() -> None:
     )
 
     action = select_lead_next_action(
-        tasks=[task],
-        blocked_by_task_id={},
-        approval_state_by_task_id={},
-        pipeline_missing_by_task_id={},
+        LeadInputs(
+            tasks=[task],
+            blocked_by_task_id={},
+            approval_state_by_task_id={},
+            pipeline_missing_by_task_id={},
+        ),
     )
 
     assert "gateway_session" not in action.details

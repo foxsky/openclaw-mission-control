@@ -77,6 +77,7 @@ from app.services.mc_gateway_subscriber.session_state_repo import (
 )
 from app.services.lead_next_action import (
     ApprovalState,
+    LeadInputs,
     OpenBlockerRow,
     latest_approval_state_by_task_id,
     select_lead_next_action,
@@ -921,18 +922,20 @@ async def get_lead_next_action(
         if lookup_id in gateway_state_by_lookup_id
     }
     return select_lead_next_action(
-        tasks=tasks,
-        blocked_by_task_id=blocked_by_task_id,
-        approval_state_by_task_id=approval_state_by_task_id,
-        pipeline_missing_by_task_id=pipeline_missing_by_task_id,
-        review_readiness_by_task_id=review_readiness_by_task_id,
-        tasks_with_open_blocker=open_blocker_ids,
-        tasks_with_pending_operator_decision=pending_operator_decision_ids,
-        orphan_children_with_terminal_parent=orphan_children,
-        tasks_with_children=parents_already_materialized,
-        tasks_with_umbrella_retired_marker=parents_with_retired_marker,
-        open_blockers_by_task_id=open_blockers_by_task_id_typed,
-        gateway_session_by_agent_id=gateway_session_by_agent_id,
+        LeadInputs(
+            tasks=tasks,
+            blocked_by_task_id=blocked_by_task_id,
+            approval_state_by_task_id=approval_state_by_task_id,
+            pipeline_missing_by_task_id=pipeline_missing_by_task_id,
+            review_readiness_by_task_id=review_readiness_by_task_id,
+            tasks_with_open_blocker=open_blocker_ids,
+            tasks_with_pending_operator_decision=pending_operator_decision_ids,
+            orphan_children_with_terminal_parent=orphan_children,
+            tasks_with_children=parents_already_materialized,
+            tasks_with_umbrella_retired_marker=parents_with_retired_marker,
+            open_blockers_by_task_id=open_blockers_by_task_id_typed,
+            gateway_session_by_agent_id=gateway_session_by_agent_id,
+        ),
     )
 
 
