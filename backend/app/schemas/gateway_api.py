@@ -109,6 +109,13 @@ class ProjectedGatewaySession(SQLModel):
     total_tokens: int | None = None
     channel: str | None = None
     aborted_last_run: bool
+    # Slice-6 ACP-completion fields. ``parent_session_key`` lets the
+    # operator dashboard render parent→child spawn graphs;
+    # ``last_status`` and ``last_lifecycle_reason`` carry the gateway
+    # vocabulary the lead playbook reads to derive ACP-child completion.
+    parent_session_key: str | None = None
+    last_status: str | None = None
+    last_lifecycle_reason: str | None = None
     updated_at: datetime
 
 

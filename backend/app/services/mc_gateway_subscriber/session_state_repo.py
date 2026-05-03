@@ -42,6 +42,9 @@ _NON_PK_COLUMNS = (
     "total_tokens",
     "channel",
     "aborted_last_run",
+    "parent_session_key",
+    "last_status",
+    "last_lifecycle_reason",
     "updated_at",
 )
 
@@ -92,6 +95,9 @@ async def upsert_session_state(
         "total_tokens": state.total_tokens,
         "channel": state.channel,
         "aborted_last_run": state.aborted_last_run,
+        "parent_session_key": state.parent_session_key,
+        "last_status": state.last_status,
+        "last_lifecycle_reason": state.last_lifecycle_reason,
         "updated_at": utcnow(),
     }
     dialect_name = session.bind.dialect.name if session.bind is not None else None

@@ -46,21 +46,45 @@ class SessionState:
     total_tokens: int | None
     channel: str | None
     aborted_last_run: bool
+    # Slice-6 ACP-completion signals captured from sessions.changed
+    # lifecycle events. ``parent_session_key`` is set when this session
+    # is an ACP child spawned by another agent — lets MC answer "what
+    # are agent X's spawned children?" by querying for matching parents.
+    # ``last_status`` is the per-run state ("running"|"done"|...).
+    # ``last_lifecycle_reason`` carries the gateway's lifecycle vocabulary
+    # ("create"|"completed"|"abort"|"expiry"|"spawn-failed"|"deleted"|
+    # "retry-limit"|"subagent-status"|"reset"|"patch") — terminal
+    # values are how the lead derives ACP-child completion without
+    # falling back to the session-jsonl mtime hack.
+    parent_session_key: str | None = None
+    last_status: str | None = None
+    last_lifecycle_reason: str | None = None
 
 
 def parse_session_key(key: Any) -> tuple[str, str] | None:
-    """Parse a gateway sessionKey of the form ``agent:<agent_id>:<label>``.
+    """Parse a gateway sessionKey of the form ``agent:<agent_id>:<label>``
+    or ``agent:<agent_id>:<label>:<sub>``.
 
-    Returns ``(agent_id, label)`` on success, ``None`` for any input
-    that doesn't match the expected shape (wrong namespace, missing
-    parts, empty fields, non-string).
+    Returns ``(agent_id, label)`` on success — for 4-segment keys, the
+    label is the colon-joined tail (e.g. ``main:heartbeat``) so the
+    sub-label rides as a discriminator on the same row. Live capture
+    (2026-05-03) showed lead/worker agents emit
+    ``agent:lead-<board>:main:heartbeat`` for tick sessions; treating
+    them as their own labelled rows preserves the per-bucket projection.
+
+    Returns ``None`` for any input that doesn't match the expected
+    shape (wrong namespace, missing parts, empty fields, non-string,
+    or 5+ segments — the latter blocks cron-run sub-session keys
+    ``agent:<id>:cron:<job>:run:<run>`` that would pollute the table
+    with one ephemeral row per heartbeat tick).
     """
     if not isinstance(key, str):
         return None
     parts = key.split(":")
-    if len(parts) != 3:
+    if len(parts) not in (3, 4):
         return None
-    namespace, agent_id, label = parts
+    namespace, agent_id = parts[0], parts[1]
+    label = ":".join(parts[2:])
     if namespace != AGENT_SESSION_PREFIX or not agent_id or not label:
         return None
     return agent_id, label
@@ -105,6 +129,13 @@ def build_state_from_frame(frame: dict[str, Any]) -> SessionState | None:
         # would silently flip aborted_last_run to True. Mirror the
         # _optional_int defensive pattern.
         aborted_last_run=session.get("abortedLastRun") is True,
+        # Slice-6 ACP-completion signals. Per gateway lifecycle
+        # broadcast (server-session-events.ts), parentSessionKey,
+        # status, and reason live at the TOP of the inner payload
+        # (not under ``session``).
+        parent_session_key=_optional_str(payload.get("parentSessionKey")),
+        last_status=_optional_str(payload.get("status")),
+        last_lifecycle_reason=_optional_str(payload.get("reason")),
     )
 
 

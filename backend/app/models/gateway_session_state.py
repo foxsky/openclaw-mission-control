@@ -44,6 +44,18 @@ class GatewaySessionState(QueryModel, table=True):
     total_tokens: int | None = Field(default=None)
     channel: str | None = Field(default=None)
     aborted_last_run: bool = Field(default=False)
+    # Slice-6 ACP-completion projection. ``parent_session_key`` links
+    # this row to the parent agent's session when this session is an
+    # ACP child; null for top-level sessions. Indexed because the lead
+    # next-action surface filters on it ("show me agent X's spawned
+    # children"). ``last_status`` and ``last_lifecycle_reason`` carry
+    # the per-run state and the gateway's lifecycle vocabulary —
+    # together they let MC derive ACP child completion (parent set +
+    # reason in {"completed","abort","expiry","spawn-failed",...})
+    # without falling back to session-jsonl mtime inference.
+    parent_session_key: str | None = Field(default=None, index=True)
+    last_status: str | None = Field(default=None)
+    last_lifecycle_reason: str | None = Field(default=None)
     # MC's own wall-clock write timestamp; useful to spot subscriber
     # gaps independent of gateway clock skew.
     updated_at: datetime = Field(default_factory=utcnow)

@@ -55,6 +55,21 @@ def test_parse_session_key_supports_non_main_label() -> None:
     ) == ("mc-dd1abee5-97f0-4aaa-8d34-ecac1f7ddf66", "debug")
 
 
+def test_parse_session_key_accepts_4_segment_sub_label() -> None:
+    """Live capture (2026-05-03) showed lead and worker agents emit
+    4-segment session keys for sub-runs, e.g.
+    ``agent:lead-<board>:main:heartbeat`` for heartbeat tick sessions.
+    Slice-3 parser dropped these as malformed and the projector silently
+    missed them. Treat the trailing ``:<sub>`` as part of the label
+    so the row IS captured under its full discriminator."""
+    assert parse_session_key(
+        "agent:lead-05002170-201b-4c66-bae1-26c0c833f206:main:heartbeat"
+    ) == ("lead-05002170-201b-4c66-bae1-26c0c833f206", "main:heartbeat")
+    assert parse_session_key(
+        "agent:mc-3461451b-5824-4ed0-872c-d14d5d2be107:main:replay"
+    ) == ("mc-3461451b-5824-4ed0-872c-d14d5d2be107", "main:replay")
+
+
 @pytest.mark.parametrize(
     "key",
     [
@@ -111,6 +126,9 @@ def _make_event(
     display_name: str = "webchat:g-agent-mc-dd1abee5-97f0-4aaa-8d34-ecac1f7ddf66-main",
     label: str = "QA-E2E",
     aborted_last_run: bool = False,
+    parent_session_key: str | None = None,
+    status: str | None = None,
+    reason: str | None = None,
 ) -> dict:
     """Build a sessions.changed event frame that mirrors the live
     gateway capture (see /tmp/probe_out.txt sample). The Subscriber
@@ -132,6 +150,12 @@ def _make_event(
             "updatedAt": ts,
         },
     }
+    if parent_session_key is not None:
+        inner["parentSessionKey"] = parent_session_key
+    if status is not None:
+        inner["status"] = status
+    if reason is not None:
+        inner["reason"] = reason
     if message_seq is not None:
         inner["messageSeq"] = message_seq
         inner["messageId"] = "0c51db90"
@@ -289,3 +313,105 @@ async def test_projector_snapshot_returns_immutable_tuple() -> None:
     await p(_make_event(session_key="agent:mc-other-1234:main"))
     assert len(snap) == 1
     assert len(p.snapshot()) == 2
+
+
+# ---------------------------------------------------------------------------
+# Slice 6: ACP-completion projection — parent_session_key, last_status,
+# last_lifecycle_reason captured from sessions.changed lifecycle events
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_projector_records_parent_session_key_for_acp_child() -> None:
+    """When the gateway broadcasts a sessions.changed event for an ACP
+    child, ``parentSessionKey`` is set in the inner payload (per
+    ``server-session-events.ts`` createLifecycleEventBroadcastHandler).
+    The projector must capture it so MC can answer "what are this
+    agent's spawned children?" via SQL."""
+    p = SessionStateProjector()
+    await p(
+        _make_event(
+            session_key="agent:mc-child-1234:spawn",
+            parent_session_key="agent:mc-parent-5678:main",
+        )
+    )
+    states = p.get("mc-child-1234")
+    assert len(states) == 1
+    assert states[0].parent_session_key == "agent:mc-parent-5678:main"
+
+
+@pytest.mark.asyncio
+async def test_projector_records_status_and_reason_for_acp_completion() -> None:
+    """Live capture (2026-05-03) showed PB lifecycle events fire with
+    ``status="done"`` and ``reason="completed"`` when a session run
+    finishes. The two together are how MC derives "this ACP child
+    finished" without inferring from session-jsonl mtimes."""
+    p = SessionStateProjector()
+    await p(
+        _make_event(
+            session_key="agent:mc-child-1234:spawn",
+            parent_session_key="agent:mc-parent-5678:main",
+            phase="end",
+            status="done",
+            reason="completed",
+        )
+    )
+    states = p.get("mc-child-1234")
+    assert len(states) == 1
+    assert states[0].last_status == "done"
+    assert states[0].last_lifecycle_reason == "completed"
+
+
+@pytest.mark.asyncio
+async def test_projector_records_terminal_failure_reasons() -> None:
+    """The gateway lifecycle vocabulary includes failure reasons:
+    ``abort``, ``expiry``, ``spawn-failed``, ``deleted``, ``retry-limit``.
+    Each must round-trip into ``last_lifecycle_reason`` so the lead
+    can distinguish "completed cleanly" from "failed/aborted" without
+    reading session jsonl files."""
+    for reason in ("abort", "expiry", "spawn-failed", "deleted", "retry-limit"):
+        p = SessionStateProjector()
+        await p(
+            _make_event(
+                session_key=f"agent:mc-child-{reason}:spawn",
+                parent_session_key="agent:mc-parent-5678:main",
+                reason=reason,
+            )
+        )
+        states = p.get(f"mc-child-{reason}")
+        assert len(states) == 1
+        assert states[0].last_lifecycle_reason == reason
+
+
+@pytest.mark.asyncio
+async def test_projector_lifecycle_fields_default_to_none_when_absent() -> None:
+    """Most ``sessions.changed`` events carry only ``phase``, not the
+    lifecycle-specific ``status``/``reason``/``parentSessionKey`` set.
+    The projector must still record the row with ``None`` defaults so
+    legacy events don't crash and slice-4 projections stay intact."""
+    p = SessionStateProjector()
+    await p(_make_event())  # no parent/status/reason kwargs
+    states = p.get("mc-dd1abee5-97f0-4aaa-8d34-ecac1f7ddf66")
+    assert len(states) == 1
+    assert states[0].parent_session_key is None
+    assert states[0].last_status is None
+    assert states[0].last_lifecycle_reason is None
+
+
+@pytest.mark.asyncio
+async def test_projector_captures_4_segment_heartbeat_sub_session() -> None:
+    """Slice-3 parser dropped 4-segment keys (``agent:lead-X:main:heartbeat``).
+    Slice 6 widens parse_session_key to accept them as labelled rows.
+    Verify the projector now records them under the joined label."""
+    p = SessionStateProjector()
+    await p(
+        _make_event(
+            session_key="agent:lead-05002170-201b-4c66-bae1-26c0c833f206:main:heartbeat",
+            phase="end",
+            status="done",
+        )
+    )
+    states = p.get("lead-05002170-201b-4c66-bae1-26c0c833f206")
+    assert len(states) == 1
+    assert states[0].session_label == "main:heartbeat"
+    assert states[0].last_status == "done"

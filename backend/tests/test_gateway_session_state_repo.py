@@ -35,6 +35,9 @@ def _state(
     total_tokens: int | None = 64_667,
     channel: str | None = "webchat",
     aborted_last_run: bool = False,
+    parent_session_key: str | None = None,
+    last_status: str | None = None,
+    last_lifecycle_reason: str | None = None,
 ) -> SessionState:
     return SessionState(
         agent_id=agent_id,
@@ -48,6 +51,9 @@ def _state(
         total_tokens=total_tokens,
         channel=channel,
         aborted_last_run=aborted_last_run,
+        parent_session_key=parent_session_key,
+        last_status=last_status,
+        last_lifecycle_reason=last_lifecycle_reason,
     )
 
 
@@ -448,3 +454,85 @@ async def test_cleanup_handles_unparseable_agent_id_safely(
     assert deleted_count == 0
     rows = await list_all_session_states(sqlite_session)
     assert len(rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# Slice 6: ACP-completion projection columns round-trip via upsert
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upsert_round_trips_lifecycle_columns(
+    sqlite_session: AsyncSession,
+) -> None:
+    """The slice-6 columns (parent_session_key, last_status,
+    last_lifecycle_reason) must round-trip through the ON CONFLICT
+    upsert so MC can derive ACP-child completion via SQL without
+    falling back to session-jsonl mtime inference."""
+    state = _state(
+        parent_session_key="agent:mc-parent-5678:main",
+        last_status="done",
+        last_lifecycle_reason="completed",
+    )
+    await upsert_session_state(sqlite_session, state)
+    await sqlite_session.commit()
+
+    rows = await list_all_session_states(sqlite_session)
+    assert len(rows) == 1
+    assert rows[0].parent_session_key == "agent:mc-parent-5678:main"
+    assert rows[0].last_status == "done"
+    assert rows[0].last_lifecycle_reason == "completed"
+
+
+@pytest.mark.asyncio
+async def test_upsert_overwrites_lifecycle_reason_on_terminal_transition(
+    sqlite_session: AsyncSession,
+) -> None:
+    """A child session's status moves through running → done. The
+    second upsert must overwrite the lifecycle reason so the lead
+    sees the LATEST terminal value, not the first-seen one."""
+    await upsert_session_state(
+        sqlite_session,
+        _state(
+            last_changed_at_ms=1,
+            last_status="running",
+            last_lifecycle_reason="create",
+        ),
+    )
+    await upsert_session_state(
+        sqlite_session,
+        _state(
+            last_changed_at_ms=2,
+            last_status="done",
+            last_lifecycle_reason="completed",
+        ),
+    )
+    await sqlite_session.commit()
+    rows = await list_all_session_states(sqlite_session)
+    assert len(rows) == 1
+    assert rows[0].last_status == "done"
+    assert rows[0].last_lifecycle_reason == "completed"
+
+
+@pytest.mark.asyncio
+async def test_upsert_preserves_parent_link_for_acp_child(
+    sqlite_session: AsyncSession,
+) -> None:
+    """parent_session_key is the structural link MC uses to find
+    "agent X's spawned children". It must not get clobbered by an
+    update that doesn't include it (via a None overwrite is acceptable
+    — the gateway sends the field on every event, so absent==None is
+    the truth)."""
+    parent_key = "agent:mc-parent-5678:main"
+    await upsert_session_state(
+        sqlite_session,
+        _state(parent_session_key=parent_key, last_changed_at_ms=1),
+    )
+    await upsert_session_state(
+        sqlite_session,
+        _state(parent_session_key=parent_key, last_changed_at_ms=2),
+    )
+    await sqlite_session.commit()
+    rows = await list_all_session_states(sqlite_session)
+    assert len(rows) == 1
+    assert rows[0].parent_session_key == parent_key
