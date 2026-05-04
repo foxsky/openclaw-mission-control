@@ -41,7 +41,11 @@ from app.schemas.approvals import (
     ApprovalRead,
     ApprovalStatus,
 )
-from app.schemas.board_memory import BoardMemoryCreate, BoardMemoryRead
+from app.schemas.board_memory import (
+    BoardMemoryCreate,
+    BoardMemoryIntakeResultRead,
+    BoardMemoryRead,
+)
 from app.schemas.board_onboarding import BoardOnboardingAgentUpdate, BoardOnboardingRead
 from app.schemas.board_webhooks import BoardWebhookPayloadRead
 from app.schemas.boards import BoardRead
@@ -68,6 +72,7 @@ from app.schemas.task_pipeline_events import TaskPipelineStateRead
 from app.schemas.tasks import TaskCommentCreate, TaskCommentRead, TaskCreate, TaskRead, TaskUpdate
 from app.schemas.view_models import TaskCardRead
 from app.services.activity_log import record_activity
+from app.services.board_memory_intake import reconcile_board_memory_intake
 from app.services.openclaw.coordination_service import GatewayCoordinationService
 from app.services.openclaw.internal.agent_key import projection_lookup_id
 from app.services.openclaw.policies import OpenClawAuthorizationPolicy
@@ -1631,6 +1636,58 @@ async def create_board_memory(
         board=board,
         session=session,
         actor=_actor(agent_ctx),
+    )
+
+
+@router.post(
+    "/boards/{board_id}/memory/intake/reconcile",
+    response_model=BoardMemoryIntakeResultRead,
+    tags=AGENT_BOARD_TAGS,
+    openapi_extra=_agent_board_openapi_hints(
+        intent="agent_board_memory_intake_reconcile",
+        when_to_use=[
+            "Board lead must reconcile recent operator-findings memories into intake tasks.",
+            "Lead-memory-intake skill calls this before its verification phase.",
+        ],
+        routing_examples=[
+            {
+                "input": {
+                    "intent": "materialize unlinked operator findings as inbox tasks",
+                    "required_privilege": "board_lead",
+                },
+                "decision": "agent_board_memory_intake_reconcile",
+            },
+        ],
+        side_effects=[
+            "Creates one inbox task per qualifying operator memory that has no source_memory_id link yet.",
+        ],
+        routing_policy=[
+            "Use as the deterministic backstop to the event-driven intake path.",
+        ],
+    ),
+)
+async def reconcile_board_memory_intake_endpoint(
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+    agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
+) -> BoardMemoryIntakeResultRead:
+    """Reconcile operator-findings memories into inbox tasks.
+
+    Thin wrapper around ``reconcile_board_memory_intake``. The
+    ``lead-memory-intake`` skill calls this before its verification
+    pass; without it, the skill's ``curl -fsS`` exits non-zero on 404
+    and the Supervisor heartbeat reports ``HEARTBEAT_FAILED``.
+    """
+    _guard_board_access(agent_ctx, board)
+    if board.id is None:
+        from fastapi import HTTPException, status as http_status
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND)
+    result = await reconcile_board_memory_intake(session, board_id=board.id)
+    return BoardMemoryIntakeResultRead(
+        scanned=result.scanned,
+        created=result.created,
+        skipped_existing=result.skipped_existing,
+        skipped_non_actionable=result.skipped_non_actionable,
     )
 
 

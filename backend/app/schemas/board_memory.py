@@ -33,3 +33,21 @@ class BoardMemoryRead(SQLModel):
     source: str | None = None
     is_chat: bool = False
     created_at: datetime
+
+
+class BoardMemoryIntakeResultRead(SQLModel):
+    """Counters returned from the operator-memory intake reconcile endpoint.
+
+    Mirrors ``app.services.board_memory_intake.BoardMemoryIntakeResult``
+    so the lead-memory-intake skill and operator dashboards consume a
+    stable HTTP shape. ``scanned`` is the total memories inspected in
+    the lookback window; ``created`` is intake tasks materialized this
+    pass; ``skipped_existing`` is qualifying memories that already had
+    a linked task; ``skipped_non_actionable`` is memories that didn't
+    match the operator-findings tag rules.
+    """
+
+    scanned: int = 0
+    created: int = 0
+    skipped_existing: int = 0
+    skipped_non_actionable: int = 0
