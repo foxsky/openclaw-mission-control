@@ -223,10 +223,27 @@ def create_rate_limiter(
 
 
 # Shared limiter instances for specific endpoints.
-# Agent auth: 20 attempts per 60 seconds per IP.
+# Agent auth: 120 attempts per 60 seconds per IP.
+#
+# All agents on a board share one IP (the OpenClaw gateway at 192.168.2.60),
+# so the bucket has to absorb every agent's heartbeat burst plus operator
+# triggers. A single Supervisor tick legitimately makes 10-15 calls
+# (`/lead/next-action`, `/memory`, `/memory/intake/reconcile`, `/tasks`,
+# `/review-readiness`, multiple `/comments`, `/blockers`, etc.); with
+# 7 agents on the live board, peak per-minute traffic from .60 reaches
+# ~80-100 calls. The 20/60s value bit three times this session
+# (incidents 2026-05-04 19:51, 23:04, 23:56), each time in the middle
+# of a legitimate heartbeat. 120/60s leaves headroom without giving up
+# meaningful brute-force protection: agent tokens are 43-char random
+# strings (~256 bits of entropy), so even 120 guesses/min would take
+# ~10^60 minutes to enumerate the space.
+#
+# Codex review 2026-05-04 noted the principled fix is layered limits
+# (low IP cap pre-auth + per-agent post-auth + route-specific write
+# caps); this is a pragmatic single-knob bump until that lands.
 agent_auth_limiter: RateLimiter = create_rate_limiter(
     namespace="agent_auth",
-    max_requests=20,
+    max_requests=120,
     window_seconds=60.0,
 )
 # Webhook ingest: 60 requests per 60 seconds per IP.
