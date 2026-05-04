@@ -129,27 +129,55 @@ def build_state_from_frame(frame: dict[str, Any]) -> SessionState | None:
     if not isinstance(ts, int):
         return None
 
+    # The gateway emits two distinct sessions.changed shapes (verified
+    # against live 5.3 capture + ``server-session-events.ts``):
+    #
+    # * Message-phase events: fields appear BOTH at the top of the
+    #   inner payload AND nested under a ``session`` object (the
+    #   nested copy is the legacy mirror that buildGatewaySessionSnapshot
+    #   spreads into the top level).
+    # * Lifecycle events (``reason`` set): only top-level — NO nested
+    #   ``session`` object at all.
+    #
+    # Slice-4 read solely from ``session.<field>`` and silently dropped
+    # data on every lifecycle event, then wrote None to the projection
+    # row, clobbering the previously-correct values from prior message
+    # events. Codex finding 2026-05-04. Read top-level first; fall back
+    # to nested for backwards-compat with older 4.x event shapes.
     session = payload.get("session") or {}
+
+    def _pick_str(field: str) -> str | None:
+        return _optional_str(payload.get(field)) or _optional_str(
+            session.get(field)
+        )
+
+    def _pick_int(field: str) -> int | None:
+        top = _optional_int(payload.get(field))
+        if top is not None:
+            return top
+        return _optional_int(session.get(field))
+
     return SessionState(
         agent_id=agent_id,
         session_label=label,
-        session_id=_optional_str(session.get("sessionId")),
+        session_id=_pick_str("sessionId"),
         last_phase=_optional_str(payload.get("phase")),
         last_message_seq=_optional_int(payload.get("messageSeq")),
         last_changed_at_ms=ts,
-        input_tokens=_optional_int(session.get("inputTokens")),
-        output_tokens=_optional_int(session.get("outputTokens")),
-        total_tokens=_optional_int(session.get("totalTokens")),
-        channel=_optional_str(session.get("channel")),
+        input_tokens=_pick_int("inputTokens"),
+        output_tokens=_pick_int("outputTokens"),
+        total_tokens=_pick_int("totalTokens"),
+        channel=_pick_str("channel"),
         # Strict identity-compare to True: a string field carrying
         # "false" (or any non-empty string) is truthy under bool() and
         # would silently flip aborted_last_run to True. Mirror the
         # _optional_int defensive pattern.
-        aborted_last_run=session.get("abortedLastRun") is True,
-        # Slice-6 ACP-completion signals. Per gateway lifecycle
-        # broadcast (server-session-events.ts), parentSessionKey,
-        # status, and reason live at the TOP of the inner payload
-        # (not under ``session``).
+        aborted_last_run=(
+            payload.get("abortedLastRun") is True
+            or session.get("abortedLastRun") is True
+        ),
+        # Slice-6 ACP-completion signals. Always top-level on lifecycle
+        # events (server-session-events.ts createLifecycleEventBroadcastHandler).
         parent_session_key=_optional_str(payload.get("parentSessionKey")),
         last_status=_optional_str(payload.get("status")),
         last_lifecycle_reason=_optional_str(payload.get("reason")),

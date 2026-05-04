@@ -764,14 +764,28 @@ async def steer_session(
     config: GatewayConfig,
     deliver: bool = False,
 ) -> object:
-    """Send a message with interruptIfActive — interrupts a stuck agent run."""
+    """Send a message and interrupt-if-active — steers a stuck agent run.
+
+    Gateway handler aborts tracked/embedded active work, clears queues,
+    waits up to 15s for the prior turn to settle, then sends via
+    ``chat.send``; if still active after the wait it rejects with
+    ``UNAVAILABLE`` (verified against ``server-methods/sessions.ts``
+    on 5.3). Scope: ``operator.write``.
+
+    Param schema: gateway expects ``key``, NOT ``sessionKey`` (codex
+    review 2026-05-04 caught the original wrapper sending the wrong
+    key name; would have failed with "key required" on first call).
+    ``deliver`` and ``interruptIfActive`` are not in the validated
+    params shape — ``sessions.steer`` always interrupts, and delivery
+    is implicit; both kept on the Python signature only for caller-API
+    stability with the chat.send helper next to it.
+    """
     params: dict[str, Any] = {
-        "sessionKey": session_key,
+        "key": session_key,
         "message": message,
-        "deliver": deliver,
-        "interruptIfActive": True,
         "idempotencyKey": str(uuid4()),
     }
+    _ = deliver  # accepted for caller-API symmetry; gateway ignores
     return await openclaw_call("sessions.steer", params, config=config)
 
 

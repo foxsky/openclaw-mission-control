@@ -446,3 +446,145 @@ async def test_projector_captures_4_segment_heartbeat_sub_session() -> None:
     assert len(states) == 1
     assert states[0].session_label == "main:heartbeat"
     assert states[0].last_status == "done"
+
+
+# ---------------------------------------------------------------------------
+# Codex 2026-05-04 finding: lifecycle sessions.changed events emit fields at
+# the TOP of the inner payload (no nested ``session`` object). Slice 4 read
+# from ``payload.session.X`` only, silently dropping data on every lifecycle
+# event and overwriting previously-correct values with None.
+# ---------------------------------------------------------------------------
+
+
+def _make_lifecycle_event(
+    *,
+    session_key: str = "agent:mc-aaaaaaaa-1111-2222-3333-444444444444:main",
+    ts: int = 1_777_900_000_000,
+    reason: str = "subagent-status",
+    status: str = "done",
+    input_tokens: int = 1234,
+    output_tokens: int = 567,
+    total_tokens: int = 1801,
+    channel: str = "webchat",
+    aborted_last_run: bool = False,
+    session_id: str = "abc-def",
+) -> dict:
+    """Build a lifecycle-shape sessions.changed frame: fields at the TOP of
+    the inner payload, NO nested ``session`` object. Mirrors what
+    ``createLifecycleEventBroadcastHandler`` (server-session-events.ts:152+)
+    actually broadcasts — verified against live 5.3 capture."""
+    return {
+        "type": "event",
+        "event": "sessions.changed",
+        "payload": {
+            "sessionKey": session_key,
+            "ts": ts,
+            "reason": reason,
+            "status": status,
+            "sessionId": session_id,
+            "channel": channel,
+            "inputTokens": input_tokens,
+            "outputTokens": output_tokens,
+            "totalTokens": total_tokens,
+            "abortedLastRun": aborted_last_run,
+        },
+        "seq": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_projector_reads_top_level_fields_on_lifecycle_event() -> None:
+    """SHIPPED BUG REGRESSION: lifecycle events have NO nested ``session``
+    object — slice-4 reads ``payload.session.<field>`` and got None for
+    every token/channel/aborted/sessionId field, then wrote None to the
+    DB, clobbering valid data captured from prior message events."""
+    p = SessionStateProjector()
+    await p(_make_lifecycle_event())
+    states = p.get("mc-aaaaaaaa-1111-2222-3333-444444444444")
+    assert len(states) == 1
+    s = states[0]
+    assert s.input_tokens == 1234
+    assert s.output_tokens == 567
+    assert s.total_tokens == 1801
+    assert s.channel == "webchat"
+    assert s.session_id == "abc-def"
+    assert s.aborted_last_run is False
+    assert s.last_lifecycle_reason == "subagent-status"
+    assert s.last_status == "done"
+
+
+@pytest.mark.asyncio
+async def test_projector_prefers_top_level_when_both_locations_present() -> None:
+    """Message-phase events carry the same fields BOTH at top-level AND
+    nested under ``session``. When both are present, prefer top-level —
+    that's the authoritative gateway-side field; the nested mirror is a
+    legacy artefact from older event shapes. Pin top-wins so future
+    drift between the two doesn't leave the projector reading stale."""
+    frame = {
+        "type": "event",
+        "event": "sessions.changed",
+        "payload": {
+            "sessionKey": "agent:mc-bbbbbbbb-1111-2222-3333-444444444444:main",
+            "ts": 1_777_900_000_000,
+            "phase": "message",
+            "inputTokens": 999,
+            "totalTokens": 1500,
+            "channel": "top-channel",
+            "abortedLastRun": True,
+            "sessionId": "top-session-id",
+            "session": {
+                "inputTokens": 0,
+                "totalTokens": 0,
+                "channel": "nested-channel",
+                "abortedLastRun": False,
+                "sessionId": "nested-session-id",
+            },
+        },
+        "seq": 1,
+    }
+    p = SessionStateProjector()
+    await p(frame)
+    states = p.get("mc-bbbbbbbb-1111-2222-3333-444444444444")
+    assert len(states) == 1
+    s = states[0]
+    assert s.input_tokens == 999
+    assert s.total_tokens == 1500
+    assert s.channel == "top-channel"
+    assert s.session_id == "top-session-id"
+    assert s.aborted_last_run is True
+
+
+@pytest.mark.asyncio
+async def test_projector_falls_back_to_nested_when_top_level_absent() -> None:
+    """Backwards-compat: older 4.x events put fields ONLY under nested
+    ``session``. After fixing the bug, the projector should still
+    extract them when top-level is missing."""
+    frame = {
+        "type": "event",
+        "event": "sessions.changed",
+        "payload": {
+            "sessionKey": "agent:mc-cccccccc-1111-2222-3333-444444444444:main",
+            "ts": 1_777_900_000_000,
+            "phase": "message",
+            "session": {
+                "inputTokens": 42,
+                "outputTokens": 13,
+                "totalTokens": 55,
+                "channel": "nested-only",
+                "abortedLastRun": True,
+                "sessionId": "nested-only-id",
+            },
+        },
+        "seq": 1,
+    }
+    p = SessionStateProjector()
+    await p(frame)
+    states = p.get("mc-cccccccc-1111-2222-3333-444444444444")
+    assert len(states) == 1
+    s = states[0]
+    assert s.input_tokens == 42
+    assert s.output_tokens == 13
+    assert s.total_tokens == 55
+    assert s.channel == "nested-only"
+    assert s.session_id == "nested-only-id"
+    assert s.aborted_last_run is True
