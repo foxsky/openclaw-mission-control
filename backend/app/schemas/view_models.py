@@ -28,22 +28,17 @@ RUNTIME_ANNOTATION_TYPES = (
 
 
 class TaskCardRead(TaskRead):
-    """Task read model enriched with assignee and approval counters."""
+    """Task read model enriched with assignee and approval counters.
+
+    ``open_blocker_reason_codes`` and ``pending_operator_decision_reason_codes``
+    are inherited from ``TaskRead`` so single-task and list endpoints
+    surface the same dispatch info as the board snapshot. The card-only
+    additions are the snapshot-aggregation fields below.
+    """
 
     assignee: str | None = None
     approvals_count: int = 0
     approvals_pending_count: int = 0
-    # Structured reason codes from open Blocker rows attached to this
-    # task, deduplicated. Empty list when no open blocker carries a
-    # non-null code (legacy NULL rows excluded). Lets the lead-health-scan
-    # skill make revalidation decisions in one round-trip instead of
-    # N+1 fetches against /blockers per blocked task.
-    open_blocker_reason_codes: list[str] = Field(default_factory=list)
-    # Same shape, sourced from pending OperatorDecision entities linked
-    # to this task. Decoupled from the blocker list because the two
-    # entities have different lifecycles (a decision can block multiple
-    # tasks; a blocker is per-task).
-    pending_operator_decision_reason_codes: list[str] = Field(default_factory=list)
 
 
 class BoardSnapshot(SQLModel):

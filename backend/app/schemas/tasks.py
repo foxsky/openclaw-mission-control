@@ -453,6 +453,15 @@ class TaskRead(TaskBase):
     # Surfaces orphans for the operator/lead so they can decide
     # whether each child still has independent work to do.
     orphan_child_task_ids: list[UUID] = Field(default_factory=list)
+    # Structured reason codes from open Blocker rows / pending
+    # OperatorDecision entities attached to this task. Lifted from
+    # TaskCardRead so single-task and list endpoints surface the same
+    # dispatch info the board-snapshot already exposes — without these
+    # the operator UI sees ``is_blocked=true`` with no reason and the
+    # BLOCKER FILED visibility surface that lead-health-scan mandates
+    # is invisible to user-token consumers.
+    open_blocker_reason_codes: list[str] = Field(default_factory=list)
+    pending_operator_decision_reason_codes: list[str] = Field(default_factory=list)
 
 
 class TaskCommentCreate(SQLModel):

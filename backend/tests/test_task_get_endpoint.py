@@ -12,7 +12,8 @@ import pytest
 from fastapi import HTTPException
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.api.tasks import get_task
+from app.api.tasks import _task_read_page, get_task
+from app.models.blockers import Blocker
 from app.models.boards import Board
 from app.models.organizations import Organization
 from app.models.tasks import Task
@@ -66,6 +67,68 @@ async def test_get_task_404_when_task_has_no_board(
         await get_task(task=orphan, session=sqlite_session)
 
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_task_projects_open_blocker_reason_codes(
+    sqlite_session: AsyncSession,
+) -> None:
+    """User-side single-task GET must surface ``open_blocker_reason_codes``
+    so the operator UI / dashboards can show what the task is blocked
+    on. Production gap 2026-05-04 (QA gate task 5b7abdd2): ``is_blocked``
+    flipped to true after Supervisor filed structured Blockers, but the
+    inline projection returned ``open_blocker_reason_codes=null``,
+    masking the BLOCKER FILED visibility surface that lead-health-scan
+    mandates. Agent-side endpoint already enriches this; user-side
+    ``_task_read_page`` did not."""
+    board, task = await _seed_board_and_task(sqlite_session)
+    sqlite_session.add(
+        Blocker(
+            board_id=board.id, task_id=task.id,
+            category="source", reason_code="operator_reject_demo",
+            owner_role="programmer_frontend",
+        ),
+    )
+    await sqlite_session.commit()
+
+    page = await _task_read_page(
+        session=sqlite_session, board_id=board.id, tasks=[task],
+    )
+    assert page
+    read = page[0]
+    assert read.is_blocked is True
+    assert read.open_blocker_reason_codes == ["operator_reject_demo"]
+
+
+@pytest.mark.asyncio
+async def test_get_task_projects_pending_operator_decision_reason_codes(
+    sqlite_session: AsyncSession,
+) -> None:
+    """Same projection bug applies to ``pending_operator_decision_reason_codes``
+    — the user-side serializer was missing both list enrichments."""
+    from app.models.operator_decisions import OperatorDecision, OperatorDecisionTaskLink
+
+    board, task = await _seed_board_and_task(sqlite_session)
+    decision = OperatorDecision(
+        board_id=board.id,
+        question="Pick A or B",
+        reason_code="operator_decision_demo",
+    )
+    sqlite_session.add(decision)
+    await sqlite_session.commit()
+    sqlite_session.add(
+        OperatorDecisionTaskLink(
+            board_id=board.id, decision_id=decision.id, task_id=task.id,
+        ),
+    )
+    await sqlite_session.commit()
+
+    page = await _task_read_page(
+        session=sqlite_session, board_id=board.id, tasks=[task],
+    )
+    assert page
+    read = page[0]
+    assert read.pending_operator_decision_reason_codes == ["operator_decision_demo"]
 
 
 @pytest.mark.asyncio

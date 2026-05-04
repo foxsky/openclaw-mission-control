@@ -112,11 +112,13 @@ from app.services.tags import (
 )
 from app.services.blockers import (
     auto_resolve_pipeline_blockers_if_ready,
+    open_blocker_reason_codes_by_task_id,
     open_blocker_summary_for_task,
     task_has_open_blocker,
     task_ids_with_open_blocker,
 )
 from app.services.operator_decisions import (
+    pending_operator_decision_reason_codes_by_task_id,
     task_has_pending_operator_decision,
     task_ids_with_pending_operator_decision,
 )
@@ -2513,6 +2515,14 @@ async def _task_read_page(
     pending_decision_task_ids = await task_ids_with_pending_operator_decision(
         session, board_id=board_id, task_ids=task_ids
     )
+    open_blocker_codes_by_task_id = await open_blocker_reason_codes_by_task_id(
+        session, board_id=board_id, task_ids=task_ids
+    )
+    pending_decision_codes_by_task_id = (
+        await pending_operator_decision_reason_codes_by_task_id(
+            session, board_id=board_id, task_ids=task_ids
+        )
+    )
     terminal_parent_ids = [t.id for t in tasks if t.status in TERMINAL_STATUSES]
     orphan_children_map = (
         await orphan_children_by_parent_id(
@@ -2549,6 +2559,8 @@ async def _task_read_page(
                     ),
                     "custom_field_values": custom_field_values_by_task_id.get(task.id, {}),
                     "orphan_child_task_ids": orphan_children_map.get(task.id, []),
+                    "open_blocker_reason_codes": open_blocker_codes_by_task_id.get(task.id, []),
+                    "pending_operator_decision_reason_codes": pending_decision_codes_by_task_id.get(task.id, []),
                 },
             ),
         )
