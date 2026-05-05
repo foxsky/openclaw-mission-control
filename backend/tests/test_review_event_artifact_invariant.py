@@ -906,6 +906,41 @@ async def test_architect_pass_accepts_when_recent_comment_has_supervisor_citatio
 
 
 @pytest.mark.asyncio
+async def test_architect_pass_accepts_when_recent_comment_has_lead_citation(
+    sqlite_session: AsyncSession,
+) -> None:
+    """``@lead`` is also accepted as a lead-citation, equivalent to
+    ``@Supervisor``. Both refer to the board lead; the validator treats
+    them as interchangeable so non-verdict comment conventions
+    (``@lead``) and the structured-verdict convention (``@Supervisor``)
+    can converge without forcing a one-sided template change."""
+    board, arch, task = await _seed_frontend_ui_arch_task(
+        sqlite_session, board_slug="arch-with-lead-citation",
+    )
+    await _seed_comment(
+        sqlite_session, board=board, task=task, agent=arch,
+        message=(
+            "Architect review for X\nVerdict: PASS\n"
+            "@lead approve and move to done\n"
+            "Lead wake: structured-review-verdict review event"
+        ),
+    )
+
+    payload = TaskReviewEventCreate(
+        reviewer_role="architect",
+        verdict="pass",
+        evidence_type="source_review",
+        target="http://example/product",
+        evidence={"comment": "PASS — verified", "no_child_tasks_required": True},
+    )
+    read = await tasks_api.record_task_review_event(
+        payload=payload, task=task, session=sqlite_session,
+        actor=_ActorStub(agent=arch),
+    )
+    assert read.verdict == "pass"
+
+
+@pytest.mark.asyncio
 async def test_architect_pass_accepts_with_linked_comment_id(
     sqlite_session: AsyncSession,
 ) -> None:

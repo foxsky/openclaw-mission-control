@@ -47,7 +47,7 @@ COMMENT_ID="$(
     "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" \
     -H "X-Agent-Token: $AUTH_TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"message":"<YOUR_FULL_VERDICT_COMMENT_INCLUDING_@Supervisor_LINE>"}' \
+    -d '{"message":"<YOUR_FULL_VERDICT_COMMENT_INCLUDING_@Supervisor_OR_@lead_LINE>"}' \
     | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])'
 )"
 
@@ -75,13 +75,17 @@ JSON
 reviewer role is `architect`/`qa_unit`/`qa_e2e`/`devops` AND that
 role is required for the task's `review_packet_type`. The backend
 validates that the linked comment text contains
-`@Supervisor <one-line routing intent>` per the verdict skill's
-"Required @ citation" section, and rejects with HTTP 422
-`code=verdict_comment_missing_supervisor_citation` otherwise. If
-you omit the field, the backend falls back to the most recent
-comment by your agent on the task — but races (e.g. another tick
-posting a different comment) can pick the wrong one. Pass the
-explicit id whenever you can.
+`@Supervisor <one-line routing intent>` OR `@lead <one-line
+routing intent>` per the verdict skill's "Required @ citation"
+section, and rejects with HTTP 422
+`code=verdict_comment_missing_supervisor_citation` otherwise.
+Both `@Supervisor` and `@lead` refer to the board lead and are
+treated as equivalent — pick whichever matches the surrounding
+template you are working from. If you omit `linked_comment_id`,
+the backend falls back to the most recent comment by your agent
+on the task — but races (e.g. another tick posting a different
+comment) can pick the wrong one. Pass the explicit id whenever
+you can.
 
 ## Field Reference
 
@@ -205,7 +209,8 @@ gate data exists.
 Do NOT use board memory with `tags=["chat"]` for nudging, and do NOT add a
 SEPARATE second task-comment after the verdict comment just to nudge the
 lead. The verdict comment itself MUST contain `@Supervisor <one-line routing
-intent>` (per the verdict skills), and the structured `/review-events` POST
+intent>` OR `@lead <one-line routing intent>` (per the verdict skills; both
+are accepted as equivalent), and the structured `/review-events` POST
 auto-wakes the lead via API — that's the complete handoff. A subsequent
 follow-up comment "calling out" the verdict is the duplicate nudge to avoid.
 

@@ -3337,6 +3337,14 @@ _REVIEWER_ROLES_REQUIRING_SUPERVISOR_CITATION = {
     "architect", "qa_unit", "qa_e2e", "devops",
 }
 
+_LEAD_CITATION_PATTERN = re.compile(r"@(?:Supervisor|lead)\b")
+
+
+def _verdict_comment_has_lead_citation(message: str) -> bool:
+    """Either ``@Supervisor`` or ``@lead`` (with word boundary) satisfies
+    the reviewer-to-lead handoff citation requirement."""
+    return _LEAD_CITATION_PATTERN.search(message) is not None
+
 
 async def _require_supervisor_citation_in_verdict_comment(
     payload: TaskReviewEventCreate,
@@ -3434,18 +3442,19 @@ async def _require_supervisor_citation_in_verdict_comment(
             )
         ).first()
 
-    if message is None or "@Supervisor" not in message:
+    if message is None or not _verdict_comment_has_lead_citation(message):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "message": (
                     "Reviewer PASS verdicts must be paired with a task "
-                    "comment that includes `@Supervisor <one-line routing "
-                    "intent>` (per architect-review-verdict / "
-                    "qa-validation-verdict / reviewer-recheck skills § "
-                    "Required @ citation). Either pass `linked_comment_id` "
-                    "after POSTing the verdict comment, or POST the comment "
-                    "first and let the backend pick up the most recent one."
+                    "comment that includes either `@Supervisor` or `@lead` "
+                    "followed by a one-line routing intent (per architect-"
+                    "review-verdict / qa-validation-verdict / reviewer-"
+                    "recheck skills § Required @ citation). Either pass "
+                    "`linked_comment_id` after POSTing the verdict comment, "
+                    "or POST the comment first and let the backend pick up "
+                    "the most recent one."
                 ),
                 "code": "verdict_comment_missing_supervisor_citation",
                 "reviewer_role": payload.reviewer_role,
