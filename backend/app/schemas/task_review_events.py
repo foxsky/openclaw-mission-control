@@ -27,6 +27,16 @@ class TaskReviewEventCreate(SQLModel):
     blocking_owner: str | None = None
     suggested_routing: str | None = None
     evidence: dict[str, object] | None = Field(default=None)
+    # Optional id of the verdict task comment that the structured event
+    # is paired with. Set by the ``structured-review-verdict`` skill
+    # after it POSTs the verdict comment, so the backend can validate
+    # the exact comment text contains the required `@Supervisor`
+    # citation. When omitted, the validator falls back to the most
+    # recent comment by the same agent on the same task. Production
+    # gap 2026-05-04: Architect verdict comment omitted the
+    # `@Supervisor` line; the structured event committed cleanly and
+    # the human-visibility surface stayed dark.
+    linked_comment_id: UUID | None = None
 
     @field_validator(
         "evidence_type",

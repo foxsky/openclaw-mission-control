@@ -33,6 +33,7 @@ mc_client.py review-event-create \
   --target <VALIDATION_TARGET_OR_NULL> \
   --build-hash <BUILD_HASH_OR_NULL> \
   --source-commit <COMMIT_SHA_OR_NULL> \
+  --linked-comment-id <COMMENT_ID_FROM_VERDICT_COMMENT_POST> \
   --evidence '{"comment":"<ONE_LINE_SUMMARY>"}'
 ```
 
@@ -40,6 +41,17 @@ If you must fall back to raw HTTP (e.g., debugging from a host without
 `mc_client.py` in PATH):
 
 ```bash
+# Step 1 — POST your verdict COMMENT first; capture the returned id.
+COMMENT_ID="$(
+  curl -fsS -X POST \
+    "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/comments" \
+    -H "X-Agent-Token: $AUTH_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"message":"<YOUR_FULL_VERDICT_COMMENT_INCLUDING_@Supervisor_LINE>"}' \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])'
+)"
+
+# Step 2 — POST the structured event with linked_comment_id pointing at the comment.
 curl -fsS -X POST \
   "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks/$TASK_ID/review-events" \
   -H "X-Agent-Token: $AUTH_TOKEN" \
@@ -52,11 +64,24 @@ curl -fsS -X POST \
   "target": "<VALIDATION_TARGET_OR_NULL>",
   "build_hash": "<BUILD_HASH_OR_NULL>",
   "source_commit": "<COMMIT_SHA_OR_NULL>",
+  "linked_comment_id": "$COMMENT_ID",
   "evidence": {"comment": "<ONE_LINE_SUMMARY>"}
 }
 JSON
 )"
 ```
+
+**`linked_comment_id` is required for PASS verdicts** when the
+reviewer role is `architect`/`qa_unit`/`qa_e2e`/`devops` AND that
+role is required for the task's `review_packet_type`. The backend
+validates that the linked comment text contains
+`@Supervisor <one-line routing intent>` per the verdict skill's
+"Required @ citation" section, and rejects with HTTP 422
+`code=verdict_comment_missing_supervisor_citation` otherwise. If
+you omit the field, the backend falls back to the most recent
+comment by your agent on the task — but races (e.g. another tick
+posting a different comment) can pick the wrong one. Pass the
+explicit id whenever you can.
 
 ## Field Reference
 

@@ -21,7 +21,7 @@ nor ``no_child_tasks_required:true``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -137,6 +137,10 @@ async def test_review_only_architect_pass_with_no_child_tasks_required_succeeds(
             "no_child_tasks_required": True,
         },
     )
+    await _seed_comment(
+        sqlite_session, board=board, task=task, agent=architect,
+        message="@Supervisor lead approve and move to done\nLead wake: structured-review-verdict review event",
+    )
     read = await tasks_api.record_task_review_event(
         payload=payload,
         task=task,
@@ -175,6 +179,10 @@ async def test_review_only_architect_pass_with_planned_child_task_ids_succeeds(
             "comment": "PASS — decomposition into 1 child task",
             "planned_child_task_ids": [str(child_id)],
         },
+    )
+    await _seed_comment(
+        sqlite_session, board=board, task=task, agent=architect,
+        message="@Supervisor lead approve and move to done\nLead wake: structured-review-verdict review event",
     )
     read = await tasks_api.record_task_review_event(
         payload=payload,
@@ -230,6 +238,10 @@ async def test_frontend_ui_packet_pass_does_not_trigger_invariant(
         evidence_type="source_review",
         target="http://192.168.2.63:3002/product",
         evidence={"comment": "PASS on frontend_ui packet"},
+    )
+    await _seed_comment(
+        sqlite_session, board=board, task=task, agent=architect,
+        message="@Supervisor lead approve and move to done\nLead wake: structured-review-verdict review event",
     )
     read = await tasks_api.record_task_review_event(
         payload=payload,
@@ -473,6 +485,10 @@ async def test_qa_e2e_pass_full_evidence_succeeds(
         target="http://192.168.2.63:3002/product",
         build_hash="sha256-abc",
         evidence=_full_qa_e2e_pass_evidence(),
+    )
+    await _seed_comment(
+        sqlite_session, board=board, task=task, agent=qa,
+        message="@Supervisor lead approve and move to done\nLead wake: structured-review-verdict review event",
     )
     read = await tasks_api.record_task_review_event(
         payload=payload,
@@ -744,3 +760,240 @@ async def test_qa_e2e_pass_skipped_when_role_not_required(
         actor=_ActorStub(agent=qa),
     )
     assert read.verdict == "pass"
+
+
+# --- @Supervisor citation enforcement on PASS verdicts (Option A+B
+# from operator review menu 2026-05-04 23:59 UTC). Architect verdict
+# comment had the right structure but omitted the
+# `@Supervisor <one-line routing intent>` line that
+# architect-review-verdict skill mandates. Backend must reject the
+# /review-events POST so a malformed comment cannot leave the
+# human-visibility surface dark. Two paths: (B) skill passes
+# ``linked_comment_id`` so the backend validates that exact comment
+# text inline; (A) when not passed, fallback to the most recent
+# comment from the same agent on the same task. Both reject 422
+# with code=verdict_comment_missing_supervisor_citation.
+
+
+async def _seed_frontend_ui_arch_task(
+    session: AsyncSession,
+    *,
+    board_slug: str,
+) -> tuple[Board, Agent, Task]:
+    """Seed a frontend_ui packet + Architect agent + review-status task."""
+    org_id = uuid4()
+    gateway_id = uuid4()
+    board_id = uuid4()
+    arch_id = uuid4()
+    task_id = uuid4()
+
+    session.add(Organization(id=org_id, name=f"org-{board_slug}"))
+    session.add(
+        Gateway(
+            id=gateway_id, organization_id=org_id, name=f"gw-{board_slug}",
+            url="ws://gateway.example/ws", workspace_root="/tmp/openclaw",
+        ),
+    )
+    board = Board(
+        id=board_id, organization_id=org_id, gateway_id=gateway_id,
+        name=board_slug, slug=board_slug,
+    )
+    session.add(board)
+    arch = Agent(
+        id=arch_id, board_id=board_id, gateway_id=gateway_id,
+        name="Architect", openclaw_session_id=f"agent:{board_slug}:architect",
+        identity_profile={"dev_acp_flow": "review_only"},
+    )
+    session.add(arch)
+    task = Task(
+        id=task_id, board_id=board_id,
+        title=f"task-{board_slug}", status="review",
+        review_packet_type="frontend_ui",
+        assigned_agent_id=arch_id,
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+    return board, arch, task
+
+
+async def _seed_comment(
+    session: AsyncSession,
+    *,
+    board: Board,
+    task: Task,
+    agent: Agent,
+    message: str,
+) -> UUID:
+    """Insert a task-comment ActivityEvent row and return its id."""
+    from app.models.activity_events import ActivityEvent
+    event = ActivityEvent(
+        event_type="task.comment",
+        message=message,
+        task_id=task.id,
+        board_id=board.id,
+        agent_id=agent.id,
+    )
+    session.add(event)
+    await session.commit()
+    await session.refresh(event)
+    return event.id
+
+
+@pytest.mark.asyncio
+async def test_architect_pass_rejects_when_recent_comment_missing_supervisor_citation(
+    sqlite_session: AsyncSession,
+) -> None:
+    """Architect verdict comment without `@Supervisor` line → 422."""
+    board, arch, task = await _seed_frontend_ui_arch_task(
+        sqlite_session, board_slug="arch-no-citation",
+    )
+    await _seed_comment(
+        sqlite_session, board=board, task=task, agent=arch,
+        message=(
+            "Architect review for X\nVerdict: PASS\n"
+            "Lead wake: structured-review-verdict review event"
+        ),
+    )
+
+    payload = TaskReviewEventCreate(
+        reviewer_role="architect",
+        verdict="pass",
+        evidence_type="source_review",
+        target="http://example/product",
+        evidence={"comment": "PASS — verified", "no_child_tasks_required": True},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await tasks_api.record_task_review_event(
+            payload=payload, task=task, session=sqlite_session,
+            actor=_ActorStub(agent=arch),
+        )
+    assert exc.value.status_code == 422
+    detail = exc.value.detail
+    assert isinstance(detail, dict)
+    assert detail.get("code") == "verdict_comment_missing_supervisor_citation"
+
+
+@pytest.mark.asyncio
+async def test_architect_pass_accepts_when_recent_comment_has_supervisor_citation(
+    sqlite_session: AsyncSession,
+) -> None:
+    """Positive control: A path — recent comment carries `@Supervisor` → POST succeeds."""
+    board, arch, task = await _seed_frontend_ui_arch_task(
+        sqlite_session, board_slug="arch-with-citation",
+    )
+    await _seed_comment(
+        sqlite_session, board=board, task=task, agent=arch,
+        message=(
+            "Architect review for X\nVerdict: PASS\n"
+            "@Supervisor lead approve and move to done\n"
+            "Lead wake: structured-review-verdict review event"
+        ),
+    )
+
+    payload = TaskReviewEventCreate(
+        reviewer_role="architect",
+        verdict="pass",
+        evidence_type="source_review",
+        target="http://example/product",
+        evidence={"comment": "PASS — verified", "no_child_tasks_required": True},
+    )
+    read = await tasks_api.record_task_review_event(
+        payload=payload, task=task, session=sqlite_session,
+        actor=_ActorStub(agent=arch),
+    )
+    assert read.verdict == "pass"
+
+
+@pytest.mark.asyncio
+async def test_architect_pass_accepts_with_linked_comment_id(
+    sqlite_session: AsyncSession,
+) -> None:
+    """B path: ``linked_comment_id`` references the verdict comment
+    explicitly. Defends against races where another comment landed
+    between verdict POST and validator lookup."""
+    board, arch, task = await _seed_frontend_ui_arch_task(
+        sqlite_session, board_slug="arch-linked-id",
+    )
+    verdict_comment_id = await _seed_comment(
+        sqlite_session, board=board, task=task, agent=arch,
+        message=(
+            "Architect review for X\nVerdict: PASS\n"
+            "@Supervisor @QA-E2E next gate is qa_e2e\n"
+            "Lead wake: structured-review-verdict review event"
+        ),
+    )
+    # newer comment without citation; fallback path would pick this and fail.
+    await _seed_comment(
+        sqlite_session, board=board, task=task, agent=arch,
+        message="follow-up note without citation",
+    )
+
+    payload = TaskReviewEventCreate(
+        reviewer_role="architect",
+        verdict="pass",
+        evidence_type="source_review",
+        target="http://example/product",
+        evidence={"comment": "PASS — verified", "no_child_tasks_required": True},
+        linked_comment_id=verdict_comment_id,
+    )
+    read = await tasks_api.record_task_review_event(
+        payload=payload, task=task, session=sqlite_session,
+        actor=_ActorStub(agent=arch),
+    )
+    assert read.verdict == "pass"
+
+
+@pytest.mark.asyncio
+async def test_architect_pass_rejects_when_linked_comment_lacks_citation(
+    sqlite_session: AsyncSession,
+) -> None:
+    """B path negative: explicit ``linked_comment_id`` to a comment
+    without `@Supervisor` → 422."""
+    board, arch, task = await _seed_frontend_ui_arch_task(
+        sqlite_session, board_slug="arch-linked-bad",
+    )
+    bad_comment_id = await _seed_comment(
+        sqlite_session, board=board, task=task, agent=arch,
+        message="just a status note no citation",
+    )
+    payload = TaskReviewEventCreate(
+        reviewer_role="architect",
+        verdict="pass",
+        evidence_type="source_review",
+        target="http://example/product",
+        evidence={"comment": "PASS — verified", "no_child_tasks_required": True},
+        linked_comment_id=bad_comment_id,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await tasks_api.record_task_review_event(
+            payload=payload, task=task, session=sqlite_session,
+            actor=_ActorStub(agent=arch),
+        )
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "verdict_comment_missing_supervisor_citation"
+
+
+@pytest.mark.asyncio
+async def test_fail_verdict_does_not_require_supervisor_citation(
+    sqlite_session: AsyncSession,
+) -> None:
+    """FAIL/INCONCLUSIVE/INFRA_BLOCKED verdicts skip the citation
+    check. The rule applies only to PASS — the verdict from which
+    the operator may approve."""
+    board, arch, task = await _seed_frontend_ui_arch_task(
+        sqlite_session, board_slug="arch-fail-skip",
+    )
+    payload = TaskReviewEventCreate(
+        reviewer_role="architect",
+        verdict="fail",
+        evidence_type="source_review",
+        target="http://example/product",
+        evidence={"comment": "FAIL: missing X"},
+        blocking_owner="PF",
+    )
+    read = await tasks_api.record_task_review_event(
+        payload=payload, task=task, session=sqlite_session,
+        actor=_ActorStub(agent=arch),
+    )
+    assert read.verdict == "fail"

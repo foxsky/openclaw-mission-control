@@ -3295,6 +3295,127 @@ async def _notify_lead_on_review_event(
     await session.commit()
 
 
+_REVIEWER_ROLES_REQUIRING_SUPERVISOR_CITATION = {
+    "architect", "qa_unit", "qa_e2e", "devops",
+}
+
+
+async def _require_supervisor_citation_in_verdict_comment(
+    payload: TaskReviewEventCreate,
+    task: Task,
+    session: AsyncSession,
+    *,
+    actor_agent_id: UUID | None,
+) -> None:
+    """Reject PASS verdicts whose verdict comment lacks `@Supervisor`.
+
+    Production gap 2026-05-04: Architect's PASS verdict comment on
+    AC6 had the structured table but omitted the
+    ``@Supervisor <one-line routing intent>`` line that
+    architect-review-verdict (and qa-validation-verdict / reviewer-
+    recheck) skills mandate. The structured /review-events POST
+    committed cleanly while the comment scroll showed a verdict
+    with no @ mention to the lead. Backend write-time invariant
+    closes the gap.
+
+    Two paths:
+    - **B**: payload carries ``linked_comment_id`` → fetch that
+      ActivityEvent (event_type=task.comment) by id, validate text.
+      Defends against races where another comment landed between
+      verdict POST and validator lookup.
+    - **A**: ``linked_comment_id`` not provided → fall back to the
+      most recent ``task.comment`` row by the same agent on the same
+      task. Back-compat for skill versions that haven't been updated
+      to pass the linked id yet.
+
+    Skipped when verdict != pass OR reviewer_role is outside the set
+    {architect, qa_unit, qa_e2e, devops} (lead role can self-cite a
+    different way; the rule targets reviewer-to-lead handoffs).
+    """
+    if payload.verdict != "pass":
+        return
+    if payload.reviewer_role not in _REVIEWER_ROLES_REQUIRING_SUPERVISOR_CITATION:
+        return
+    # Only enforce when this reviewer role is actually required for the
+    # task's packet type. An informational PASS from a non-required role
+    # (e.g. qa_e2e on an infra_ops packet) won't wake the lead anyway,
+    # so the citation requirement is moot. Mirrors the QA-E2E artifact
+    # check at qa_e2e_pass_evidence_issues call site above.
+    if payload.reviewer_role not in required_review_roles(task.review_packet_type):
+        return
+    if actor_agent_id is None or task.id is None:
+        return
+
+    message: str | None = None
+    if payload.linked_comment_id is not None:
+        row = (
+            await session.exec(
+                select(col(ActivityEvent.message), col(ActivityEvent.task_id))
+                .where(col(ActivityEvent.id) == payload.linked_comment_id)
+                .where(col(ActivityEvent.event_type) == "task.comment"),
+            )
+        ).first()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "message": (
+                        "linked_comment_id does not reference an existing "
+                        "task comment. Pass the id of the verdict comment "
+                        "you just POSTed to /comments, or omit the field "
+                        "to use the most-recent-comment fallback."
+                    ),
+                    "code": "linked_comment_id_not_found",
+                    "linked_comment_id": str(payload.linked_comment_id),
+                },
+            )
+        msg, comment_task_id = row
+        if comment_task_id != task.id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "message": (
+                        "linked_comment_id references a comment on a "
+                        "different task than this review event."
+                    ),
+                    "code": "linked_comment_id_task_mismatch",
+                    "linked_comment_id": str(payload.linked_comment_id),
+                    "expected_task_id": str(task.id),
+                },
+            )
+        message = msg
+    else:
+        message = (
+            await session.exec(
+                select(col(ActivityEvent.message))
+                .where(col(ActivityEvent.task_id) == task.id)
+                .where(col(ActivityEvent.event_type) == "task.comment")
+                .where(col(ActivityEvent.agent_id) == actor_agent_id)
+                .order_by(desc(col(ActivityEvent.created_at)))
+                .limit(1),
+            )
+        ).first()
+
+    if message is None or "@Supervisor" not in message:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "message": (
+                    "Reviewer PASS verdicts must be paired with a task "
+                    "comment that includes `@Supervisor <one-line routing "
+                    "intent>` (per architect-review-verdict / "
+                    "qa-validation-verdict / reviewer-recheck skills § "
+                    "Required @ citation). Either pass `linked_comment_id` "
+                    "after POSTing the verdict comment, or POST the comment "
+                    "first and let the backend pick up the most recent one."
+                ),
+                "code": "verdict_comment_missing_supervisor_citation",
+                "reviewer_role": payload.reviewer_role,
+                "task_id": str(task.id),
+            },
+        )
+
+
 async def _require_review_event_artifact_completeness(
     payload: TaskReviewEventCreate,
     task: Task,
@@ -3438,6 +3559,9 @@ async def record_task_review_event(
     )
     _require_reviewer_role_allowed(actor=actor, reviewer_role=payload.reviewer_role)
     await _require_review_event_artifact_completeness(payload, task, session)
+    await _require_supervisor_citation_in_verdict_comment(
+        payload, task, session, actor_agent_id=agent_id,
+    )
     event = TaskReviewEvent(
         board_id=task.board_id,
         task_id=task.id,
