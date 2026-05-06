@@ -62,7 +62,7 @@ curl -fsS -X POST \
   "verdict": "<lowercase_verdict>",
   "evidence_type": "<TYPE_OR_NULL>",
   "target": "<VALIDATION_TARGET_OR_NULL>",
-  "build_hash": "<BUILD_HASH_OR_NULL>",
+  "build_hash": null,
   "source_commit": "<COMMIT_SHA_OR_NULL>",
   "linked_comment_id": "$COMMENT_ID",
   "evidence": {"comment": "<ONE_LINE_SUMMARY>"}
@@ -95,7 +95,7 @@ you can.
 | `verdict` | yes | `pass`, `fail`, `inconclusive`, or `infra_blocked` |
 | `evidence_type` | no | `browser` (Playwright), `browser_codex_computer_use` (Codex CU), `browser_cross_validated` (both oracles agreed), `unit_contract`, `deploy`, `runtime`, `source_review`, or null |
 | `target` | no | The validation URL, command, or environment you tested against |
-| `build_hash` | no | Loaded build hash, artifact digest, or asset filename |
+| `build_hash` | no | DEPRECATED — leave null. Asset filenames (e.g. `index-DRMnUJoN.js`) churn on every Vite build and the gateway can replace the cited build between cite-and-approve, causing false-positive deploy-mismatch rejections. The deploy-truth check at [tasks.py:952](../../app/api/tasks.py) compares `source_commit` against the live `/__build.sha` endpoint — that's the authoritative match. Cite `source_commit` only. |
 | `source_commit` | no | Commit SHA of the reviewed work |
 | `blocking_owner` | no | For FAIL/INCONCLUSIVE: who must fix it (e.g. `PF`, `PB`, `DevOps`) |
 | `suggested_routing` | no | Routing hint for Supervisor (e.g. `lead move to rework for PF`) |
@@ -149,9 +149,8 @@ curl -fsS -X POST \
     "verdict": "pass",
     "evidence_type": "deploy",
     "target": "<VALIDATION_TARGET>",
-    "build_hash": "<BUILD_HASH>",
     "source_commit": "1bfbfdf0",
-    "evidence": {"comment": "All ACs verified: artifact deployed, live hash matches, service healthy post-deploy"}
+    "evidence": {"comment": "All ACs verified: artifact deployed, live /__build.sha matches source_commit, service healthy post-deploy"}
   }'
 ```
 
@@ -164,7 +163,7 @@ mc_client.py review-event-create \
   --verdict pass \
   --evidence-type browser_codex_computer_use \
   --target "<VALIDATION_TARGET>" \
-  --build-hash "<BUILD_HASH>" \
+  --source-commit "<SOURCE_COMMIT_SHA>" \
   --evidence '{"comment":"All ACs verified via Codex Computer Use; screenshots attached in evidence dict","oracle":"codex_computer_use"}'
 ```
 
@@ -177,8 +176,8 @@ mc_client.py review-event-create \
   --verdict pass \
   --evidence-type browser_cross_validated \
   --target "<VALIDATION_TARGET>" \
-  --build-hash "<BUILD_HASH>" \
-  --evidence '{"comment":"PF Playwright PASS + QA-E2E Codex CU PASS on the same build","oracle":"cross_validated"}'
+  --source-commit "<SOURCE_COMMIT_SHA>" \
+  --evidence '{"comment":"PF Playwright PASS + QA-E2E Codex CU PASS on the same source commit","oracle":"cross_validated"}'
 ```
 
 ### Architect FAIL with routing

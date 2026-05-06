@@ -21,7 +21,7 @@ fill the gap with source-level inference.
 - Findings map to acceptance criteria or declared contracts.
 - Frontend/UI PASS requires the submitted frontend browser evidence packet:
   target URL, navigation/snapshot, DOM/raw-key scan, console/network output,
-  interaction proof, responsive proof when applicable, and loaded build hash.
+  interaction proof, responsive proof when applicable, and source commit SHA matching the live `/__build.sha`. Do NOT cite the asset filename — that hash churns on every Vite rebuild and creates false-positive deploy-mismatch rejections.
 - Backend/API/persistence PASS requires runtime evidence: exact endpoint
   status/body, non-HTTP trigger/log/readback, persistence readback,
   migration/schema proof, and deploy target/version proof when applicable.
@@ -46,6 +46,36 @@ fill the gap with source-level inference.
   structural deviation but the AC otherwise reads as met, the verdict is FAIL
   with `blocking_owner` set to the implementer, not PASS with a non-blocking
   note.
+
+## Rework Diagnosis (mandatory on the SECOND consecutive review of the same task)
+
+If the task's review history shows the implementer has already had ONE prior
+FAIL or INCONCLUSIVE verdict from any reviewer on this same scope, your verdict
+comment MUST include a **Root-cause measurement** section before any guidance.
+Background: production incident 2026-05-06 — task `e4738a7c` (E.02 Responsive
+4×3 matrix) burned four PF rework cycles before the Architect measured the
+actual overflow source. PF was attacking a feature-card grid; the real culprit
+was a 5× `lg:grid-cols-2` section with 20px scrollWidth/clientWidth delta.
+Iterative-guess rework wastes ~30 minutes per cycle.
+
+**Required measurement shape:**
+
+- For frontend layout/responsive defects: open the live target at the exact
+  failing viewport (e.g., 375px) via Playwright or browser inspection, capture
+  computed `scrollWidth`/`clientWidth`/`offsetWidth` on the **specific element
+  that produces the symptom**, not on the element the implementer was already
+  attacking. Quote both numbers verbatim.
+- For source-level defects: identify the file path + line range causing the
+  observed behavior. Quote the offending construct verbatim. If the implementer
+  cited a different file/line on their previous attempt, call out the
+  divergence explicitly.
+- For runtime/contract defects: run the exact request that fails, quote the
+  status code / body / readback verbatim.
+
+Only AFTER the measurement may you give corrective guidance ("apply X to
+selector Y"). Guidance without a measured root cause is the failure pattern
+that produced the 4× anti-loop on E.02. The measurement makes the corrective
+guidance falsifiable.
 
 ## AC Quoting Rule (verbatim, no paraphrase)
 

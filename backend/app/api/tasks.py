@@ -32,6 +32,7 @@ from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
 from app.models.approval_task_links import ApprovalTaskLink
 from app.models.approvals import Approval
+from app.models.blockers import Blocker
 from app.models.boards import Board
 from app.models.tag_assignments import TagAssignment
 from app.models.task_custom_fields import (
@@ -3714,6 +3715,26 @@ async def record_task_review_event(
             )
             await session.commit()
             await session.refresh(task)
+    if payload.verdict in ("fail", "inconclusive"):
+        await _apply_review_anti_loop_signals(
+            session=session,
+            task=task,
+            latest_event=event,
+            actor_agent_id=agent_id,
+        )
+    elif payload.verdict == "pass":
+        try:
+            await _wake_next_required_reviewer_after_pass(
+                session=session,
+                task=task,
+                latest_event=event,
+                actor_agent_id=agent_id,
+            )
+        except Exception:
+            logger.exception(
+                "next_reviewer_wake.unexpected board_id=%s task_id=%s event_id=%s",
+                task.board_id, task.id, event.id,
+            )
     try:
         await _notify_lead_on_review_event(session=session, task=task, event=event)
     except Exception:
@@ -3724,6 +3745,235 @@ async def record_task_review_event(
             event.id,
         )
     return task_review_event_read(event)
+
+
+_ANTI_LOOP_SUMMON_THRESHOLD = 2
+_ANTI_LOOP_BLOCKER_THRESHOLD = 3
+
+
+async def _apply_review_anti_loop_signals(
+    *,
+    session: AsyncSession,
+    task: Task,
+    latest_event: TaskReviewEvent,
+    actor_agent_id: UUID | None,
+) -> None:
+    """Detect a stuck rework loop and post escalation signals early.
+
+    Production gap 2026-05-06 on `e4738a7c` (E.02): four QA-FAIL cycles
+    on the same target before Architect was summoned for root-cause
+    measurement — each cycle ~30 minutes. The fix: count consecutive
+    non-PASS verdicts since the last PASS, scoped to the same `target`,
+    and:
+
+    - At streak == 2: post one ``task.anti_loop_summon`` activity event
+      tagging Architect with the repeat-failure quote. Idempotent —
+      one summon per active streak.
+    - At streak >= 3: file a ``review_anti_loop`` Blocker (operator/
+      Architect adjudication required) so the worker stops iterating
+      and the operator sees a parked signal in
+      ``review-readiness.artifact_issues``.
+
+    A PASS verdict between FAILs resets the streak; the next FAIL is
+    streak #1 of a new run.
+    """
+    if task.id is None or task.board_id is None:
+        return
+
+    rows = list(
+        await session.exec(
+            select(TaskReviewEvent)
+            .where(col(TaskReviewEvent.task_id) == task.id)
+            .order_by(desc(col(TaskReviewEvent.created_at))),
+        ),
+    )
+    streak: list[TaskReviewEvent] = []
+    for ev in rows:
+        if ev.verdict == "pass":
+            break
+        streak.append(ev)
+    if len(streak) < _ANTI_LOOP_SUMMON_THRESHOLD:
+        return
+
+    target = latest_event.target
+    if target is None:
+        return
+    if any((ev.target or None) != target for ev in streak[: _ANTI_LOOP_SUMMON_THRESHOLD]):
+        return
+
+    summon_already_posted = (
+        await session.exec(
+            select(col(ActivityEvent.id))
+            .where(col(ActivityEvent.task_id) == task.id)
+            .where(col(ActivityEvent.event_type) == "task.anti_loop_summon")
+            .where(col(ActivityEvent.created_at) >= streak[-1].created_at)
+            .limit(1),
+        )
+    ).first()
+    if summon_already_posted is None:
+        record_activity(
+            session,
+            event_type="task.anti_loop_summon",
+            task_id=task.id,
+            board_id=task.board_id,
+            agent_id=actor_agent_id,
+            message=(
+                f"@Architect anti-loop summon: FAIL #{_ANTI_LOOP_SUMMON_THRESHOLD} "
+                f"on {task.title} cites the same target as the prior failure "
+                f"({target}). Per architect-review-verdict skill § Rework "
+                f"Diagnosis, run a root-cause measurement on this target "
+                f"BEFORE giving the implementer further guidance — iterative-"
+                f"guess rework wastes ~30 min per cycle."
+            ),
+        )
+        await session.commit()
+
+    if len(streak) < _ANTI_LOOP_BLOCKER_THRESHOLD:
+        return
+
+    existing_blocker = (
+        await session.exec(
+            select(col(Blocker.id))
+            .where(col(Blocker.task_id) == task.id)
+            .where(col(Blocker.reason_code) == "review_anti_loop")
+            .where(col(Blocker.resolved_at).is_(None))
+            .limit(1),
+        )
+    ).first()
+    if existing_blocker is not None:
+        return
+
+    blocker = Blocker(
+        board_id=task.board_id,
+        task_id=task.id,
+        category="operator",
+        owner_role="operator",
+        reason_code="review_anti_loop",
+        target_env=target,
+        citation=(
+            f"FAIL #{len(streak)} on the same target without an "
+            f"intervening PASS. Worker is iterating without root-cause "
+            f"correction; halt until Architect provides measured guidance."
+        ),
+        created_by_agent_id=actor_agent_id,
+    )
+    session.add(blocker)
+    await session.commit()
+
+
+async def _wake_next_required_reviewer_after_pass(
+    *,
+    session: AsyncSession,
+    task: Task,
+    latest_event: TaskReviewEvent,
+    actor_agent_id: UUID | None,
+) -> None:
+    """On a PASS verdict, wake any remaining required reviewer for the
+    task's review_packet_type so they pick up the work without waiting
+    for their next heartbeat tick.
+
+    Production gap 2026-05-06: every Phase 3 review chain spent 15-30
+    minutes per gate-handoff in wake-discovery latency. The structured
+    `/review-events` API already auto-wakes the lead, but the lead has
+    to then re-route to the next reviewer; with N-1 missing roles the
+    lead has clear routing — this helper does it directly.
+
+    Idempotency: a `task.next_reviewer_woken` activity event is recorded
+    after dispatch; subsequent PASS events on the same task within the
+    same review cycle skip the wake when the marker already exists for
+    the missing-role set.
+
+    No-op cases:
+    - All required roles now satisfied (last PASS) → lead-only handoff
+      via existing `_notify_lead_on_review_event` is sufficient.
+    - No agent on the board matches the missing required role.
+    - Multiple roles still missing AND no Architect-first ordering
+      can pick deterministically — fall through to the lead.
+    """
+    from app.services.lead_notify import send_agent_wake
+    from app.services.task_review_events import (
+        REQUIRED_REVIEW_ROLES_BY_PACKET_TYPE,
+    )
+
+    if task.id is None or task.board_id is None:
+        return
+    required = REQUIRED_REVIEW_ROLES_BY_PACKET_TYPE.get(
+        task.review_packet_type or "", ()
+    )
+    if not required:
+        return
+
+    cycle_since = task.in_progress_at or task.previous_in_progress_at
+    cycle_events_query = select(TaskReviewEvent).where(
+        col(TaskReviewEvent.task_id) == task.id
+    )
+    if cycle_since is not None:
+        cycle_events_query = cycle_events_query.where(
+            col(TaskReviewEvent.created_at) >= cycle_since
+        )
+    cycle_events = list(await session.exec(cycle_events_query))
+    latest_by_role: dict[str, TaskReviewEvent] = {}
+    for ev in sorted(cycle_events, key=lambda e: e.created_at):
+        latest_by_role[ev.reviewer_role] = ev
+    passed_roles = {r for r, ev in latest_by_role.items() if ev.verdict == "pass"}
+    missing_roles = [r for r in required if r not in passed_roles]
+    if not missing_roles:
+        return
+
+    target_role = missing_roles[0]
+
+    marker_query = (
+        select(col(ActivityEvent.id))
+        .where(col(ActivityEvent.task_id) == task.id)
+        .where(col(ActivityEvent.event_type) == "task.next_reviewer_woken")
+    )
+    if cycle_since is not None:
+        marker_query = marker_query.where(
+            col(ActivityEvent.created_at) >= cycle_since
+        )
+    existing_markers = list(await session.exec(marker_query.limit(1)))
+    if existing_markers:
+        return
+
+    board_agents = list(
+        await session.exec(
+            select(Agent).where(col(Agent.board_id) == task.board_id),
+        ),
+    )
+    target_agent: Agent | None = None
+    for agent in board_agents:
+        if target_role in _allowed_reviewer_roles_for_agent(agent):
+            target_agent = agent
+            break
+    if target_agent is None:
+        return
+
+    message = (
+        f"NEXT_REVIEWER: task {task.title} ({task.id}) ready for "
+        f"`{target_role}` review. Latest gate "
+        f"`{latest_event.reviewer_role}` PASSed at {latest_event.created_at.isoformat()}. "
+        f"Pick up via your reviewer skill against the live target."
+    )
+    dispatched = await send_agent_wake(
+        session=session,
+        board_id=task.board_id,
+        agent=target_agent,
+        message=message,
+    )
+    if not dispatched:
+        return
+    record_activity(
+        session,
+        event_type="task.next_reviewer_woken",
+        task_id=task.id,
+        board_id=task.board_id,
+        agent_id=actor_agent_id,
+        message=(
+            f"Next reviewer woken: {target_agent.name} "
+            f"(role={target_role}) after {latest_event.reviewer_role} PASS."
+        ),
+    )
+    await session.commit()
 
 
 @router.patch(

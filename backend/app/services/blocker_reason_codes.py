@@ -45,6 +45,7 @@ KnownReasonCode = Literal[
     "infra_other",
     "operator_policy",
     "requirements_clarification",
+    "review_anti_loop",
 ]
 
 # Canonical map: reason_code -> classification.
@@ -57,6 +58,7 @@ _CODE_CLASS: Final[dict[KnownReasonCode, ReasonCodeClass]] = {
     "infra_other": "operator_durable",
     "operator_policy": "operator_durable",
     "requirements_clarification": "operator_durable",
+    "review_anti_loop": "operator_durable",
 }
 
 RECOGNISED_CODES: Final[frozenset[str]] = frozenset(_CODE_CLASS)

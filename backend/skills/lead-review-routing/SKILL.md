@@ -63,10 +63,24 @@ Wait. Do not patch done. Do not nudge for re-approval (operator/Miguel acts on a
 
 ### No Approval Yet, No Required Review Yet
 
-Route the **first missing reviewer** only, then stop. Architect first when required by packet type; otherwise QA/DevOps validation.
+Route ALL missing required reviewers in parallel — the structured
+`/review-events` validator at [task_review_events.py](../../app/services/task_review_events.py)
+enforces AND-presence not order. Architect's source review and QA-E2E's
+browser-oracle run can execute concurrently against the same packet, and
+review-readiness aggregates them. Sequential routing was costing ~15-30 min
+per gate on the critical path with no semantic gain.
 
 - Architect route payload: `{"assigned_agent_id":"ARCHITECT_ID","status":"review"}`
-- QA/DevOps nudges must name: task id, evidence packet type, target/build, required verdict format
+- QA/DevOps nudge in the same tick (do NOT wait for Architect PASS):
+  comment `@<reviewer> task <id> ready for parallel review against
+  source_commit <sha>` with evidence packet type, target, and required
+  verdict format
+
+**Parallel-gate cost rule**: if the task's recent review history shows
+Architect FAIL'd a similar packet in the last 3 cycles, reverse to
+sequential (Architect first, then QA-E2E) for THIS task only. The cost
+of one wasted QA-E2E browser-oracle run (~5-10 min) outweighs the gate
+parallelism saving when Architect FAIL is likely.
 
 If not all required reviewers have posted yet, do not block this tick — continue to the next step and re-check on the next heartbeat.
 

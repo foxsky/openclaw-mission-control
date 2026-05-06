@@ -26,7 +26,7 @@ worker output.
 ```text
 QA RECHECK for $TASK_ID:
   Challenge/rejection quoted: "<paste issue word-for-word>"
-  Target/build tested: <url + build hash/artifact id or n/a>
+  Target/source tested: <url + source commit SHA matching live /__build.sha; do NOT cite asset filename hash>
   Re-test evidence: <literal browser/command output>
   Corrected verdict: PASS/FAIL/INCONCLUSIVE/INFRA BLOCKED
   @lead <one-line routing intent — see "Required @ citation" below>

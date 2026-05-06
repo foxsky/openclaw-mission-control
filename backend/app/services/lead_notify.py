@@ -79,6 +79,39 @@ async def notify_lead_after_blocker_resolved(
         )
 
 
+async def send_agent_wake(
+    *,
+    session: AsyncSession,
+    board_id,
+    agent: Agent,
+    message: str,
+) -> bool:
+    """Send a wake message to a specific (non-lead) agent. Returns True
+    if a dispatch fired, False if any precondition was missing
+    (no session_key, no gateway config, etc.).
+
+    Used by the next-reviewer auto-wake path when a PASS verdict
+    leaves another required reviewer role outstanding.
+    """
+    if not agent.openclaw_session_id:
+        return False
+    dispatch = GatewayDispatchService(session)
+    board = await session.get(Board, board_id)
+    if board is None:
+        return False
+    config = await dispatch.optional_gateway_config_for_board(board)
+    if config is None:
+        return False
+    await dispatch.try_send_agent_message(
+        session_key=agent.openclaw_session_id,
+        config=config,
+        agent_name=agent.name,
+        message=message,
+        deliver=True,
+    )
+    return True
+
+
 async def notify_lead_after_dependency_cleared(
     *,
     session: AsyncSession,

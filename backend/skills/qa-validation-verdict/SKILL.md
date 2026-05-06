@@ -34,7 +34,7 @@ PASS for UI/frontend behavior requires literal browser evidence:
 - exact action plus before/after observation for every interactive AC
 - responsive/layout evidence when applicable
 - browser-observed UI state plus API/readback proof for API-backed UI
-- loaded build hash or artifact id
+- source commit SHA (the deploy-truth gate compares this against live `/__build.sha`; do NOT cite the asset filename — that hash churns on every Vite rebuild)
 
 If target/browser tooling is unreachable, verdict is `INFRA BLOCKED` or
 `INCONCLUSIVE`, not PASS.
@@ -90,7 +90,7 @@ Post one task comment:
 VERDICT: PASS/FAIL/INCONCLUSIVE/INFRA BLOCKED
 $AGENT_NAME validation for $TASK_ID
 Target: <url/command/contract target>
-Build/source: <loaded build hash/artifact id, submitted commit, or source parity evidence>
+Build/source: <source commit SHA matching live /__build.sha; do NOT cite the asset filename hash>
 | # | AC | Result | Category | Evidence |
 |---|-----|--------|----------|----------|
 | 1 | <criterion> | PASS/FAIL | unit/contract/api/auth/persist/regression/edge/infra | <literal command/API/readback/browser output> |
