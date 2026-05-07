@@ -201,6 +201,46 @@ async def test_idempotent_when_approval_already_resolved(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action_type", [
+    "move_to_done", "mark_done", "task_done", "task_done_transition",
+    "move_task_to_done", "mark_task_done",
+])
+async def test_all_done_aliases_trigger_auto_transition(
+    sqlite_session: AsyncSession,
+    action_type: str,
+) -> None:
+    """All canonical action_type aliases in DONE_APPROVAL_ACTION_TYPES
+    must trigger the auto-transition. Production gap 2026-05-07: an
+    E.07 approval used `task_done_transition` (a Supervisor-emitted
+    alias not yet in the canonical set), so the approval flipped to
+    approved but the task stayed in `review`."""
+    session = sqlite_session
+    board, worker, task = await _seed_board_and_review_task(session)
+    actor = _user_actor(session)
+    pending = await approvals_api.create_approval(
+        payload=ApprovalCreate(
+            action_type=action_type, task_id=task.id,
+            payload={"reason": "alias-test"},
+            confidence=92, status="pending",
+        ),
+        board=board, session=session, actor=actor,
+    )
+    await approvals_api.update_approval(
+        approval_id=pending.id,
+        payload=ApprovalUpdate(status="approved"),
+        board=board, session=session, actor=actor,
+    )
+    refreshed = (
+        await session.exec(select(Task).where(Task.id == task.id))
+    ).first()
+    assert refreshed is not None
+    assert refreshed.status == "done", (
+        f"alias {action_type!r} should trigger auto-transition; "
+        f"got status={refreshed.status!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_rejecting_does_not_auto_transition(
     sqlite_session: AsyncSession,
 ) -> None:

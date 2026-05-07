@@ -24,6 +24,7 @@ DONE_APPROVAL_ACTION_TYPES: tuple[str, ...] = (
     "move_to_done",
     "mark_done",
     "task_done",
+    "task_done_transition",
     "move_task_to_done",
     "mark_task_done",
 )
