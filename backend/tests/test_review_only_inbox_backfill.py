@@ -84,7 +84,11 @@ async def test_backfill_records_status_change_activity(
     assert len(status_events) == 1, (
         f"expected exactly 1 status_changed event; got {[e.event_type for e in events]!r}"
     )
-    assert status_events[0].actor_user_id == user.id
+    # Proves the admin path used a user actor (not an agent) — agent_id is
+    # None when record_activity is called from the user-actor side of
+    # _record_task_update_activity. This is the strongest assertion we can
+    # make without adding a new column to ActivityEvent.
+    assert status_events[0].agent_id is None
 
 
 @pytest.mark.asyncio

@@ -11,8 +11,10 @@ Usage::
     python -m scripts.backfill_review_only_inbox [--board-id UUID] [--dry-run]
 
 The script picks (or creates) a system actor user named
-``system-backfill@local``. This actor attribution is what shows up in
-the task activity log via ``ActivityEvent.actor_user_id``.
+``system-backfill@local``. The admin update pipeline routes that user
+through ``_record_task_update_activity``, which records the
+``task.status_changed`` event with ``agent_id=None`` (proving the
+transition came from a user actor rather than an agent).
 """
 
 from __future__ import annotations

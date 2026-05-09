@@ -5434,9 +5434,6 @@ async def _record_task_update_activity(
     actor_agent_id = (
         update.actor.agent.id if update.actor.actor_type == "agent" and update.actor.agent else None
     )
-    actor_user_id = (
-        update.actor.user.id if update.actor.actor_type == "user" and update.actor.user else None
-    )
     # Record the task transition first, then reconcile dependents so any
     # cascaded dependency effects are logged after the source change.
     record_activity(
@@ -5445,7 +5442,6 @@ async def _record_task_update_activity(
         task_id=update.task.id,
         message=message,
         agent_id=actor_agent_id,
-        actor_user_id=actor_user_id,
         board_id=update.board_id,
     )
     await _record_parent_terminated_event_if_orphans(

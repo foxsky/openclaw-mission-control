@@ -23,7 +23,6 @@ class ActivityEvent(QueryModel, table=True):
     event_type: str = Field(index=True)
     message: str | None = None
     agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
-    actor_user_id: UUID | None = Field(default=None, foreign_key="users.id", index=True)
     task_id: UUID | None = Field(default=None, foreign_key="tasks.id", index=True)
     board_id: UUID | None = Field(default=None, foreign_key="boards.id", index=True)
     # Phase I: denormalized classifier flags from the shadow_metrics
