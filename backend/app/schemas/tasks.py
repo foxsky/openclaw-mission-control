@@ -280,6 +280,24 @@ def actionability_missing_fields(
     return missing
 
 
+def normalize_review_only_initial_status(
+    review_packet_type: ReviewPacketType | str | None,
+    status: TaskStatus | str | None,
+) -> TaskStatus | str | None:
+    """Review-only tasks bypass `inbox` — they have no implementation
+    phase, so the worker→reviewer pipeline doesn't apply. Returning
+    `'review'` here is what the create handlers use to override the
+    incoming status BEFORE persisting the row.
+
+    Why a helper and not a TaskBase model_validator: TaskRead inherits
+    TaskBase, so a model_validator would also fire on read serialization
+    and make the API lie about legacy DB state.
+    """
+    if review_packet_type == "review_only" and status == "inbox":
+        return "review"
+    return status
+
+
 class TaskBase(SQLModel):
     """Shared task fields used by task create/read payloads."""
 

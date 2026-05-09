@@ -69,7 +69,14 @@ from app.schemas.task_review_events import (
     TaskReviewReadinessRead,
 )
 from app.schemas.task_pipeline_events import TaskPipelineStateRead
-from app.schemas.tasks import TaskCommentCreate, TaskCommentRead, TaskCreate, TaskRead, TaskUpdate
+from app.schemas.tasks import (
+    TaskCommentCreate,
+    TaskCommentRead,
+    TaskCreate,
+    TaskRead,
+    TaskUpdate,
+    normalize_review_only_initial_status,
+)
 from app.schemas.view_models import TaskCardRead
 from app.services.activity_log import record_activity
 from app.services.board_memory_intake import reconcile_board_memory_intake
@@ -1178,6 +1185,9 @@ async def create_task(
 
     task = Task.model_validate(data)
     task.board_id = board.id
+    task.status = normalize_review_only_initial_status(
+        task.review_packet_type, task.status,
+    )
     task.auto_created = True
     task.auto_reason = f"lead_agent:{agent_ctx.agent.id}"
 
