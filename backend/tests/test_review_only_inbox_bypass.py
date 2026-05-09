@@ -27,6 +27,7 @@ from app.core.auth import AuthContext
 from app.models.agents import Agent
 from app.models.boards import Board
 from app.models.gateways import Gateway
+from app.models.organization_members import OrganizationMember
 from app.models.organizations import Organization
 from app.models.tasks import Task
 from app.models.users import User
@@ -42,6 +43,26 @@ async def _user_actor(session: AsyncSession) -> ActorContext:
     session.add(user)
     await session.flush()
     return ActorContext(actor_type="user", user=user)
+
+
+async def _user_actor_with_board_write(
+    session: AsyncSession, board: Board,
+) -> ActorContext:
+    """User actor with org-owner membership on ``board``'s organization,
+    so user-route PATCHes pass ``_require_task_user_write_access``."""
+    actor = await _user_actor(session)
+    assert actor.user is not None
+    session.add(
+        OrganizationMember(
+            organization_id=board.organization_id,
+            user_id=actor.user.id,
+            role="owner",
+            all_boards_read=True,
+            all_boards_write=True,
+        ),
+    )
+    await session.commit()
+    return actor
 
 
 async def _seed_board_with_lead(session: AsyncSession) -> tuple[Board, Agent]:
@@ -168,3 +189,170 @@ async def test_taskread_does_not_rewrite_legacy_inbox_review_only(
     assert serialized.status == "inbox", (
         f"TaskRead must mirror DB state, not rewrite it; got {serialized.status!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_user_patch_to_review_only_advances_inbox_with_comment(
+    sqlite_session: AsyncSession,
+) -> None:
+    """User-route PATCH that recategorizes inbox task to review_only
+    must atomically transition status to review in the same write.
+    Production incident: a8743f3a was created `mixed` then needed
+    re-categorizing — a separate PATCH cycle is wasted work."""
+    session = sqlite_session
+    board, _ = await _seed_board_with_lead(session)
+    actor = await _user_actor_with_board_write(session, board)
+    task = Task(
+        id=uuid4(), board_id=board.id, title="Final acceptance",
+        status="inbox", review_packet_type="mixed",
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+
+    from app.schemas.tasks import TaskUpdate
+    updated = await tasks_api.update_task(
+        payload=TaskUpdate(
+            review_packet_type="review_only",
+            comment="Recategorize: no implementation phase",
+        ),
+        task=task,
+        session=session,
+        actor=ActorContext(actor_type="user", user=actor.user),
+    )
+    assert updated.review_packet_type == "review_only"
+    assert updated.status == "review"
+
+
+@pytest.mark.asyncio
+async def test_user_patch_review_only_inbox_to_review_with_comment(
+    sqlite_session: AsyncSession,
+) -> None:
+    """User-route PATCH that explicitly moves a review_only inbox task
+    to review with a comment must succeed — operator should not need
+    the OperatorDecision dance for review_only."""
+    session = sqlite_session
+    board, _ = await _seed_board_with_lead(session)
+    actor = await _user_actor_with_board_write(session, board)
+    task = Task(
+        id=uuid4(), board_id=board.id, title="Stuck review-only",
+        status="inbox", review_packet_type="review_only",
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+
+    from app.schemas.tasks import TaskUpdate
+    updated = await tasks_api.update_task(
+        payload=TaskUpdate(
+            status="review",
+            comment="operator unblock: review-only path",
+        ),
+        task=task,
+        session=session,
+        actor=ActorContext(actor_type="user", user=actor.user),
+    )
+    assert updated.status == "review"
+
+
+@pytest.mark.asyncio
+async def test_lead_patch_review_only_inbox_to_review(
+    sqlite_session: AsyncSession,
+) -> None:
+    """Lead-path narrow exception: when target task is review_only,
+    lead can perform inbox→review. Without this exception (Codex
+    finding), the plan only fixes the operator path and leads still
+    need operator help — half the failure mode remains.
+
+    Note: lead PATCH disallows the ``comment`` field (see
+    ``_validate_lead_update_request`` at tasks.py:4482); leads post via
+    the comments endpoint, then PATCH status separately. The plan's
+    narrow exception in ``_lead_apply_status`` does not require
+    comment — it keys on ``review_packet_type='review_only'`` alone."""
+    session = sqlite_session
+    board, lead = await _seed_board_with_lead(session)
+    task = Task(
+        id=uuid4(), board_id=board.id, title="Track F design-pass",
+        status="inbox", review_packet_type="review_only",
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+
+    from app.schemas.tasks import TaskUpdate
+    updated = await tasks_api.update_task(
+        payload=TaskUpdate(status="review"),
+        task=task,
+        session=session,
+        actor=ActorContext(actor_type="agent", agent=lead),
+    )
+    assert updated.status == "review"
+
+
+@pytest.mark.asyncio
+async def test_patch_review_only_without_comment_with_required_flag(
+    sqlite_session: AsyncSession,
+) -> None:
+    """If board.comment_required_for_review=True, the auto-advance must
+    still trip the comment-required gate at tasks.py:5783-5796. The
+    auto-advance must NOT bypass this rule."""
+    session = sqlite_session
+    board, _ = await _seed_board_with_lead(session)
+    board.comment_required_for_review = True
+    session.add(board)
+    await session.commit()
+    actor = await _user_actor_with_board_write(session, board)
+    task = Task(
+        id=uuid4(), board_id=board.id, title="t",
+        status="inbox", review_packet_type="mixed",
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+
+    from app.schemas.tasks import TaskUpdate
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await tasks_api.update_task(
+            payload=TaskUpdate(review_packet_type="review_only"),  # no comment
+            task=task,
+            session=session,
+            actor=ActorContext(actor_type="user", user=actor.user),
+        )
+    assert exc.value.status_code == 422
+    assert "Comment is required" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_patch_review_only_blocked_by_legacy_operator_decision(
+    sqlite_session: AsyncSession,
+) -> None:
+    """The auto-advance must respect the legacy operator_decision_required
+    field on the task itself (tasks.py:767-768). If it's set, transition
+    must still raise 409 task_blocked_operator_decision_required."""
+    session = sqlite_session
+    board, _ = await _seed_board_with_lead(session)
+    actor = await _user_actor_with_board_write(session, board)
+    task = Task(
+        id=uuid4(), board_id=board.id, title="t",
+        status="inbox", review_packet_type="mixed",
+        operator_decision_required=True,
+        operator_decision_summary="awaiting policy decision",
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+
+    from app.schemas.tasks import TaskUpdate
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await tasks_api.update_task(
+            payload=TaskUpdate(
+                review_packet_type="review_only",
+                comment="recat",
+            ),
+            task=task,
+            session=session,
+            actor=ActorContext(actor_type="user", user=actor.user),
+        )
+    assert exc.value.status_code == 409
