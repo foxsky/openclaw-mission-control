@@ -16,6 +16,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -31,7 +32,7 @@ from app.models.organization_members import OrganizationMember
 from app.models.organizations import Organization
 from app.models.tasks import Task
 from app.models.users import User
-from app.schemas.tasks import TaskCreate, TaskRead
+from app.schemas.tasks import TaskCreate, TaskRead, TaskUpdate
 
 
 async def _user_actor(session: AsyncSession) -> ActorContext:
@@ -210,7 +211,6 @@ async def test_user_patch_to_review_only_advances_inbox_with_comment(
     await session.commit()
     await session.refresh(task)
 
-    from app.schemas.tasks import TaskUpdate
     updated = await tasks_api.update_task(
         payload=TaskUpdate(
             review_packet_type="review_only",
@@ -220,6 +220,8 @@ async def test_user_patch_to_review_only_advances_inbox_with_comment(
         session=session,
         actor=ActorContext(actor_type="user", user=actor.user),
     )
+    # Both assertions matter: recat applied AND auto-advance fired.
+    # One without the other = different bug class.
     assert updated.review_packet_type == "review_only"
     assert updated.status == "review"
 
@@ -242,7 +244,6 @@ async def test_user_patch_review_only_inbox_to_review_with_comment(
     await session.commit()
     await session.refresh(task)
 
-    from app.schemas.tasks import TaskUpdate
     updated = await tasks_api.update_task(
         payload=TaskUpdate(
             status="review",
@@ -279,7 +280,6 @@ async def test_lead_patch_review_only_inbox_to_review(
     await session.commit()
     await session.refresh(task)
 
-    from app.schemas.tasks import TaskUpdate
     updated = await tasks_api.update_task(
         payload=TaskUpdate(status="review"),
         task=task,
@@ -310,8 +310,6 @@ async def test_patch_review_only_without_comment_with_required_flag(
     await session.commit()
     await session.refresh(task)
 
-    from app.schemas.tasks import TaskUpdate
-    from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc:
         await tasks_api.update_task(
             payload=TaskUpdate(review_packet_type="review_only"),  # no comment
@@ -320,7 +318,7 @@ async def test_patch_review_only_without_comment_with_required_flag(
             actor=ActorContext(actor_type="user", user=actor.user),
         )
     assert exc.value.status_code == 422
-    assert "Comment is required" in str(exc.value.detail)
+    assert exc.value.detail == "Comment is required."
 
 
 @pytest.mark.asyncio
@@ -343,8 +341,6 @@ async def test_patch_review_only_blocked_by_legacy_operator_decision(
     await session.commit()
     await session.refresh(task)
 
-    from app.schemas.tasks import TaskUpdate
-    from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc:
         await tasks_api.update_task(
             payload=TaskUpdate(
@@ -356,3 +352,44 @@ async def test_patch_review_only_blocked_by_legacy_operator_decision(
             actor=ActorContext(actor_type="user", user=actor.user),
         )
     assert exc.value.status_code == 409
+    assert exc.value.detail.get("code") == "task_blocked_operator_decision_required"
+
+
+@pytest.mark.asyncio
+async def test_non_lead_agent_patch_review_only_rejected_by_agent_transition_gate(
+    sqlite_session: AsyncSession,
+) -> None:
+    """Non-lead agents (workers) MUST NOT be able to recategorize an
+    inbox task to review_only — review-only sign-offs are operator/lead
+    territory. The agent-path transition gate (`_AGENT_PATH_VALID_TRANSITIONS`)
+    rejects (inbox, review). Task 4's auto-advance must NOT bypass this:
+    the auto-advance fires on payload mutation, then `_validate_agent_transition`
+    correctly rejects with 403.
+
+    This test guards intent: any future contributor extending the
+    auto-advance must consciously decide whether to also extend
+    `_AGENT_PATH_VALID_TRANSITIONS` for review_only. Today: no.
+    """
+    session = sqlite_session
+    board, lead = await _seed_board_with_lead(session)
+    # Seed a non-lead agent (worker) on the same gateway as the lead.
+    worker = Agent(
+        id=uuid4(), board_id=board.id, gateway_id=lead.gateway_id,
+        name="Worker", is_board_lead=False,
+    )
+    session.add(worker)
+    task = Task(
+        id=uuid4(), board_id=board.id, title="t",
+        status="inbox", review_packet_type="mixed",
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+
+    with pytest.raises(HTTPException) as exc:
+        await tasks_api.update_task(
+            payload=TaskUpdate(review_packet_type="review_only"),
+            task=task, session=session,
+            actor=ActorContext(actor_type="agent", agent=worker),
+        )
+    assert exc.value.status_code == 403
