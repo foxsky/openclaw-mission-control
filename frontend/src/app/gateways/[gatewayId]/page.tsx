@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 
 import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { useAuth } from "@/auth/clerk";
 import { useQueryClient } from "@tanstack/react-query";
@@ -11,6 +12,7 @@ import { AgentsTable } from "@/components/agents/AgentsTable";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import { Button } from "@/components/ui/button";
 import { ConfirmActionDialog } from "@/components/ui/confirm-action-dialog";
+import { useLocalStorageBoolean } from "@/lib/use-local-storage-boolean";
 
 import { ApiError } from "@/api/mutator";
 import {
@@ -52,6 +54,10 @@ export default function GatewayDetailPage() {
 
   const { isAdmin } = useOrganizationMembership(isSignedIn);
   const [deleteTarget, setDeleteTarget] = useState<AgentRead | null>(null);
+  const [agentsCollapsed, setAgentsCollapsed] = useLocalStorageBoolean(
+    `mc.gateway.${gatewayId ?? "unknown"}.agentsCollapsed`,
+    false,
+  );
   const agentsKey = getListAgentsApiV1AgentsGetQueryKey(
     gatewayId ? { gateway_id: gatewayId } : undefined,
   );
@@ -281,27 +287,43 @@ export default function GatewayDetailPage() {
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setAgentsCollapsed(!agentsCollapsed)}
+                aria-expanded={!agentsCollapsed}
+                aria-controls="gateway-agents-table"
+                data-cy="gateway-agents-toggle"
+                className="flex w-full items-center justify-between rounded-md p-1 -m-1 text-left transition hover:bg-slate-50"
+              >
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Agents
                 </p>
-                {agentsQuery.isLoading ? (
-                  <span className="text-xs text-slate-500">Loading…</span>
-                ) : (
-                  <span className="text-xs text-slate-500">
-                    {agents.length} total
-                  </span>
-                )}
-              </div>
-              <div className="mt-4">
-                <AgentsTable
-                  agents={agents}
-                  boards={boards}
-                  isLoading={agentsQuery.isLoading}
-                  onDelete={setDeleteTarget}
-                  emptyMessage="No agents assigned to this gateway."
-                />
-              </div>
+                <span className="flex items-center gap-2 text-xs text-slate-500">
+                  {agentsQuery.isLoading ? (
+                    "Loading…"
+                  ) : (
+                    <>
+                      {agents.length} total
+                    </>
+                  )}
+                  {agentsCollapsed ? (
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-slate-400" />
+                  )}
+                </span>
+              </button>
+              {agentsCollapsed ? null : (
+                <div id="gateway-agents-table" className="mt-4">
+                  <AgentsTable
+                    agents={agents}
+                    boards={boards}
+                    isLoading={agentsQuery.isLoading}
+                    onDelete={setDeleteTarget}
+                    emptyMessage="No agents assigned to this gateway."
+                  />
+                </div>
+              )}
             </div>
           </div>
         ) : null}
