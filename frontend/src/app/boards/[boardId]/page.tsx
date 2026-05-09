@@ -14,6 +14,8 @@ import { SignInButton, SignedIn, SignedOut, useAuth } from "@/auth/clerk";
 import {
   Activity,
   ArrowUpRight,
+  ChevronDown,
+  ChevronRight,
   MessageSquare,
   Pause,
   Plus,
@@ -119,6 +121,7 @@ import {
   resolveMemberDisplayName,
 } from "@/lib/display-name";
 import { AGENT_EMOJI_GLYPHS } from "@/lib/agent-emoji";
+import { useLocalStorageBoolean } from "@/lib/use-local-storage-boolean";
 import { cn } from "@/lib/utils";
 import { usePageActive } from "@/hooks/usePageActive";
 import {
@@ -858,6 +861,10 @@ export default function BoardDetailPage() {
   const searchParams = useSearchParams();
   const boardIdParam = params?.boardId;
   const boardId = Array.isArray(boardIdParam) ? boardIdParam[0] : boardIdParam;
+  const [agentsCardCollapsed, setAgentsCardCollapsed] = useLocalStorageBoolean(
+    `mc.board.${boardId ?? "unknown"}.agentsCollapsed`,
+    false,
+  );
   const { isSignedIn } = useAuth();
   const isPageActive = usePageActive();
   const taskIdFromUrl = searchParams.get("taskId");
@@ -3627,16 +3634,30 @@ export default function BoardDetailPage() {
 
           <div className="relative flex flex-col gap-4 p-4 md:flex-row md:gap-6 md:p-6">
             {isOrgAdmin ? (
-              <aside className="flex w-full flex-col rounded-xl border border-slate-200 bg-white shadow-sm md:h-full md:w-64">
+              <aside className="flex w-full flex-col rounded-xl border border-slate-200 bg-white shadow-sm md:w-64 md:self-start">
                 <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                      Agents
-                    </p>
-                    <p className="text-xs text-slate-400">
-                      {sortedAgents.length} total
-                    </p>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAgentsCardCollapsed(!agentsCardCollapsed)}
+                    aria-expanded={!agentsCardCollapsed}
+                    aria-controls="board-agents-list"
+                    data-cy="board-agents-toggle"
+                    className="flex flex-1 items-center gap-2 rounded-md p-1 -m-1 text-left transition hover:bg-slate-50"
+                  >
+                    {agentsCardCollapsed ? (
+                      <ChevronRight className="h-4 w-4 text-slate-400" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-slate-400" />
+                    )}
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                        Agents
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {sortedAgents.length} total
+                      </p>
+                    </div>
+                  </button>
                   <button
                     type="button"
                     onClick={() => router.push("/agents/new")}
@@ -3645,7 +3666,13 @@ export default function BoardDetailPage() {
                     Add
                   </button>
                 </div>
-                <div className="flex-1 space-y-2 overflow-y-auto p-3">
+                <div
+                  id="board-agents-list"
+                  className={cn(
+                    "flex-1 space-y-2 overflow-y-auto p-3",
+                    agentsCardCollapsed && "hidden",
+                  )}
+                >
                   {sortedAgents.length === 0 ? (
                     <div className="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500">
                       No agents assigned yet.
