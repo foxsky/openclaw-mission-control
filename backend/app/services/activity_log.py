@@ -18,6 +18,7 @@ def record_activity(
     event_type: str,
     message: str,
     agent_id: UUID | None = None,
+    actor_user_id: UUID | None = None,
     task_id: UUID | None = None,
     board_id: UUID | None = None,
 ) -> ActivityEvent:
@@ -26,6 +27,7 @@ def record_activity(
         event_type=event_type,
         message=message,
         agent_id=agent_id,
+        actor_user_id=actor_user_id,
         task_id=task_id,
         board_id=board_id,
     )
