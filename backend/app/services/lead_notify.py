@@ -9,17 +9,16 @@ silently bypassing the wake hook in api/blockers.py.
 
 from __future__ import annotations
 
-import logging
-
 from sqlmodel import col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.core.logging import get_logger
 from app.models.agents import Agent
 from app.models.boards import Board
 from app.models.tasks import Task
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def _send_agent_wake(

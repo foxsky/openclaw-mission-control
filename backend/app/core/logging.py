@@ -12,8 +12,21 @@ from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
 
-from app.core.config import settings
 from app.core.version import APP_NAME, APP_VERSION
+
+
+def _settings_or_none() -> Any:
+    """Return ``app.core.config.settings`` if importable; ``None`` otherwise.
+
+    Imported lazily so that bare ``get_logger(__name__)`` calls in standalone
+    services (e.g. ``mc-gateway-subscriber``) that do not load the MC backend
+    env still work — they fall through to ``os.getenv`` defaults.
+    """
+    try:
+        from app.core.config import settings as _settings
+    except Exception:  # noqa: BLE001 — settings load can fail on missing env
+        return None
+    return _settings
 
 TRACE_LEVEL = 5
 EXC_INFO_TUPLE_SIZE = 3
@@ -238,7 +251,10 @@ class AppLogger:
 
     @classmethod
     def _resolve_level(cls) -> tuple[str, int]:
-        level_name = (settings.log_level or os.getenv("LOG_LEVEL", "INFO")).upper()
+        settings = _settings_or_none()
+        level_name = (
+            (settings.log_level if settings else None) or os.getenv("LOG_LEVEL", "INFO")
+        ).upper()
         if level_name == "TRACE":
             return level_name, TRACE_LEVEL
         if level_name.isdigit():
@@ -253,17 +269,20 @@ class AppLogger:
             return
 
         level_name, level = cls._resolve_level()
+        settings = _settings_or_none()
+        log_format_setting = settings.log_format if settings else None
+        log_use_utc = bool(settings.log_use_utc) if settings else False
 
         handler = logging.StreamHandler(sys.stdout)
         handler.addFilter(AppLogFilter(APP_NAME, APP_VERSION))
-        format_name = (settings.log_format or "text").lower()
+        format_name = (log_format_setting or "text").lower()
         if format_name == "json":
             formatter: logging.Formatter = JsonFormatter()
         else:
             formatter = KeyValueFormatter(
                 "%(asctime)s %(levelname)s %(name)s %(message)s " "app=%(app)s version=%(version)s",
             )
-            if settings.log_use_utc:
+            if log_use_utc:
                 formatter.converter = time.gmtime
         handler.setFormatter(formatter)
 
@@ -294,7 +313,7 @@ class AppLogger:
             "logging.configured level=%s format=%s use_utc=%s",
             level_name,
             format_name,
-            settings.log_use_utc,
+            log_use_utc,
         )
         logging.getLogger(__name__).debug(
             "logging.libraries uvicorn_level=%s sql_enabled=%s",

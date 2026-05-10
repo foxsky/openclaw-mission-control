@@ -25,7 +25,6 @@ fails on unrelated HTTP-layer config".
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import signal
 import sys
@@ -36,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.env_file import load_env_file
+from app.core.logging import configure_logging, get_logger
 from app.db.url import normalize_database_url
 from app.services.mc_gateway_subscriber.db_session_state_projector import (
     DbSessionStateProjector,
@@ -43,7 +43,7 @@ from app.services.mc_gateway_subscriber.db_session_state_projector import (
 from app.services.mc_gateway_subscriber.subscriber import Subscriber
 from app.services.openclaw.protocol_constants import EVENT_SESSIONS_CHANGED
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_ENV_FILE = "/etc/mc-gateway-subscriber/env"
 DEFAULT_SUBSCRIPTIONS = ("sessions.subscribe",)
@@ -120,10 +120,7 @@ async def run_async(stop: asyncio.Event, config: SubscriberConfig) -> None:
 
 
 def main() -> int:
-    logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    configure_logging()
     config = resolve_config()
     stop = asyncio.Event()
 

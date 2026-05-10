@@ -642,7 +642,13 @@ def test_phase1_review_loop_guardrails_render_for_frontend_architect_and_lead() 
     assert "Do not reopen a resolved product decision unless `@lead` or Architect changes it." in frontend_agents
     assert "Treat `review_packet_type` and `validation_target*` as authoritative unless `@lead` changes them." in frontend_agents
     assert "do not claim deploy blockage without outage or runtime/source mismatch evidence." in frontend_agents
-    assert "Active blocker cleared:" in frontend_agents
+    # `Active blocker cleared:` lives in the rework-resubmit skill (the
+    # template references the skill by name); assert in both places.
+    assert "rework-resubmit" in frontend_agents
+    rework_skill = (
+        Path(__file__).resolve().parents[1] / "skills" / "rework-resubmit" / "SKILL.md"
+    ).read_text()
+    assert "Active blocker cleared:" in rework_skill
 
     architect_agents = _render_template(
         "BOARD_AGENTS.md.j2",
@@ -673,8 +679,12 @@ def test_phase1_review_loop_guardrails_render_for_frontend_architect_and_lead() 
     assert "Post one blocker summary" in lead_agents
     assert "Keep failed review in `rework`" in lead_agents
     assert "worker escalation still starts at `3+ rejections`." in lead_agents
-    assert "set `review_packet_type`, known `validation_target*`, and `operator_decision_required` when needed" in lead_agents
-    assert "route around operator-gated work" in lead_agents
+    # Modernized: lead workflow now points at first-class OperatorDecision +
+    # structured Blocker rows instead of the legacy `operator_decision_required`
+    # bool field. Assert the new contract instead of the legacy wording.
+    assert "set `review_packet_type` and known `validation_target*`" in lead_agents
+    assert "first-class `OperatorDecision` links" in lead_agents
+    assert "structured `Blocker` rows" in lead_agents
 
 
 def test_pf_pb_and_acp_skills_enforce_tdd_discipline() -> None:

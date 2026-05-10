@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from app.services.openclaw import gateway_dispatch
+import app.services.openclaw.gateway_dispatch as gateway_dispatch
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 from app.services.openclaw.gateway_rpc import GatewayConfig
 
@@ -44,12 +44,14 @@ async def test_send_agent_message_uses_steer_when_interrupt_requested(
         *,
         session_key: str,
         config: GatewayConfig,
-        deliver: bool = False,
     ) -> None:
+        # ``sessions.steer`` always interrupts AND delivers, so the real
+        # ``steer_session`` deliberately omits a ``deliver`` kwarg (see
+        # gateway_rpc.steer_session docstring). The fake mirrors that.
         calls.append(
             (
                 "steer",
-                {"message": message, "session_key": session_key, "deliver": deliver},
+                {"message": message, "session_key": session_key},
             )
         )
 
@@ -73,7 +75,6 @@ async def test_send_agent_message_uses_steer_when_interrupt_requested(
             {
                 "message": "TASK MENTION",
                 "session_key": "agent:pf:session",
-                "deliver": True,
             },
         ),
     ]
@@ -112,12 +113,14 @@ async def test_send_agent_message_uses_chat_send_without_interrupt(
         *,
         session_key: str,
         config: GatewayConfig,
-        deliver: bool = False,
     ) -> None:
+        # ``sessions.steer`` always interrupts AND delivers, so the real
+        # ``steer_session`` deliberately omits a ``deliver`` kwarg (see
+        # gateway_rpc.steer_session docstring). The fake mirrors that.
         calls.append(
             (
                 "steer",
-                {"message": message, "session_key": session_key, "deliver": deliver},
+                {"message": message, "session_key": session_key},
             )
         )
 

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 from uuid import uuid4
@@ -33,13 +32,14 @@ from uuid import uuid4
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from app.core.logging import get_logger
 from app.services.openclaw.protocol_constants import (
     PROTOCOL_VERSION,
     build_control_ui_connect_params,
     build_control_ui_origin,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 EventHandler = Callable[[dict[str, Any]], Awaitable[None]]
 

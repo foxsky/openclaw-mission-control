@@ -16,7 +16,7 @@ from app.core import auth as auth_module
 from app.core.auth_mode import AuthMode
 from app.core.config import settings
 from app.db.session import get_session
-from app.services.openclaw import runtime_status
+import app.services.openclaw.runtime_status as runtime_status
 
 
 def test_extract_json_payload_tolerates_openclaw_config_warnings() -> None:

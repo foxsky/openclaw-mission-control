@@ -25,6 +25,7 @@ from app.services.openclaw.gateway_rpc import (
     abort_session,
     ensure_session,
     send_message,
+    steer_session,
 )
 
 # Hard ceiling on agent-notify gateway calls to prevent the
@@ -69,8 +70,14 @@ class GatewayDispatchService(OpenClawDBService):
         agent_name: str,
         message: str,
         deliver: bool = False,
+        interrupt_if_active: bool = False,
     ) -> None:
         await ensure_session(session_key, config=config, label=agent_name)
+        if interrupt_if_active:
+            # ``sessions.steer`` always interrupts AND delivers, so the
+            # ``deliver`` argument is intentionally not forwarded here.
+            await steer_session(message, session_key=session_key, config=config)
+            return
         await send_message(message, session_key=session_key, config=config, deliver=deliver)
 
     async def try_send_agent_message(
@@ -81,6 +88,7 @@ class GatewayDispatchService(OpenClawDBService):
         agent_name: str,
         message: str,
         deliver: bool = False,
+        interrupt_if_active: bool = False,
     ) -> OpenClawGatewayError | None:
         try:
             await asyncio.wait_for(
@@ -90,6 +98,7 @@ class GatewayDispatchService(OpenClawDBService):
                     agent_name=agent_name,
                     message=message,
                     deliver=deliver,
+                    interrupt_if_active=interrupt_if_active,
                 ),
                 timeout=GATEWAY_NOTIFY_TIMEOUT_SECONDS,
             )

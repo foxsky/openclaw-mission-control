@@ -5,9 +5,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 OPENCLAW_SKILLS_ROOT = Path("/root/.openclaw/skills")
+
+# These tests cross-check the in-repo skill source against the
+# gateway-deployed copy at ``/root/.openclaw/skills/`` (only present
+# on the gateway host .60). On dev workstations and GitHub-hosted CI
+# runners that path does not exist, so the live-checks are skipped.
+_HAS_LIVE_SKILLS = OPENCLAW_SKILLS_ROOT.is_dir()
+_requires_live_skills = pytest.mark.skipif(
+    not _HAS_LIVE_SKILLS,
+    reason="requires deployed gateway skills at /root/.openclaw/skills/ (.60 only)",
+)
 
 
 def _backend_skill(name: str) -> str:
@@ -18,6 +30,7 @@ def _live_skill(name: str) -> str:
     return (OPENCLAW_SKILLS_ROOT / name / "SKILL.md").read_text()
 
 
+@_requires_live_skills
 def test_worker_parallel_scheduler_source_matches_live_skill() -> None:
     assert _backend_skill("worker-parallel-scheduler") == _live_skill(
         "worker-parallel-scheduler",
@@ -56,7 +69,10 @@ def test_worker_parallel_scheduler_uses_board_scoped_worktrees() -> None:
 
 
 def test_acp_delegation_worker_mode_is_not_frontend_only() -> None:
-    for root in (BACKEND_ROOT / "skills", OPENCLAW_SKILLS_ROOT):
+    roots = [BACKEND_ROOT / "skills"]
+    if _HAS_LIVE_SKILLS:
+        roots.append(OPENCLAW_SKILLS_ROOT)
+    for root in roots:
         skill = (root / "acp-delegation" / "SKILL.md").read_text()
         assert "PF worktree mode" not in skill
         assert "worker worktree mode" in skill
@@ -65,7 +81,10 @@ def test_acp_delegation_worker_mode_is_not_frontend_only() -> None:
 
 
 def test_acp_post_review_documents_worktree_pre_merge_gate() -> None:
-    for root in (BACKEND_ROOT / "skills", OPENCLAW_SKILLS_ROOT):
+    roots = [BACKEND_ROOT / "skills"]
+    if _HAS_LIVE_SKILLS:
+        roots.append(OPENCLAW_SKILLS_ROOT)
+    for root in roots:
         skill = (root / "acp-post-review" / "SKILL.md").read_text()
         assert "## Worktree Pre-Merge Gate" in skill
         assert "before merging the child worktree" in skill

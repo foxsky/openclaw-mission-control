@@ -14,7 +14,6 @@ auto-cancels never-executed parents whose children are all terminal.
 
 from __future__ import annotations
 
-import logging
 import re
 from collections import defaultdict
 from collections.abc import Iterable
@@ -24,11 +23,12 @@ from sqlalchemy import update
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.models.tasks import Task
 from app.services.activity_log import record_activity
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 TERMINAL_STATUSES: frozenset[str] = frozenset({"done", "cancelled"})
 # Decomposition depth in practice is 2-3 levels (umbrella -> phase ->
