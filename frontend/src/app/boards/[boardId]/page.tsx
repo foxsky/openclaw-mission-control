@@ -3139,7 +3139,7 @@ export default function BoardDetailPage() {
       const result = await updateTaskApiV1BoardsBoardIdTasksTaskIdPatch(
         boardId,
         selectedTask.id,
-        { status: "cancelled" as any },
+        { status: "cancelled" as TaskStatus },
       );
       if (result.status !== 200) throw new Error("Unable to cancel task.");
       setTasks((prev) =>
@@ -3168,7 +3168,7 @@ export default function BoardDetailPage() {
       const result = await updateTaskApiV1BoardsBoardIdTasksTaskIdPatch(
         boardId,
         selectedTask.id,
-        { status: "inbox" as any },
+        { status: "inbox" as TaskStatus },
       );
       if (result.status !== 200) throw new Error("Unable to reopen task.");
       setTasks((prev) =>
