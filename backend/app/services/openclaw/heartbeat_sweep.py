@@ -120,6 +120,23 @@ async def _fetch_disabled_agent_ids(session: AsyncSession) -> set[UUID]:
     return {row[0] for row in result.all()}
 
 
+async def _is_agent_currently_disabled(session: AsyncSession, agent_id: UUID) -> bool:
+    """Re-read ``agent_heartbeats.enabled`` for a single agent.
+
+    Closes the TOCTOU window between the per-sweep prefetch of
+    ``_fetch_disabled_agent_ids`` and the actual wake/repair delivery.
+    Pause can commit between those points; this cheap per-agent recheck
+    prevents one stray wake without paying for a full set re-fetch.
+    """
+    result = await session.execute(
+        text("SELECT enabled FROM agent_heartbeats WHERE agent_id = :agent_id").bindparams(
+            agent_id=agent_id
+        )
+    )
+    row = result.first()
+    return row is not None and row[0] is False
+
+
 async def _try_deliver_heartbeat_wake(
     *,
     session: AsyncSession,
@@ -237,6 +254,14 @@ async def sweep_once() -> dict[str, int]:
                         agent.board_id,
                     )
                     continue
+
+            # TOCTOU: pause may have committed since the prefetch above.
+            # Re-check this specific agent right before delivering wake;
+            # same defensive pattern as the last_seen_at >= deadline
+            # check higher up the loop.
+            if await _is_agent_currently_disabled(session, agent.id):
+                paused_skipped += 1
+                continue
 
             logger.info(
                 "heartbeat_sweep.wake agent_id=%s name=%s deadline=%s wake_attempts=%s",

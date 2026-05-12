@@ -243,6 +243,50 @@ async def test_watchdog_skips_null_deadline_agent_on_paused_board(
 
 
 # ---------------------------------------------------------------------
+# TOCTOU: pause arrives between prefetch and wake delivery
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_wake_when_pause_arrives_after_prefetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operator pauses a board after the sweep tick read its prefetch
+    sets but before this agent's wake fires. Without a per-agent
+    recheck, the stale set says "wake them"; the fix queries
+    agent_heartbeats.enabled once more right before delivering."""
+
+    agent = _overdue_agent(board_id=None)
+    # Prefetch sees nothing paused/disabled (empty sets); the recheck
+    # returns True for this agent — simulates a pause that committed
+    # between the two reads.
+    session = _FakeSession(agents=[agent])
+
+    @asynccontextmanager
+    async def _fake_maker():
+        yield session
+
+    wake_calls: list[UUID] = []
+
+    async def _fake_wake(**kwargs: Any) -> bool:
+        wake_calls.append(kwargs["agent"].id)
+        return True
+
+    async def _fake_recheck(_session: Any, agent_id: UUID) -> bool:
+        return agent_id == agent.id
+
+    monkeypatch.setattr(heartbeat_sweep, "async_session_maker", _fake_maker)
+    monkeypatch.setattr(heartbeat_sweep, "_try_deliver_heartbeat_wake", _fake_wake)
+    monkeypatch.setattr(heartbeat_sweep, "_is_agent_currently_disabled", _fake_recheck)
+
+    report = await heartbeat_sweep.sweep_once()
+
+    assert wake_calls == [], "wake must not fire when pre-wake recheck reports disabled"
+    assert report["woke"] == 0
+    assert report["paused_skipped"] == 1
+
+
+# ---------------------------------------------------------------------
 # Helper: _fetch_disabled_agent_ids (per-agent disable via
 # ``agent_heartbeats.enabled = FALSE``)
 # ---------------------------------------------------------------------

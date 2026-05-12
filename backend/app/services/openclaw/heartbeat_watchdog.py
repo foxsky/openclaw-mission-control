@@ -54,6 +54,7 @@ from app.services.openclaw.gateway_rpc import models_auth_status
 from app.services.openclaw.heartbeat_sweep import (
     _fetch_disabled_agent_ids,
     _fetch_paused_board_ids,
+    _is_agent_currently_disabled,
 )
 from app.services.openclaw.provisioning import _is_disabled_heartbeat_every
 
@@ -270,6 +271,10 @@ async def sweep_null_deadlines_once(session: AsyncSession) -> SweepReport:
     new_this_sweep: dict[UUID, int] = {}
 
     for agent in candidates:
+        # TOCTOU: pause may have committed since the filter above.
+        # Same pre-action recheck the sweep does before waking.
+        if await _is_agent_currently_disabled(session, agent.id):
+            continue
         try:
             new_deadline = compute_repair_deadline(agent, now=now)
         except Exception as exc:  # pragma: no cover - defensive

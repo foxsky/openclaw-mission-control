@@ -97,6 +97,9 @@ class _FakeExecResult:
     def all(self) -> list[Any]:
         return self.rows
 
+    def first(self) -> Any:
+        return self.rows[0] if self.rows else None
+
     def one(self) -> Any:
         if not self.rows:
             return 0
