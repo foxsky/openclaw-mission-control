@@ -1580,9 +1580,18 @@ class OpenClawGatewayProvisioner:
 
         control_plane = _control_plane_for_gateway(gateway)
         manager = manager_type(gateway, control_plane)
+        # Main agent (no board) always wants scheduled heartbeats.
+        # For board agents, gate the enable on whether ANY board on this
+        # gateway is still active — without this check, every agent
+        # lifecycle event would flip the global flag back on, silently
+        # erasing the operator's pause.
+        if board is None:
+            should_enable_heartbeats = True
+        else:
+            should_enable_heartbeats = await _any_board_active_on_gateway(gateway.id)
         await openclaw_call(
             "set-heartbeats",
-            {"enabled": True},
+            {"enabled": should_enable_heartbeats},
             config=GatewayClientConfig(
                 url=gateway.url,
                 token=gateway.token,

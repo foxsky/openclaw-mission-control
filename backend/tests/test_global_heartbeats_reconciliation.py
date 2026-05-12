@@ -180,6 +180,11 @@ async def test_apply_agent_lifecycle_enables_global_heartbeats(
         heartbeat_config={"every": "30m"},
     )
 
+    async def _fake_any_board_active(gateway_id):  # noqa: ANN001
+        return True
+
+    monkeypatch.setattr(provisioning, "_any_board_active_on_gateway", _fake_any_board_active)
+
     await provisioning.OpenClawGatewayProvisioner().apply_agent_lifecycle(
         agent=agent,
         gateway=gateway,
@@ -191,3 +196,83 @@ async def test_apply_agent_lifecycle_enables_global_heartbeats(
     )
 
     assert ("set-heartbeats", {"enabled": True}) in calls
+
+
+@pytest.mark.asyncio
+async def test_apply_agent_lifecycle_skips_enable_when_all_boards_paused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If every board on the gateway is paused, lifecycle must NOT
+    flip global heartbeats back on. Before this fix the call was
+    unconditional and would erase the operator's pause."""
+
+    calls: list[tuple[str, dict]] = []
+
+    async def _fake_openclaw_call(method, params=None, *, config=None, timeout=None):
+        calls.append((method, params or {}))
+        return {"ok": True}
+
+    async def _fake_ensure_session(session_key, *, config=None, label=None):
+        return None
+
+    async def _fake_send_message(message, *, session_key, config=None, deliver=False):
+        return {"ok": True}
+
+    async def _fake_provision(self, **kwargs):
+        return None
+
+    async def _fake_any_board_active(gateway_id):  # noqa: ANN001
+        return False
+
+    monkeypatch.setattr(provisioning, "openclaw_call", _fake_openclaw_call)
+    monkeypatch.setattr(provisioning, "ensure_session", _fake_ensure_session)
+    monkeypatch.setattr(provisioning, "send_message", _fake_send_message)
+    monkeypatch.setattr(
+        provisioning.BoardAgentLifecycleManager,
+        "provision",
+        _fake_provision,
+    )
+    monkeypatch.setattr(provisioning, "_any_board_active_on_gateway", _fake_any_board_active)
+
+    org_id = uuid4()
+    gateway = Gateway(
+        id=uuid4(),
+        organization_id=org_id,
+        name="GW",
+        url="ws://gateway.example/ws",
+        token="tok",
+        workspace_root="/tmp/openclaw",
+    )
+    board = Board(
+        id=uuid4(),
+        organization_id=org_id,
+        name="Paused Board",
+        slug="paused-board",
+        gateway_id=gateway.id,
+    )
+    agent = Agent(
+        id=uuid4(),
+        board_id=board.id,
+        gateway_id=gateway.id,
+        name="Worker",
+        openclaw_session_id="session:worker",
+        heartbeat_config={"every": "30m"},
+    )
+
+    await provisioning.OpenClawGatewayProvisioner().apply_agent_lifecycle(
+        agent=agent,
+        gateway=gateway,
+        board=board,
+        auth_token="secret-token",
+        user=None,
+        action="update",
+        wake=True,
+    )
+
+    set_heartbeats_calls = [c for c in calls if c[0] == "set-heartbeats"]
+    assert set_heartbeats_calls, "expected at least one set-heartbeats call"
+    for _method, params in set_heartbeats_calls:
+        assert params.get("enabled") is False, (
+            f"all-paused gateway must call set-heartbeats with enabled=False, "
+            f"got params={params}"
+        )

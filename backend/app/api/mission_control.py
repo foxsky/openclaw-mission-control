@@ -19,14 +19,22 @@ from app.services.openclaw.heartbeat_sweep import (
     _fetch_disabled_agent_ids,
     _fetch_paused_board_ids,
 )
+from app.services.openclaw.provisioning import _any_board_active_on_gateway
 
 logger = get_logger(__name__)
 
 
 async def _get_gateway_config_for_board(
     session: AsyncSession, board_id: UUID
-) -> GatewayClientConfig | None:
-    """Get gateway config for a board, with fallback URL if gateway has no URL configured."""
+) -> tuple[GatewayClientConfig | None, UUID | None]:
+    """Return (gateway config, gateway_id) for a board.
+
+    Gateway_id is returned alongside the config so the caller can pass
+    it to ``_any_board_active_on_gateway`` to compute the correct
+    multi-board ``set-heartbeats`` value without a second board lookup.
+    Falls back to the known gateway URL when the gateway row has no
+    URL configured.
+    """
     from app.models.gateways import Gateway
     from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 
@@ -36,7 +44,7 @@ async def _get_gateway_config_for_board(
     )
     if not board or not board.gateway_id:
         logger.warning("pause/resume: no board or gateway_id")
-        return None
+        return None, None
 
     dispatch = GatewayDispatchService(session)
     config = await dispatch.optional_gateway_config_for_board(board)
@@ -60,9 +68,9 @@ async def _get_gateway_config_for_board(
                 allow_insecure_tls=True,
             )
             logger.info("pause/resume: using fallback config")
-            return cfg
+            return cfg, board.gateway_id
 
-    return config
+    return config, board.gateway_id
 
 
 router = APIRouter(prefix="/api/mission-control", tags=["metrics"])
@@ -168,30 +176,40 @@ async def api_pause_board(board_id: str) -> dict[str, Any]:
             ON CONFLICT(agent_id) DO UPDATE SET enabled = FALSE, last_status = 'idle'
         """).bindparams(board_id=bid))
 
-        # Get gateway config while session is still open
-        config = await _get_gateway_config_for_board(session, bid)
+        # Get gateway config + id while session is still open
+        config, gateway_id = await _get_gateway_config_for_board(session, bid)
 
         await session.commit()
 
-    # Gateway `set-heartbeats` is global per gateway, not per-agent.
-    logger.info("pause: calling gateway RPC once globally config=%s", config)
-    if config is not None:
+    # Gateway `set-heartbeats` is global per gateway. Compute the value
+    # from the post-commit pause state: keep the flag enabled if any
+    # OTHER board on the same gateway is still active. This makes pause
+    # safe in a multi-board-per-gateway setup — pausing Board A on a
+    # shared gateway no longer silences Board B's agents.
+    if config is not None and gateway_id is not None:
+        should_enable = await _any_board_active_on_gateway(gateway_id)
+        logger.info(
+            "pause: calling gateway RPC any_board_active=%s gateway_id=%s",
+            should_enable,
+            gateway_id,
+        )
         try:
             result = await openclaw_call(
                 "set-heartbeats",
-                {"enabled": False},
+                {"enabled": should_enable},
                 config=config,
             )
-            logger.info("pause: set-heartbeats success enabled=False result=%s", result)
+            logger.info("pause: set-heartbeats success enabled=%s result=%s", should_enable, result)
         except Exception as exc:
             logger.warning(
-                "pause_board.set_heartbeats_failed board_id=%s enabled=False error=%s",
+                "pause_board.set_heartbeats_failed board_id=%s enabled=%s error=%s",
                 board_id,
+                should_enable,
                 str(exc),
                 exc_info=True,
             )
 
-    logger.info("board %s paused (global heartbeats disabled on gateway)", board_id)
+    logger.info("board %s paused", board_id)
     return {"ok": True, "board_id": board_id, "is_paused": True, "paused_at": now}
 
 
@@ -225,29 +243,37 @@ async def api_resume_board(board_id: str) -> dict[str, Any]:
             ON CONFLICT(agent_id) DO UPDATE SET enabled = TRUE, last_status = 'idle'
         """).bindparams(board_id=bid))
 
-        # Fetch gateway config while session is still open
-        config = await _get_gateway_config_for_board(session, bid)
+        # Fetch gateway config + id while session is still open
+        config, gateway_id = await _get_gateway_config_for_board(session, bid)
 
         await session.commit()
 
-    # Gateway `set-heartbeats` is global per gateway, not per-agent.
-    if config is not None:
+    # Gateway `set-heartbeats` is global per gateway. After this resume
+    # commit there is at least one active board (the one just resumed),
+    # so the flag should be enabled. We still query
+    # ``_any_board_active_on_gateway`` for symmetry with pause and to
+    # stay correct against any concurrent pause activity.
+    if config is not None and gateway_id is not None:
+        should_enable = await _any_board_active_on_gateway(gateway_id)
         try:
             result = await openclaw_call(
                 "set-heartbeats",
-                {"enabled": True},
+                {"enabled": should_enable},
                 config=config,
             )
-            logger.info("resume: set-heartbeats success enabled=True result=%s", result)
+            logger.info(
+                "resume: set-heartbeats success enabled=%s result=%s", should_enable, result
+            )
         except Exception as exc:
             logger.warning(
-                "resume_board.set_heartbeats_failed board_id=%s enabled=True error=%s",
+                "resume_board.set_heartbeats_failed board_id=%s enabled=%s error=%s",
                 board_id,
+                should_enable,
                 str(exc),
                 exc_info=True,
             )
 
-    logger.info("board %s resumed (global heartbeats re-enabled on gateway)", board_id)
+    logger.info("board %s resumed", board_id)
     return {"ok": True, "board_id": board_id, "is_paused": False}
 
 
