@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlmodel import col
 from sse_starlette.sse import EventSourceResponse
 
@@ -33,6 +33,7 @@ from app.services.mentions import extract_mentions, matches_agent_mention
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import openclaw_call
+from app.services.openclaw.provisioning import _any_board_active_on_gateway
 
 logger = get_logger(__name__)
 
@@ -170,8 +171,43 @@ async def _send_control_command(
         skipped,
     )
 
-    # Gateway `set-heartbeats` is global per gateway, not per-agent.
-    enable = not is_pause
+    # Persist the same durable pause state the API endpoint writes
+    # (board_pause_states + agent_heartbeats.enabled). This unifies the
+    # two pause flows so sweep/watchdog/status-API see consistent state
+    # regardless of which path the operator used.
+    now = utcnow()
+    if is_pause:
+        await session.execute(text("""
+                INSERT INTO board_pause_states (board_id, is_paused, paused_at, paused_by)
+                VALUES (:board_id, TRUE, :paused_at, 'human')
+                ON CONFLICT(board_id) DO UPDATE SET
+                    is_paused = TRUE, paused_at = EXCLUDED.paused_at, paused_by = 'human'
+                """).bindparams(board_id=board.id, paused_at=now))
+        await session.execute(text("""
+                INSERT INTO agent_heartbeats (agent_id, enabled, last_status)
+                SELECT id, FALSE, 'idle' FROM agents WHERE board_id = :board_id
+                ON CONFLICT(agent_id) DO UPDATE SET enabled = FALSE, last_status = 'idle'
+                """).bindparams(board_id=board.id))
+    else:
+        await session.execute(text("""
+                INSERT INTO board_pause_states (board_id, is_paused, paused_at, paused_by)
+                VALUES (:board_id, FALSE, NULL, NULL)
+                ON CONFLICT(board_id) DO UPDATE SET
+                    is_paused = FALSE, paused_at = NULL, paused_by = NULL
+                """).bindparams(board_id=board.id))
+        await session.execute(text("""
+                INSERT INTO agent_heartbeats (agent_id, enabled, last_status)
+                SELECT id, TRUE, 'idle' FROM agents WHERE board_id = :board_id
+                ON CONFLICT(agent_id) DO UPDATE SET enabled = TRUE, last_status = 'idle'
+                """).bindparams(board_id=board.id))
+    await session.commit()
+
+    # Gateway `set-heartbeats` is global per gateway. After the writes
+    # above ``_any_board_active_on_gateway`` reflects the new state and
+    # keeps the flag enabled if any sibling board is still active —
+    # pausing one board on a shared gateway no longer silences the
+    # others.
+    enable = await _any_board_active_on_gateway(board.gateway_id) if board.gateway_id else False
     try:
         await openclaw_call(
             "set-heartbeats",
@@ -188,7 +224,7 @@ async def _send_control_command(
             str(exc),
         )
     logger.info(
-        "board_memory.control_command.heartbeats " "command=%s board_id=%s enabled=%s",
+        "board_memory.control_command.heartbeats command=%s board_id=%s enabled=%s",
         command,
         board.id,
         enable,

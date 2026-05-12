@@ -8,6 +8,9 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import app.services.openclaw.provisioning as provisioning
@@ -17,6 +20,40 @@ from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.organizations import Organization
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
+
+
+@pytest_asyncio.fixture
+async def pause_tables(sqlite_engine: AsyncEngine) -> None:
+    """Create the raw-DDL tables that the pause flow writes to.
+
+    ``board_pause_states`` and ``agent_heartbeats`` live outside the
+    SQLModel metadata (they're created via Postgres migrations on prod),
+    so ``SQLModel.metadata.create_all`` doesn't conjure them. The chat-
+    command pause flow now writes both, so tests that exercise that
+    path need them to exist on the sqlite engine.
+    """
+    async with sqlite_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS board_pause_states ("
+                "  board_id TEXT PRIMARY KEY,"
+                "  is_paused BOOLEAN NOT NULL DEFAULT FALSE,"
+                "  paused_at TEXT,"
+                "  paused_by TEXT"
+                ")"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS agent_heartbeats ("
+                "  agent_id TEXT PRIMARY KEY,"
+                "  enabled BOOLEAN NOT NULL DEFAULT TRUE,"
+                "  last_status TEXT,"
+                "  checkin_deadline_at TEXT,"
+                "  miss_count INTEGER NOT NULL DEFAULT 0"
+                ")"
+            )
+        )
 
 
 def _seed_org_gateway_board(
@@ -46,6 +83,7 @@ def _seed_org_gateway_board(
 async def test_board_memory_pause_resume_sends_single_global_set_heartbeats(
     monkeypatch: pytest.MonkeyPatch,
     sqlite_session: AsyncSession,
+    pause_tables: None,
 ) -> None:
     sent_messages: list[str] = []
     rpc_calls: list[tuple[str, dict]] = []
@@ -92,6 +130,21 @@ async def test_board_memory_pause_resume_sends_single_global_set_heartbeats(
         session.add(a)
     await session.commit()
 
+    # The real helper opens its own production-DB session. Route it
+    # through the test's sqlite session so it sees the writes this
+    # test will commit to ``board_pause_states``.
+    async def _fake_any_board_active(gateway_id):  # noqa: ANN001
+        rows = await session.execute(text("""
+                SELECT b.id FROM boards b
+                LEFT JOIN board_pause_states bps ON bps.board_id = b.id
+                WHERE b.gateway_id = :gateway_id
+                  AND COALESCE(bps.is_paused, FALSE) = FALSE
+                LIMIT 1
+                """).bindparams(gateway_id=gateway_id))
+        return rows.first() is not None
+
+    monkeypatch.setattr(board_memory, "_any_board_active_on_gateway", _fake_any_board_active)
+
     actor = board_memory.ActorContext(actor_type="user", user=None, agent=None)
     dispatch = board_memory.GatewayDispatchService(session)
     config = GatewayClientConfig(
@@ -120,11 +173,119 @@ async def test_board_memory_pause_resume_sends_single_global_set_heartbeats(
 
     # Two agents → two chat messages per command = 4 total
     assert sent_messages == ["/pause", "/pause", "/resume", "/resume"]
-    # One global RPC per command, not per-agent
+    # One global RPC per command, not per-agent. Single-board: pause
+    # → no active boards → enabled=False; resume → board active again.
     assert rpc_calls == [
         ("set-heartbeats", {"enabled": False}),
         ("set-heartbeats", {"enabled": True}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_board_memory_pause_keeps_heartbeats_on_when_other_board_active(
+    monkeypatch: pytest.MonkeyPatch,
+    sqlite_session: AsyncSession,
+    pause_tables: None,
+) -> None:
+    """Multi-board safety: pausing Board A on a shared gateway must NOT
+    silence Board B's agents. Before this fix the chat-command path
+    unconditionally sent ``set-heartbeats {enabled: False}`` on
+    ``/pause``, which would stop scheduling for every agent on the
+    gateway — including the still-active second board."""
+
+    rpc_calls: list[tuple[str, dict]] = []
+    sent_messages: list[str] = []
+
+    async def _fake_try_send(self, *, session_key, config, agent_name, message, deliver=False):
+        sent_messages.append(message)
+        return None
+
+    async def _fake_openclaw_call(method, params=None, *, config=None, timeout=None):
+        rpc_calls.append((method, params or {}))
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        board_memory.GatewayDispatchService,
+        "try_send_agent_message",
+        _fake_try_send,
+    )
+    monkeypatch.setattr(board_memory, "openclaw_call", _fake_openclaw_call, raising=False)
+
+    session = sqlite_session
+    org_id = uuid4()
+    org = Organization(id=org_id, name="Acme")
+    gateway = Gateway(
+        id=uuid4(),
+        organization_id=org_id,
+        name="GW",
+        url="ws://gateway.example/ws",
+        token="tok",
+        workspace_root="/tmp/openclaw",
+    )
+    board_a = Board(
+        id=uuid4(),
+        organization_id=org_id,
+        name="Board A",
+        slug="board-a",
+        gateway_id=gateway.id,
+    )
+    board_b = Board(
+        id=uuid4(),
+        organization_id=org_id,
+        name="Board B",
+        slug="board-b",
+        gateway_id=gateway.id,
+    )
+    agent_a = Agent(
+        id=uuid4(),
+        board_id=board_a.id,
+        gateway_id=gateway.id,
+        name="Worker A",
+        openclaw_session_id="session:a",
+        heartbeat_config={"every": "30m"},
+    )
+    session.add(org)
+    session.add(gateway)
+    session.add(board_a)
+    session.add(board_b)
+    session.add(agent_a)
+    await session.commit()
+
+    async def _fake_any_board_active(gateway_id):  # noqa: ANN001
+        rows = await session.execute(text("""
+                SELECT b.id FROM boards b
+                LEFT JOIN board_pause_states bps ON bps.board_id = b.id
+                WHERE b.gateway_id = :gateway_id
+                  AND COALESCE(bps.is_paused, FALSE) = FALSE
+                LIMIT 1
+                """).bindparams(gateway_id=gateway_id))
+        return rows.first() is not None
+
+    monkeypatch.setattr(board_memory, "_any_board_active_on_gateway", _fake_any_board_active)
+
+    actor = board_memory.ActorContext(actor_type="user", user=None, agent=None)
+    dispatch = board_memory.GatewayDispatchService(session)
+    config = GatewayClientConfig(
+        url=gateway.url,
+        token=gateway.token,
+        allow_insecure_tls=True,
+        disable_device_pairing=True,
+    )
+
+    # Pause only Board A; Board B stays active.
+    await board_memory._send_control_command(
+        session=session,
+        board=board_a,
+        actor=actor,
+        dispatch=dispatch,
+        config=config,
+        command="/pause",
+    )
+
+    # Board B is still active on the same gateway → gateway flag must
+    # stay enabled even though Board A was paused.
+    assert sent_messages == ["/pause"]
+    assert rpc_calls == [("set-heartbeats", {"enabled": True})]
 
 
 @pytest.mark.asyncio
