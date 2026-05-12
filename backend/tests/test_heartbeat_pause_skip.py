@@ -47,10 +47,11 @@ class _FakeExecResult:
 @dataclass
 class _FakeSession:
     """Session double supporting ``.exec`` (SQLModel selects) and
-    ``.execute`` (raw text for board_pause_states)."""
+    ``.execute`` (raw text — disambiguated by SQL fragment)."""
 
     agents: list[Agent] = field(default_factory=list)
     paused_board_ids: set[UUID] = field(default_factory=set)
+    disabled_agent_ids: set[UUID] = field(default_factory=set)
     repair_events: list[AgentHeartbeatRepairEvent] = field(default_factory=list)
     update_rowcounts: list[int] = field(default_factory=list)
     commits: int = 0
@@ -68,9 +69,12 @@ class _FakeSession:
         return _FakeExecResult(rows=list(self.agents))
 
     async def execute(self, statement: Any) -> _FakeExecResult:
-        # The only ``execute`` caller exercised here is
-        # ``_fetch_paused_board_ids`` selecting board_id rows.
-        return _FakeExecResult(rows=[(bid,) for bid in self.paused_board_ids])
+        sql = str(statement).lower()
+        if "board_pause_states" in sql:
+            return _FakeExecResult(rows=[(bid,) for bid in self.paused_board_ids])
+        if "agent_heartbeats" in sql:
+            return _FakeExecResult(rows=[(aid,) for aid in self.disabled_agent_ids])
+        return _FakeExecResult(rows=[])
 
     def add(self, value: Any) -> None:
         if isinstance(value, AgentHeartbeatRepairEvent):
@@ -225,6 +229,99 @@ async def test_watchdog_skips_null_deadline_agent_on_paused_board(
         last_seen_at=now - timedelta(minutes=40),
     )
     session = _FakeSession(agents=[agent], paused_board_ids={paused_board})
+
+    monkeypatch.setattr(
+        "app.services.openclaw.heartbeat_watchdog._count_recent_repairs_by_agent",
+        _fake_count_by_agent,
+    )
+
+    report = await heartbeat_watchdog.sweep_null_deadlines_once(session)  # type: ignore[arg-type]
+
+    assert report.total_scanned == 0
+    assert report.repaired == 0
+    assert len(session.repair_events) == 0
+
+
+# ---------------------------------------------------------------------
+# Helper: _fetch_disabled_agent_ids (per-agent disable via
+# ``agent_heartbeats.enabled = FALSE``)
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_disabled_agent_ids_returns_disabled_set() -> None:
+    disabled = {uuid4(), uuid4(), uuid4()}
+    session = _FakeSession(disabled_agent_ids=disabled)
+
+    result = await heartbeat_sweep._fetch_disabled_agent_ids(session)  # type: ignore[arg-type]
+
+    assert result == disabled
+
+
+@pytest.mark.asyncio
+async def test_fetch_disabled_agent_ids_empty_when_none() -> None:
+    session = _FakeSession()
+
+    result = await heartbeat_sweep._fetch_disabled_agent_ids(session)  # type: ignore[arg-type]
+
+    assert result == set()
+
+
+# ---------------------------------------------------------------------
+# Sweep + watchdog must skip agents with agent_heartbeats.enabled=FALSE
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_overdue_agent_with_disabled_heartbeat_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pause writes ``agent_heartbeats.enabled = FALSE`` per agent.
+    Sweep must skip those agents even if their board is not in the
+    paused-board set (e.g., partial pause state)."""
+
+    agent = _overdue_agent(board_id=None)  # bypass board-pause path
+    session = _FakeSession(
+        agents=[agent],
+        disabled_agent_ids={agent.id},
+    )
+
+    @asynccontextmanager
+    async def _fake_maker():
+        yield session
+
+    wake_calls: list[UUID] = []
+
+    async def _fake_wake(**kwargs: Any) -> bool:
+        wake_calls.append(kwargs["agent"].id)
+        return True
+
+    monkeypatch.setattr(heartbeat_sweep, "async_session_maker", _fake_maker)
+    monkeypatch.setattr(heartbeat_sweep, "_try_deliver_heartbeat_wake", _fake_wake)
+
+    report = await heartbeat_sweep.sweep_once()
+
+    assert wake_calls == []
+    assert report["woke"] == 0
+    assert report["paused_skipped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_watchdog_skips_null_deadline_agent_with_disabled_heartbeat_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = utcnow()
+    agent = Agent(
+        id=uuid4(),
+        gateway_id=uuid4(),
+        board_id=None,
+        name="Supervisor",
+        status="online",
+        heartbeat_config={"every": "5m"},
+        checkin_deadline_at=None,
+        last_seen_at=now - timedelta(minutes=40),
+    )
+    session = _FakeSession(agents=[agent], disabled_agent_ids={agent.id})
 
     monkeypatch.setattr(
         "app.services.openclaw.heartbeat_watchdog._count_recent_repairs_by_agent",

@@ -105,6 +105,21 @@ async def _fetch_paused_board_ids(session: AsyncSession) -> set[UUID]:
     return {row[0] for row in result.all()}
 
 
+async def _fetch_disabled_agent_ids(session: AsyncSession) -> set[UUID]:
+    """Return agent IDs with ``agent_heartbeats.enabled = FALSE``.
+
+    Per-agent disable set, populated by the same pause endpoint that
+    writes ``board_pause_states.is_paused`` but at agent granularity.
+    Sweep and watchdog skip these agents regardless of board state, so
+    a future multi-board-per-gateway setup can quiet one board without
+    touching agents on another board that shares the gateway.
+    """
+    result = await session.execute(
+        text("SELECT agent_id FROM agent_heartbeats WHERE enabled = FALSE")
+    )
+    return {row[0] for row in result.all()}
+
+
 async def _try_deliver_heartbeat_wake(
     *,
     session: AsyncSession,
@@ -162,6 +177,7 @@ async def sweep_once() -> dict[str, int]:
 
     async with async_session_maker() as session:
         paused_boards = await _fetch_paused_board_ids(session)
+        disabled_agents = await _fetch_disabled_agent_ids(session)
         agents = (
             await session.exec(select(Agent).where(col(Agent.checkin_deadline_at).is_not(None)))
         ).all()
@@ -170,6 +186,9 @@ async def sweep_once() -> dict[str, int]:
             if not _heartbeat_enabled(agent):
                 continue
             if agent.board_id is not None and agent.board_id in paused_boards:
+                paused_skipped += 1
+                continue
+            if agent.id in disabled_agents:
                 paused_skipped += 1
                 continue
             scanned += 1
