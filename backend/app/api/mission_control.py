@@ -15,6 +15,10 @@ from app.models.agents import Agent
 from app.models.boards import Board
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import openclaw_call
+from app.services.openclaw.heartbeat_sweep import (
+    _fetch_disabled_agent_ids,
+    _fetch_paused_board_ids,
+)
 
 logger = get_logger(__name__)
 
@@ -82,11 +86,16 @@ async def mission_control_heartbeats() -> dict[str, Any]:
                 await session.exec(select(Board).where(col(Board.id).in_(board_ids)))
             ).all()
             boards = {b.id: b for b in board_rows}
+        paused_boards = await _fetch_paused_board_ids(session)
+        disabled_agents = await _fetch_disabled_agent_ids(session)
 
     monitored = []
     for agent in agents:
         if not _heartbeat_enabled(agent):
             continue
+        is_paused = (
+            agent.board_id is not None and agent.board_id in paused_boards
+        ) or agent.id in disabled_agents
         deadline = agent.checkin_deadline_at
         monitored.append(
             {
@@ -95,7 +104,7 @@ async def mission_control_heartbeats() -> dict[str, Any]:
                 "board_id": str(agent.board_id) if agent.board_id else None,
                 "board_name": (boards[agent.board_id].name if agent.board_id in boards else None),
                 "status": agent.status,
-                "enabled": True,
+                "enabled": not is_paused,
                 "last_seen_at": (
                     agent.last_seen_at.isoformat() + "Z" if agent.last_seen_at else None
                 ),
@@ -107,7 +116,9 @@ async def mission_control_heartbeats() -> dict[str, Any]:
                 "seconds_until_deadline": (
                     int((deadline - now).total_seconds()) if deadline else None
                 ),
-                "overdue": bool(deadline and deadline < now),
+                # Paused agents are intentionally not heartbeating — don't surface
+                # them as overdue even if their stale deadline is in the past.
+                "overdue": bool(deadline and deadline < now and not is_paused),
                 "is_board_lead": bool(agent.is_board_lead),
             }
         )
