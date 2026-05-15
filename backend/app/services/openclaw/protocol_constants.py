@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 # Bumped historically; matches the gateway repo. Both
 # ``gateway_rpc.py`` (one-shot RPC) and ``mc_gateway_subscriber``
 # (long-lived) import from here so they cannot drift.
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 # Operator role + scopes for backend-style clients (MC backend, the
 # gateway-event subscriber). Distinct from per-agent X-Agent-Token
