@@ -1011,8 +1011,15 @@ def _updated_agent_list(
         # (silent Supervisor) is invisible until an operator reports
         # it. Workers are intentionally excluded — they report via
         # task comments and should not bypass the Supervisor.
+        #
+        # ``subagents.delegationMode: "prefer"`` (OpenClaw 5.9 prompt-
+        # only knob) steers the Supervisor toward spawning ACP children
+        # for /codex, /simplify, and parallel-mode work instead of doing
+        # the work inline. Manually set on .60's existing Supervisor;
+        # seed here so new boards inherit it without manual config.
         if agent_id.startswith(_LEAD_AGENT_PREFIX):
             entry["tools"] = {"alsoAllow": ["message"]}
+            entry["subagents"] = {"delegationMode": "prefer"}
         new_list.append(entry)
 
     return new_list

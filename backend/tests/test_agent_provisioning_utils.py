@@ -281,8 +281,9 @@ def test_updated_agent_list_seeds_message_tool_for_new_lead_agent():
     reply on WhatsApp/Discord/etc. OpenClaw 5.12 doctor explicitly
     flags the gap. Fresh entries created by patch_agent_heartbeats
     start with only id/workspace/heartbeat by default — seed the
-    message tool for lead-* so newly provisioned boards don't ship
-    in a silent state."""
+    message tool and the OpenClaw 5.9 ``subagents.delegationMode``
+    prompt-only knob for lead-* so newly provisioned boards don't
+    ship in a silent state or with inline-do-it-yourself bias."""
     new_list = agent_provisioning._updated_agent_list(
         [],
         {
@@ -299,6 +300,7 @@ def test_updated_agent_list_seeds_message_tool_for_new_lead_agent():
             "workspace": "/tmp/workspace-lead",
             "heartbeat": {"every": "60s", "target": "last", "includeReasoning": False},
             "tools": {"alsoAllow": ["message"]},
+            "subagents": {"delegationMode": "prefer"},
         },
     ]
 
