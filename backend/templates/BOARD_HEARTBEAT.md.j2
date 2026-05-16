@@ -166,6 +166,14 @@ clears. If it reports a reconcile or link failure, report `HEARTBEAT_FAILED`.
    - health scan ran
    - one closest-to-done task was advanced, parked on a real routing object, or left alone because it is already waiting on a known owner
    - synthesis ran if the board is fully complete
+   - **mc-supervisor-gate enforcement.** If MC's heartbeat prompt
+     reported `action_required`, the gateway plugin will REJECT
+     `HEARTBEAT_OK` unless this tick ran at least one mutating tool
+     call (status PATCH, approval create/decide, nudge, comment,
+     blocker create/resolve, dependency edit). Either do the work or
+     return `HEARTBEAT_FAILED: <specific reason the action could not
+     be taken>`. Replying `HEARTBEAT_OK` without a mutation gets
+     bounced at `before_agent_finalize` and the turn re-runs.
 {% else %}
 # HEARTBEAT.md
 

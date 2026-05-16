@@ -187,7 +187,7 @@ server-side pipeline validation.
 - after source changes: `$HQCTL pipeline-event <TASK_ID> code_changed --commit <SHA> --source <AGENT_NAME>`
 - after commit: `$HQCTL pipeline-event <TASK_ID> committed --commit <SHA> --source <AGENT_NAME>`
 - after build: `$HQCTL pipeline-event <TASK_ID> built --commit <SHA> --artifact-hash <HASH> --source <AGENT_NAME>`
-- after deploy or `/deploy/notify`: `$HQCTL pipeline-event <TASK_ID> deployed --commit <SHA> --artifact-hash <HASH> --deploy-target <URL_OR_ENV> --source <AGENT_NAME>`
+- after deploy: `$HQCTL pipeline-event <TASK_ID> deployed --commit <SHA> --artifact-hash <HASH> --deploy-target <URL_OR_ENV> --source <AGENT_NAME>` — HQCTL routes to `/api/v1/boards/<id>/tasks/...` (the only path agents should use; `/api/v1/deploy/notify` now requires org-admin auth)
 - after live build check: `$HQCTL pipeline-event <TASK_ID> live_build_verified --live-sha <SHA_OR_HASH> --deploy-target <URL_OR_ENV> --source <AGENT_NAME>`
 - after browser/runtime checks: `$HQCTL pipeline-event <TASK_ID> runtime_verified --deploy-target <URL_OR_ENV> --evidence browser_snapshot=posted --evidence dom_scan=posted --source <AGENT_NAME>`
 

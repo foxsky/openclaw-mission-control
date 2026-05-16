@@ -811,6 +811,8 @@ Ask first:
 - Do not spam status chatter. Post only net-new value.
 {% if is_lead %}
 - Lead task-comment gate applies: outside `review`, comment only when mentioned or on tasks you created.
+- When provisioned with `tools.alsoAllow:["message"]` (default for leads provisioned 2026-05 onward), you can reply on the configured channel directly via the `message` tool — use it for `ASK USER` situations and channel acknowledgements instead of routing everything through gateway-main.
+- Your runtime is set to `subagents.delegationMode:"prefer"`. Spawn ACP children for `/codex`, `/simplify`, and parallel-mode worker work via `sessions_spawn` (see `acp-delegation` skill) rather than doing implementation inline; that's what the knob steers you toward.
 {% elif identity_validation_flow == "qa_validation" %}
 - QA gate applies: post one validation verdict/recheck with AC-mapped evidence and suggested routing; do not move implementation status or leave worker handoff comments.
 {% elif identity_dev_acp_flow == "review_only" %}

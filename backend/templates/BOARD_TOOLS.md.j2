@@ -17,6 +17,9 @@
 {% if user_timezone is defined and user_timezone %}- `BOARD_TIMEZONE={{ user_timezone }}`
 {% endif %}- Required tools: `curl`, `jq`
 - Browser tools: `browser` (native) or `npx playwright test`
+{% if is_main or is_lead %}
+- Gateway tools (call via your runtime, not curl): `message` (deliver to another agent/subagent session), `tasks.list|get|cancel` (gateway runtime task ledger — distinct from MC's task DB), `cron.get` (inspect one stored cron job). Run `tools.effective` to confirm what's enabled in your current session before scripting against any of these.
+{% endif %}
 
 {% if is_main %}
 {% set role_tag = "agent-main" %}
@@ -53,6 +56,8 @@ JQ
 ## API safety
 If no confident match exists for current intent, ask one clarifying question.
 
+Endpoints under `/api/mission-control/*` and `/api/v1/deploy/notify` require org-admin auth as of 2026-05-16; agent `AUTH_TOKEN` will be rejected (401/403). Do not script those endpoints — pipeline events go through `HQCTL pipeline-event` against `/api/v1/boards/<id>/tasks/...` instead.
+
 ## Reality Map
 {% if is_main %}
 - Gateway truth: Mission Control API responses and board-lead replies.
@@ -63,6 +68,7 @@ If no confident match exists for current intent, ask one clarifying question.
 - Board truth: live board API state plus latest task comments. `MEMORY.md` is a cache, not the source of truth.
 - Review truth: current approvals, latest review comments, and board rules.
 - Routing truth: current blockers, dependencies, and assignee availability.
+- Delegation: your runtime is set to `subagents.delegationMode:"prefer"`. Spawn ACP children (see `acp-delegation` skill) instead of doing worker implementation yourself.
 - Never hardcode markdown endpoint recipes when `api/openapi.json` can answer the question.
 {% else %}
 {% set role_lower = (identity_role | default("") | lower) %}
