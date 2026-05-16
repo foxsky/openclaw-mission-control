@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -69,10 +70,25 @@ def _compute_jitter(base_delay: float) -> float:
     return random.uniform(0, min(settings.rq_dispatch_retry_max_seconds / 10, base_delay * 0.1))
 
 
-async def flush_queue(*, block: bool = False, block_timeout: float = 0) -> int:
-    """Consume one queue batch and dispatch by task type."""
+async def flush_queue(
+    *,
+    block: bool = False,
+    block_timeout: float = 0,
+    stop_event: asyncio.Event | None = None,
+) -> int:
+    """Consume one queue batch and dispatch by task type.
+
+    ``stop_event`` (optional): when set, the loop returns before the next
+    dequeue. An in-flight handler is NOT interrupted — it runs to
+    completion before the loop checks the flag again. This gives systemd
+    a graceful drain on SIGTERM/SIGINT: the popped task finishes (within
+    the unit's TimeoutStopSec budget) rather than being silently dropped
+    by ``brpop``'s atomic pop semantics.
+    """
     processed = 0
     while True:
+        if stop_event is not None and stop_event.is_set():
+            break
         try:
             task = dequeue_task(
                 settings.rq_queue_name,
@@ -138,12 +154,37 @@ async def flush_queue(*, block: bool = False, block_timeout: float = 0) -> int:
 
 
 async def _run_worker_loop() -> None:
-    while True:
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    def _request_stop(signal_name: str) -> None:
+        if stop_event.is_set():
+            return
+        logger.info(
+            "queue.worker.shutdown_requested",
+            extra={"signal": signal_name, "queue_name": settings.rq_queue_name},
+        )
+        stop_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _request_stop, sig.name)
+        except (NotImplementedError, RuntimeError):
+            # Signal handlers via the event loop are POSIX-only; on Windows
+            # or when running inside an existing event loop without signal
+            # support we fall back to the previous best-effort shutdown
+            # (KeyboardInterrupt at the script level).
+            pass
+
+    while not stop_event.is_set():
         try:
             await flush_queue(
                 block=True,
-                # Keep a finite timeout so scheduled tasks are periodically drained.
+                # Keep a finite timeout so scheduled tasks are periodically drained
+                # AND so the loop checks ``stop_event`` between BRPOP ticks (max
+                # graceful-shutdown delay = block timeout + longest in-flight task).
                 block_timeout=_WORKER_BLOCK_TIMEOUT_SECONDS,
+                stop_event=stop_event,
             )
         except Exception:
             logger.exception(

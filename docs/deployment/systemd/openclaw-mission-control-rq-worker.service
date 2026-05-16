@@ -19,6 +19,12 @@ EnvironmentFile=-REPO_ROOT/backend/.env
 ExecStart=uv run python ../scripts/rq worker
 Restart=on-failure
 RestartSec=5
+# Worker installs SIGTERM/SIGINT handlers that drain the in-flight task
+# before exiting; default systemd 90s is enough for our handler budgets
+# (lifecycle reconcile ~ seconds, webhook dispatch ~ seconds, deploy
+# parity ~ tens of seconds). Bump if you add a long-running task type.
+TimeoutStopSec=120
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=default.target
