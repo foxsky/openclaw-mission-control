@@ -1000,9 +1000,21 @@ def _updated_agent_list(
     for agent_id, (workspace_path, heartbeat) in entry_by_id.items():
         if agent_id in updated_ids:
             continue
-        new_list.append(
-            {"id": agent_id, "workspace": workspace_path, "heartbeat": heartbeat},
-        )
+        entry: dict[str, Any] = {
+            "id": agent_id,
+            "workspace": workspace_path,
+            "heartbeat": heartbeat,
+        }
+        # Channel-routed agents (Supervisor lead-* and main) need the
+        # ``message`` tool to reply on WhatsApp/Discord/etc. Doctor on
+        # 5.12 flags this gap explicitly and the fix is invisible until
+        # an operator notices a silent agent. Seed it here so newly
+        # created entries start in the right shape; existing entries
+        # preserve any operator-set ``tools`` via the dict(raw_entry)
+        # shallow copy above.
+        if agent_id == "main" or agent_id.startswith("lead-"):
+            entry["tools"] = {"alsoAllow": ["message"]}
+        new_list.append(entry)
 
     return new_list
 

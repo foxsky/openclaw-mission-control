@@ -276,6 +276,57 @@ def test_updated_agent_list_keeps_disabled_heartbeat_entry_with_minimal_raw_shap
     assert new_list == raw_list
 
 
+def test_updated_agent_list_seeds_message_tool_for_new_lead_agent():
+    """Channel-routed agents (Supervisor lead-* and main) need
+    ``tools.alsoAllow: ["message"]`` to reply on WhatsApp/Discord/etc.
+    OpenClaw 5.12 doctor explicitly flags the gap. Fresh entries
+    created by patch_agent_heartbeats start with only id/workspace/
+    heartbeat by default — seed the message tool for lead-* and main
+    so newly provisioned boards don't ship in a silent state."""
+    new_list = agent_provisioning._updated_agent_list(
+        [],
+        {
+            "lead-aaaa1234-1111-2222-3333-444444444444": (
+                "/tmp/workspace-lead",
+                {"every": "60s", "target": "last", "includeReasoning": False},
+            ),
+        },
+    )
+
+    assert new_list == [
+        {
+            "id": "lead-aaaa1234-1111-2222-3333-444444444444",
+            "workspace": "/tmp/workspace-lead",
+            "heartbeat": {"every": "60s", "target": "last", "includeReasoning": False},
+            "tools": {"alsoAllow": ["message"]},
+        },
+    ]
+
+
+def test_updated_agent_list_does_not_seed_message_tool_for_worker_agents():
+    """Workers (mc-* prefix) must NOT get the message tool seeded —
+    they execute work and report via task comments, not channel
+    replies. Granting message tool would let them bypass the
+    Supervisor and message channels directly."""
+    new_list = agent_provisioning._updated_agent_list(
+        [],
+        {
+            "mc-3461451b-5824-4ed0-872c-d14d5d2be107": (
+                "/tmp/workspace-worker",
+                {"every": "60s", "target": "last", "includeReasoning": False},
+            ),
+        },
+    )
+
+    assert new_list == [
+        {
+            "id": "mc-3461451b-5824-4ed0-872c-d14d5d2be107",
+            "workspace": "/tmp/workspace-worker",
+            "heartbeat": {"every": "60s", "target": "last", "includeReasoning": False},
+        },
+    ]
+
+
 def test_updated_agent_list_keeps_disabled_heartbeat_entry_with_stale_model():
     raw_list = [
         {
