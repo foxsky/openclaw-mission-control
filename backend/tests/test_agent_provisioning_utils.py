@@ -1797,6 +1797,18 @@ def test_default_heartbeat_config_has_isolation():
     assert DEFAULT_HEARTBEAT_CONFIG["lightContext"] is False
 
 
+def test_default_heartbeat_config_opts_into_skip_when_busy():
+    """OpenClaw 5.5+ feature: defer heartbeat turns when subagent or
+    nested-command lanes are busy. Default-on for MC because the
+    Supervisor's delegationMode=prefer flow opens those lanes routinely
+    via ACP children for /codex, /simplify, and parallel-mode work.
+    The gateway retries busy skips without advancing the schedule, so
+    deferred heartbeats fire as soon as the lane clears."""
+    from app.services.openclaw.constants import DEFAULT_HEARTBEAT_CONFIG
+
+    assert DEFAULT_HEARTBEAT_CONFIG["skipWhenBusy"] is True
+
+
 def test_board_lead_heartbeat_config_preserves_isolated_session():
     agent = _AgentStub(
         name="Supervisor",

@@ -39,6 +39,19 @@ DEFAULT_HEARTBEAT_CONFIG: dict[str, Any] = {
     # bootstrap context and MUST NOT be paired with lightContext=True.
     "lightContext": False,
     "isolatedSession": True,
+    # Additive contention layer on top of MC's heartbeat governor.
+    # OpenClaw 5.5+ defers heartbeat turns when cron is active or
+    # queued for free; `skipWhenBusy: true` extends that to subagent
+    # and nested-command lanes — exactly the contention path our
+    # Supervisor opens up when it spawns ACP children for /codex,
+    # /simplify, and parallel-mode work. Busy skips are retried
+    # without advancing the schedule, so the deferred heartbeat
+    # fires as soon as the contended lane clears. Safe alongside
+    # MC's DB-owned governor (wake_attempts, check-in deadlines,
+    # paused boards, stuck-task nudges) — it operates at a strictly
+    # narrower layer (gateway-internal lane pressure) and never
+    # overlaps MC's task-table semantics.
+    "skipWhenBusy": True,
 }
 # Note: gateway-only fields (model, ackMaxChars, prompt) are not included
 # here. They are preserved during config.patch merges because the merge
