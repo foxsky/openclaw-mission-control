@@ -88,29 +88,16 @@ jobs:
           cd /home/mcontrol/openclaw-mission-control/frontend
           npm run build
 
-      - name: Restart mc-backend
+      - name: Restart backend services
         if: steps.shas.outputs.needed == 'true' && steps.surfaces.outputs.backend == 'true'
+        # systemctl handles multi-unit restart in parallel; one sleep covers
+        # all three since they spawn concurrently. Saves ~6s over sequential
+        # restart-and-wait per backend deploy.
         run: |
           set -euo pipefail
-          sudo /usr/bin/systemctl restart mc-backend
+          sudo /usr/bin/systemctl restart mc-backend mc-gateway-subscriber mc-rq-worker
           sleep 3
-          sudo /usr/bin/systemctl is-active mc-backend
-
-      - name: Restart mc-gateway-subscriber
-        if: steps.shas.outputs.needed == 'true' && steps.surfaces.outputs.backend == 'true'
-        run: |
-          set -euo pipefail
-          sudo /usr/bin/systemctl restart mc-gateway-subscriber
-          sleep 3
-          sudo /usr/bin/systemctl is-active mc-gateway-subscriber
-
-      - name: Restart mc-rq-worker
-        if: steps.shas.outputs.needed == 'true' && steps.surfaces.outputs.backend == 'true'
-        run: |
-          set -euo pipefail
-          sudo /usr/bin/systemctl restart mc-rq-worker
-          sleep 3
-          sudo /usr/bin/systemctl is-active mc-rq-worker
+          sudo /usr/bin/systemctl is-active mc-backend mc-gateway-subscriber mc-rq-worker
 
       - name: Restart mission-control
         if: steps.shas.outputs.needed == 'true' && steps.surfaces.outputs.frontend == 'true'

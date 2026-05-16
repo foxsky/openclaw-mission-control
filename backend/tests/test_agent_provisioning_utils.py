@@ -277,12 +277,12 @@ def test_updated_agent_list_keeps_disabled_heartbeat_entry_with_minimal_raw_shap
 
 
 def test_updated_agent_list_seeds_message_tool_for_new_lead_agent():
-    """Channel-routed agents (Supervisor lead-* and main) need
-    ``tools.alsoAllow: ["message"]`` to reply on WhatsApp/Discord/etc.
-    OpenClaw 5.12 doctor explicitly flags the gap. Fresh entries
-    created by patch_agent_heartbeats start with only id/workspace/
-    heartbeat by default — seed the message tool for lead-* and main
-    so newly provisioned boards don't ship in a silent state."""
+    """Supervisor lead-* needs ``tools.alsoAllow: ["message"]`` to
+    reply on WhatsApp/Discord/etc. OpenClaw 5.12 doctor explicitly
+    flags the gap. Fresh entries created by patch_agent_heartbeats
+    start with only id/workspace/heartbeat by default — seed the
+    message tool for lead-* so newly provisioned boards don't ship
+    in a silent state."""
     new_list = agent_provisioning._updated_agent_list(
         [],
         {

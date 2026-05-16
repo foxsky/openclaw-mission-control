@@ -10,6 +10,7 @@ from typing import Any
 _GATEWAY_OPENCLAW_AGENT_PREFIX = "mc-gateway-"
 _GATEWAY_AGENT_PREFIX = f"agent:{_GATEWAY_OPENCLAW_AGENT_PREFIX}"
 _GATEWAY_AGENT_SUFFIX = ":main"
+_LEAD_AGENT_PREFIX = "lead-"
 
 DEFAULT_HEARTBEAT_CONFIG: dict[str, Any] = {
     "every": "10m",

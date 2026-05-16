@@ -32,7 +32,10 @@ from app.models.gateways import Gateway
 from app.services.mc_gateway_subscriber.session_state_projector import (
     SessionState,
 )
-from app.services.openclaw.constants import _GATEWAY_OPENCLAW_AGENT_PREFIX
+from app.services.openclaw.constants import (
+    _GATEWAY_OPENCLAW_AGENT_PREFIX,
+    _LEAD_AGENT_PREFIX,
+)
 
 _NON_PK_COLUMNS = (
     "session_id",
@@ -62,7 +65,6 @@ _DIALECT_INSERTS: dict[str, Callable[..., Any]] = {
 # ``mc-gateway-`` candidates so they're attributed to the Gateway entry
 # rather than failing the Agent JOIN.
 _BOARD_AGENT_PREFIX = "mc-"
-_LEAD_AGENT_PREFIX = "lead-"
 
 _ORPHAN_OWNERSHIP: tuple[tuple[str, type[SQLModel], tuple[str, ...]], ...] = (
     (_BOARD_AGENT_PREFIX, Agent, (_GATEWAY_OPENCLAW_AGENT_PREFIX,)),
