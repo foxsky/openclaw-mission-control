@@ -25,6 +25,17 @@ def test_gateway_methods_include_openclaw_426_node_pair_remove() -> None:
     assert "node.pair.remove" in GATEWAY_METHODS
 
 
+def test_gateway_methods_include_openclaw_59_tasks_and_cron_get() -> None:
+    """OpenClaw 5.9 stabilized the task ledger RPC surface and added
+    ``cron.get``. Document them here so /gateways/commands surfaces
+    them as known methods; tasks.list returns gateway-runtime tasks
+    (active agent runs, subagent spawns, cron runs) — distinct from
+    MC's Postgres tasks table — and cron.get reads one stored cron
+    job by id."""
+    for method in ("tasks.list", "tasks.get", "tasks.cancel", "cron.get"):
+        assert method in GATEWAY_METHODS, f"{method} missing from GATEWAY_METHODS"
+
+
 def test_build_connect_params_defaults_to_device_pairing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

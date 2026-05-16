@@ -51,10 +51,11 @@ GatewayConnectMode = Literal["device", "control_ui"]
 
 # NOTE: These are the base gateway methods from the OpenClaw gateway repo.
 # The gateway can expose additional methods at runtime via channel plugins.
-# Updated for OpenClaw 2026.5.4 — catalog drift cleanup added 39 method
-# names that drifted across 4.27→5.4. Verified against the canonical
-# server-methods-list from the installed npm package on .60 (commit
-# 325df3e). Used as documentation surfaced via /gateways/commands.
+# Updated for OpenClaw 2026.5.12 — added cron.get (5.9) and the stabilized
+# tasks.list / tasks.get / tasks.cancel task-ledger RPC surface (5.9).
+# Verified against the canonical server-methods-list from the installed
+# npm package on .60 (commit f066dd2). Used as documentation surfaced via
+# /gateways/commands.
 GATEWAY_METHODS = [
     "health",
     "logs.tail",
@@ -160,12 +161,22 @@ GATEWAY_METHODS = [
     "node.invoke.result",
     "node.event",
     "cron.list",
+    "cron.get",
     "cron.status",
     "cron.add",
     "cron.update",
     "cron.remove",
     "cron.run",
     "cron.runs",
+    # Task ledger — gateway runtime task state distinct from MC's
+    # Postgres tasks table. tasks.list returns active agent runs,
+    # subagent spawns, and cron runs; tasks.get inspects one by id;
+    # tasks.cancel terminates a runtime task. NOT a replacement for
+    # MC's cancel_orphan_child (which operates on MC tasks whose
+    # parent is terminal — see project_orphan_recovery_layers.md).
+    "tasks.list",
+    "tasks.get",
+    "tasks.cancel",
     "plugin.approval.request",
     "plugin.approval.resolve",
     "plugin.approval.waitDecision",
