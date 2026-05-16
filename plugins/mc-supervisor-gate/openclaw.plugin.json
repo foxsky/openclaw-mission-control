@@ -1,0 +1,33 @@
+{
+  "id": "mc-supervisor-gate",
+  "name": "Mission Control Supervisor Gate",
+  "description": "Prevents Supervisor heartbeat OK shortcuts when Mission Control reported required action but no mutating action happened in the turn.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "supervisorAgentIds": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": ["lead-05002170-201b-4c66-bae1-26c0c833f206"]
+      },
+      "maxRevisionsPerRun": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 1
+      },
+      "actionRequiredPatterns": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "mutationPatterns": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "okReplyPatterns": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  }
+}

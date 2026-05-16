@@ -1,0 +1,5 @@
+node_modules/
+dist/
+contexts.json
+.env
+*.log

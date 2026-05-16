@@ -1,0 +1,17 @@
+{
+  "id": "whatsapp-scheduler",
+  "name": "WhatsApp Scheduler",
+  "description": "Detects scheduling intent in WhatsApp messages and creates Google Calendar events",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "calendarId": { "type": "string" },
+      "defaultLocation": { "type": "string", "default": "Prodater" },
+      "timezone": { "type": "string", "default": "-03:00" },
+      "contextStorePath": { "type": "string" },
+      "gogAccount": { "type": "string" },
+      "gogKeyringPassword": { "type": "string" }
+    }
+  }
+}
