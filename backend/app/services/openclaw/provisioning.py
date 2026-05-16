@@ -257,6 +257,32 @@ def _channel_heartbeat_visibility_patch(config_data: dict[str, Any]) -> dict[str
     return {"defaults": {"heartbeat": merged}}
 
 
+def _whatsapp_media_max_mb_patch(config_data: dict[str, Any]) -> dict[str, Any] | None:
+    """Set ``channels.whatsapp.mediaMaxMb`` to the documented default (50)
+    when WhatsApp is configured but the value is null/missing.
+
+    OpenClaw 5.12 tightened the WhatsApp channel schema to require
+    ``mediaMaxMb`` as a non-null integer (schema ``required: ["dmPolicy",
+    "groupPolicy", "debounceMs", "mediaMaxMb"]``, ``exclusiveMinimum: 0``).
+    Gateways that pre-date 5.12 and had no explicit value persist ``null``,
+    and any subsequent ``config.patch`` — even one that doesn't touch
+    WhatsApp — fails schema validation until the field is fixed (verified
+    incident on .60 on 2026-05-15). The documented default is 50.
+
+    Returns ``None`` when WhatsApp isn't configured (nothing to fix) or
+    when ``mediaMaxMb`` is already a number — operator intent is preserved.
+    """
+    channels = config_data.get("channels")
+    if not isinstance(channels, dict):
+        return None
+    whatsapp = channels.get("whatsapp")
+    if not isinstance(whatsapp, dict):
+        return None
+    if isinstance(whatsapp.get("mediaMaxMb"), (int, float)):
+        return None
+    return {"whatsapp": {"mediaMaxMb": 50}}
+
+
 def _disabled_byte_guard(value: object) -> bool:
     if value is None or value is False:
         return True
@@ -899,6 +925,7 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
         new_list = _updated_agent_list(raw_list, entry_by_id)
 
         channels_patch = _channel_heartbeat_visibility_patch(config_data)
+        whatsapp_patch = _whatsapp_media_max_mb_patch(config_data)
         tools_patch = _tools_exec_host_patch(config_data)
         runtime_patch = _openclaw_426_runtime_patch(config_data)
 
@@ -907,6 +934,7 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
         if (
             new_list == raw_list
             and channels_patch is None
+            and whatsapp_patch is None
             and tools_patch is None
             and runtime_patch is None
         ):
@@ -920,8 +948,16 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
                     patch["agents"].update(value)
                 else:
                     patch[key] = value
-        if channels_patch is not None:
-            patch["channels"] = channels_patch
+        # channels_patch and whatsapp_patch both live under ``channels`` but
+        # at disjoint sub-keys (``defaults.heartbeat`` vs ``whatsapp.mediaMaxMb``).
+        # Merge at the top so we send one ``channels`` block.
+        if channels_patch is not None or whatsapp_patch is not None:
+            merged_channels: dict[str, Any] = {}
+            if channels_patch is not None:
+                merged_channels.update(channels_patch)
+            if whatsapp_patch is not None:
+                merged_channels.update(whatsapp_patch)
+            patch["channels"] = merged_channels
         if tools_patch is not None:
             patch["tools"] = tools_patch
         params = {"raw": json.dumps(patch)}

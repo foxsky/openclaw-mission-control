@@ -363,6 +363,38 @@ def test_heartbeat_configs_equal_canonicalizes_disabled_spellings():
     )
 
 
+def test_whatsapp_media_max_mb_patch_returns_none_when_whatsapp_not_configured():
+    """If the gateway doesn't have WhatsApp configured at all, the
+    schema doesn't require mediaMaxMb. Don't add it speculatively."""
+    assert agent_provisioning._whatsapp_media_max_mb_patch({}) is None
+    assert agent_provisioning._whatsapp_media_max_mb_patch({"channels": {}}) is None
+
+
+def test_whatsapp_media_max_mb_patch_returns_none_when_already_set():
+    """Operator intent — any positive integer value is preserved."""
+    config = {"channels": {"whatsapp": {"mediaMaxMb": 100, "enabled": True}}}
+    assert agent_provisioning._whatsapp_media_max_mb_patch(config) is None
+
+
+def test_whatsapp_media_max_mb_patch_fills_null_value():
+    """OpenClaw 5.12 tightened the WhatsApp schema to require mediaMaxMb
+    as a non-null integer; null values block subsequent config.patch
+    writes with schema-validation errors. Verified incident on .60 on
+    2026-05-15."""
+    config = {"channels": {"whatsapp": {"mediaMaxMb": None, "enabled": True}}}
+    assert agent_provisioning._whatsapp_media_max_mb_patch(config) == {
+        "whatsapp": {"mediaMaxMb": 50},
+    }
+
+
+def test_whatsapp_media_max_mb_patch_fills_missing_key():
+    """Same regression as the null case — missing key is equivalent."""
+    config = {"channels": {"whatsapp": {"enabled": True}}}
+    assert agent_provisioning._whatsapp_media_max_mb_patch(config) == {
+        "whatsapp": {"mediaMaxMb": 50},
+    }
+
+
 def test_templates_root_points_to_repo_templates_dir():
     root = agent_provisioning._templates_root()
     assert root.name == "templates"
