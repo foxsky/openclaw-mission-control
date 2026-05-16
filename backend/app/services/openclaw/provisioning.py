@@ -27,6 +27,7 @@ from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.services import souls_directory
 from app.services.openclaw.constants import (
+    _LEAD_AGENT_PREFIX,
     BOARD_SHARED_TEMPLATE_MAP,
     DEFAULT_CHANNEL_HEARTBEAT_VISIBILITY,
     DEFAULT_COMPACTION_MAX_ACTIVE_TRANSCRIPT_BYTES,
@@ -44,7 +45,6 @@ from app.services.openclaw.constants import (
     LEAD_TEMPLATE_MAP,
     MAIN_TEMPLATE_MAP,
     PRESERVE_AGENT_EDITABLE_FILES,
-    _LEAD_AGENT_PREFIX,
 )
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
