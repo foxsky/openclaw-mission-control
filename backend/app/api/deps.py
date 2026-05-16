@@ -31,6 +31,7 @@ from app.models.boards import Board
 from app.models.organizations import Organization
 from app.models.tasks import Task
 from app.services.admin_access import require_user_actor
+from app.services.openclaw.policies import OpenClawAuthorizationPolicy
 from app.services.organizations import (
     OrganizationContext,
     ensure_member_for_user,
@@ -148,7 +149,12 @@ async def get_board_for_actor_read(
     if board is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if actor.actor_type == "agent":
-        if actor.agent and actor.agent.board_id and actor.agent.board_id != board.id:
+        # Pre-fix: ``actor.agent.board_id and ...`` short-circuited when
+        # board_id was None (gateway-main agents), allowing cross-org
+        # IDOR. The helper requires same-gateway scope for those agents.
+        if actor.agent is None or not OpenClawAuthorizationPolicy.agent_can_access_board(
+            agent=actor.agent, board=board
+        ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
         return board
     if actor.user is None:
@@ -167,7 +173,9 @@ async def get_board_for_actor_write(
     if board is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if actor.actor_type == "agent":
-        if actor.agent and actor.agent.board_id and actor.agent.board_id != board.id:
+        if actor.agent is None or not OpenClawAuthorizationPolicy.agent_can_access_board(
+            agent=actor.agent, board=board
+        ):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
         return board
     if actor.user is None:

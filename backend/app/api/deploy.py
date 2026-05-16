@@ -6,12 +6,13 @@ import json
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.api.deps import require_org_admin
 from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db.session import async_session_maker
@@ -25,7 +26,16 @@ from app.services.activity_log import record_activity
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 
 logger = get_logger(__name__)
-router = APIRouter(tags=["deploy"])
+# Router-level admin guard: pre-fix this endpoint had ZERO auth and any
+# unauthenticated caller could forge messages into the QA-E2E agent's
+# gateway session AND corrupt deployment provenance via attacker-
+# controlled commit_sha / artifact_hash / deploy_target persisted to
+# TaskPipelineEvent + BoardMemory. The route was never wired into a
+# live external CI today (HQCTL agents call /api/v1/boards/<id>/tasks/...
+# directly), so a user-token-required gate is the right starting point.
+# If an external CI ever needs to call this, add HMAC over the payload
+# alongside the admin gate.
+router = APIRouter(tags=["deploy"], dependencies=[Depends(require_org_admin)])
 
 TARGET_QA_AGENT_NAME = "QA-E2E"
 DEFAULT_BOARD_NAME = "Dev Squad"

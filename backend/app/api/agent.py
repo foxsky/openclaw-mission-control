@@ -410,7 +410,11 @@ def _payload_preview_with_limit(
 
 
 def _guard_board_access(agent_ctx: AgentAuthContext, board: Board) -> None:
-    allowed = not (agent_ctx.agent.board_id and agent_ctx.agent.board_id != board.id)
+    """Pre-fix the predicate ``agent.board_id and agent.board_id != board.id``
+    short-circuited when ``agent.board_id is None`` (gateway-main agents),
+    allowing cross-gateway / cross-org access. ``agent_can_access_board``
+    requires same-gateway scope for those agents."""
+    allowed = OpenClawAuthorizationPolicy.agent_can_access_board(agent=agent_ctx.agent, board=board)
     OpenClawAuthorizationPolicy.require_board_write_access(allowed=allowed)
 
 
@@ -422,8 +426,15 @@ def _require_board_lead(agent_ctx: AgentAuthContext) -> Agent:
 
 
 def _guard_task_access(agent_ctx: AgentAuthContext, task: Task) -> None:
-    allowed = not (
-        agent_ctx.agent.board_id and task.board_id and agent_ctx.agent.board_id != task.board_id
+    """Defense-in-depth alongside ``get_task_or_404`` (which already runs
+    ``get_board_for_actor_read`` and enforces the same scope). When the
+    task is orphaned (``task.board_id is None``) we permit access — there
+    is no board to bind the check to, and the task is presumed already
+    auth-gated by its read dependency."""
+    if task.board_id is None:
+        return
+    allowed = (
+        agent_ctx.agent.board_id == task.board_id if agent_ctx.agent.board_id is not None else True
     )
     OpenClawAuthorizationPolicy.require_board_write_access(allowed=allowed)
 
@@ -711,8 +722,22 @@ async def list_agents(
                 allowed=board_id == agent_ctx.agent.board_id,
             )
         statement = statement.where(Agent.board_id == agent_ctx.agent.board_id)
-    elif board_id:
-        statement = statement.where(Agent.board_id == board_id)
+    else:
+        # Gateway-main agent (board_id is None): pre-fix the
+        # ``elif board_id`` branch took the arbitrary ``board_id``
+        # query param and filtered Agent.board_id == that value with
+        # no ownership check — cross-gateway / cross-org agent
+        # enumeration. Same-gateway scope is enforced here so
+        # gateway-main tokens can only see siblings within their
+        # gateway. Boards in other gateways return 403 and the
+        # default listing is gateway-scoped instead of fleet-wide.
+        if board_id:
+            target_board = await Board.objects.by_id(board_id).first(session)
+            if target_board is None or target_board.gateway_id != agent_ctx.agent.gateway_id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+            statement = statement.where(Agent.board_id == board_id)
+        else:
+            statement = statement.where(Agent.gateway_id == agent_ctx.agent.gateway_id)
     statement = statement.order_by(col(Agent.created_at).desc())
 
     def _transform(items: Sequence[Any]) -> Sequence[Any]:

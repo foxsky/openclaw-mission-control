@@ -118,6 +118,25 @@ class OpenClawAuthorizationPolicy:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     @staticmethod
+    def agent_can_access_board(*, agent: Agent, board: Board) -> bool:
+        """Return True iff the agent is authorized to act on this board.
+
+        Per-board agents (``agent.board_id`` set): only their assigned
+        board. Gateway-main agents (``agent.board_id is None``, typical
+        for Supervisor / mc-gateway-* identities): only boards bound to
+        the same gateway. Pre-fix the guards short-circuited on
+        ``agent.board_id and ...`` so a gateway-main token would pass
+        the check for any board — cross-org IDOR. This helper closes
+        that path; cross-gateway access is denied even when the boards
+        belong to the same operator.
+        """
+        if agent.board_id is not None:
+            return agent.board_id == board.id
+        if board.gateway_id is None:
+            return False
+        return board.gateway_id == agent.gateway_id
+
+    @staticmethod
     def require_board_lead_actor(
         *,
         actor_agent: Agent | None,

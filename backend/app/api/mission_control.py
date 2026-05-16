@@ -4,10 +4,11 @@ import uuid
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import col, select, text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.api.deps import require_org_admin
 from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db.session import async_session_maker
@@ -73,7 +74,17 @@ async def _get_gateway_config_for_board(
     return config, board.gateway_id
 
 
-router = APIRouter(prefix="/api/mission-control", tags=["metrics"])
+# Router-level admin guard: every endpoint in this module mutates or
+# enumerates production gateway state (pause/resume the heartbeat
+# kill-switch, enumerate live agents). Pre-fix this router was mounted
+# at app.main:625 without ANY auth dependency — any LAN-adjacent
+# attacker could silence every agent. Admin scope is the right gate;
+# member scope would be too permissive for the heartbeat kill-switch.
+router = APIRouter(
+    prefix="/api/mission-control",
+    tags=["metrics"],
+    dependencies=[Depends(require_org_admin)],
+)
 
 
 def _heartbeat_enabled(agent: Agent) -> bool:
