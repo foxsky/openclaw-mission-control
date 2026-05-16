@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy import asc, func, or_
-from sqlmodel import col, select
+from sqlmodel import col, select, text
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.agent_tokens import hash_agent_token, verify_agent_token
@@ -31,7 +31,6 @@ from app.db.session import async_session_maker
 from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
 from app.models.approvals import Approval
-from app.models.board_memory import BoardMemory
 from app.models.board_webhooks import BoardWebhook
 from app.models.boards import Board
 from app.models.gateways import Gateway
@@ -447,26 +446,39 @@ async def _get_existing_auth_token(
 
 
 async def _paused_board_ids(session: AsyncSession, board_ids: list[UUID]) -> set[UUID]:
+    """Return the subset of ``board_ids`` that are currently paused.
+
+    Source of truth is ``board_pause_states.is_paused``. Both pause
+    entry points write there:
+
+    * ``mission_control.py:pause/resume`` (API endpoint flow)
+    * ``board_memory.py:control_command`` (``/pause`` / ``/resume``
+      chat-command flow)
+
+    Pre-fix this read the ``BoardMemory`` ``/pause``/``/resume`` chat
+    log directly to determine the "latest command", which silently
+    diverged from the actual paused state in two situations:
+
+    1. An operator paused or resumed via the API — no corresponding
+       chat row was written, so this function saw a stale earlier
+       command as the latest and reported the wrong state.
+    2. The ``BoardMemory`` history was pruned but the actual paused
+       state in ``board_pause_states`` was still authoritative.
+
+    Result: agents on boards paused via the API were not skipped
+    during template sync (or, after an API resume, were still
+    skipped because the latest chat command was ``/pause`` from a
+    prior operator action). ``heartbeat_sweep._fetch_paused_board_ids``
+    has always used ``board_pause_states``; this aligns the template
+    sync path with the same source so both layers agree.
+    """
     if not board_ids:
         return set()
-
-    commands = {"/pause", "/resume"}
-    statement = (
-        select(BoardMemory.board_id, BoardMemory.content)
-        .where(col(BoardMemory.board_id).in_(board_ids))
-        .where(col(BoardMemory.is_chat).is_(True))
-        .where(func.lower(func.trim(col(BoardMemory.content))).in_(commands))
-        .order_by(col(BoardMemory.board_id), col(BoardMemory.created_at).desc())
-        # Postgres: DISTINCT ON (board_id) to get latest command per board.
-        .distinct(col(BoardMemory.board_id))
+    board_id_set = set(board_ids)
+    rows = await session.execute(
+        text("SELECT board_id FROM board_pause_states WHERE is_paused = TRUE"),
     )
-
-    paused: set[UUID] = set()
-    for board_id, content in await session.exec(statement):
-        cmd = (content or "").strip().lower()
-        if cmd == "/pause":
-            paused.add(board_id)
-    return paused
+    return {row[0] for row in rows if row[0] in board_id_set}
 
 
 def _append_sync_error(
