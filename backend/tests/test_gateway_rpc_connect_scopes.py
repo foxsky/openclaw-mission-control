@@ -36,6 +36,131 @@ def test_gateway_methods_include_openclaw_59_tasks_and_cron_get() -> None:
         assert method in GATEWAY_METHODS, f"{method} missing from GATEWAY_METHODS"
 
 
+# -- v4 ConnectParams shape pin -------------------------------------------
+#
+# OpenClaw 5.12 gateway requires protocol v4 (PR #80725). The accepted
+# ConnectParams shape lives in the gateway's typebox schema
+# (``protocol-schemas.d.ts``, ``ProtocolSchemas.ConnectParams``):
+# REQUIRED  minProtocol, maxProtocol, client {id, version, platform, mode}
+# OPTIONAL  client.{displayName, deviceFamily, modelIdentifier, instanceId},
+#           caps, commands, permissions, pathEnv, role, scopes, device, auth,
+#           locale, userAgent
+# Both ``client.id`` and ``client.mode`` are enum-constrained.
+#
+# These tests pin what MC actually sends so that:
+#   1. accidental field removal trips CI (the dict-equality test)
+#   2. enum drift (e.g. someone renames "openclaw-control-ui") trips CI
+#   3. ``minProtocol`` == ``maxProtocol`` == ``PROTOCOL_VERSION`` stays
+#      true across both backend and control-UI surfaces, so a single
+#      constant bump propagates without forgotten call sites
+#
+# We deliberately do NOT send caps/commands/permissions/locale/userAgent.
+# If the gateway ever moves any of those from optional to required, the
+# subscriber/RPC connect will fail with a schema-validation error at
+# runtime — these tests won't catch that, but the live subscriber's
+# "connect rejected" log will. Adding them speculatively would lock in
+# values without a use case.
+
+
+# These mirror the typebox enums in
+# ``plugin-sdk/src/gateway/protocol/schema/protocol-schemas.d.ts``.
+# Tracked here as a regression guard so a typo in our two client IDs/
+# modes is caught before the connect fails with the opaque "protocol
+# mismatch" log we hit on the 5.12 upgrade.
+_V4_CLIENT_IDS = frozenset(
+    {
+        "openclaw-android",
+        "cli",
+        "openclaw-control-ui",
+        "fingerprint",
+        "gateway-client",
+        "openclaw-ios",
+        "openclaw-macos",
+        "node-host",
+        "openclaw-probe",
+        "test",
+        "openclaw-tui",
+        "webchat",
+        "webchat-ui",
+    },
+)
+_V4_CLIENT_MODES = frozenset(
+    {"backend", "cli", "node", "probe", "test", "ui", "webchat"},
+)
+
+
+def test_mc_client_ids_and_modes_are_in_v4_enum_allowlists() -> None:
+    """Backend and control-UI clients both use IDs/modes that the
+    gateway's typebox ``client.id`` and ``client.mode`` enums accept."""
+    assert DEFAULT_GATEWAY_CLIENT_ID in _V4_CLIENT_IDS
+    assert DEFAULT_GATEWAY_CLIENT_MODE in _V4_CLIENT_MODES
+    assert CONTROL_UI_CLIENT_ID in _V4_CLIENT_IDS
+    assert CONTROL_UI_CLIENT_MODE in _V4_CLIENT_MODES
+
+
+def test_build_control_ui_connect_params_pins_v4_shape() -> None:
+    """Dict-equality on the whole payload: accidental field removal,
+    rename, or shape drift trips CI before it trips production."""
+    from app.services.openclaw.protocol_constants import (
+        PROTOCOL_VERSION,
+        build_control_ui_connect_params,
+    )
+
+    params = build_control_ui_connect_params(token="t0k3n")
+
+    assert params == {
+        "minProtocol": PROTOCOL_VERSION,
+        "maxProtocol": PROTOCOL_VERSION,
+        "role": "operator",
+        "scopes": list(GATEWAY_OPERATOR_SCOPES),
+        "client": {
+            "id": CONTROL_UI_CLIENT_ID,
+            "version": "1.0.0",
+            "platform": platform.system().lower(),
+            "mode": CONTROL_UI_CLIENT_MODE,
+        },
+        "auth": {"token": "t0k3n"},
+    }
+
+
+def test_build_control_ui_connect_params_omits_unused_v4_optional_fields() -> None:
+    """The gateway v4 ConnectParams schema accepts several optional
+    fields MC does not currently use. Pin that we don't send them so
+    a future "add caps because Slack plugin..." doesn't slip through
+    without a deliberate decision."""
+    from app.services.openclaw.protocol_constants import (
+        build_control_ui_connect_params,
+    )
+
+    params = build_control_ui_connect_params(token="t0k3n")
+
+    for unused in ("caps", "commands", "permissions", "locale", "userAgent", "pathEnv"):
+        assert (
+            unused not in params
+        ), f"{unused} was added to MC's connect params; pin test needs an update."
+
+
+def test_backend_and_control_ui_connect_params_track_same_protocol_version() -> None:
+    """A single PROTOCOL_VERSION bump must propagate to BOTH connect
+    paths (backend RPC + control-UI subscriber). Today they both pull
+    from the same constant; this test catches a future drift if anyone
+    duplicates the integer literal."""
+    from app.services.openclaw.protocol_constants import (
+        PROTOCOL_VERSION,
+        build_control_ui_connect_params,
+    )
+
+    backend = _build_connect_params(
+        GatewayConfig(url="ws://gateway.example/ws", disable_device_pairing=True),
+    )
+    control_ui = build_control_ui_connect_params(token="t0k3n")
+
+    assert backend["minProtocol"] == PROTOCOL_VERSION
+    assert backend["maxProtocol"] == PROTOCOL_VERSION
+    assert control_ui["minProtocol"] == PROTOCOL_VERSION
+    assert control_ui["maxProtocol"] == PROTOCOL_VERSION
+
+
 def test_build_connect_params_defaults_to_device_pairing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
