@@ -24,6 +24,7 @@ from app.models.tasks import Task
 from app.schemas.tasks import STATUS_GATES
 from app.services.activity_log import record_activity
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
+from app.services.organizations import OrganizationContext
 
 logger = get_logger(__name__)
 # Router-level admin guard: pre-fix this endpoint had ZERO auth and any
@@ -70,10 +71,19 @@ class DeployNotifyResponse(BaseModel):
     dispatch: dict[str, Any]
 
 
-async def _resolve_target_agent(session: AsyncSession) -> tuple[Board, Agent]:
+async def _resolve_target_agent(
+    session: AsyncSession, *, organization_id: UUID
+) -> tuple[Board, Agent]:
+    # Codex follow-up to e752b38c: pre-fix this resolved "Dev Squad"
+    # globally by name, so any org admin with a leaked target-task UUID
+    # could reach a same-named board in a different org. Scoping by
+    # organization_id keeps the route within the caller's tenant.
     board = (
         await session.exec(
-            select(Board).where(func.lower(Board.name) == DEFAULT_BOARD_NAME.lower())
+            select(Board).where(
+                func.lower(Board.name) == DEFAULT_BOARD_NAME.lower(),
+                col(Board.organization_id) == organization_id,
+            )
         )
     ).first()
     if board is None:
@@ -127,14 +137,17 @@ def _dispatch_message(payload: dict[str, Any]) -> str:
 
 
 @router.post("/deploy/notify", status_code=202, response_model=DeployNotifyResponse)
-async def api_deploy_notify(payload: DeployNotifyPayload = Body(...)) -> DeployNotifyResponse:
+async def api_deploy_notify(
+    payload: DeployNotifyPayload = Body(...),
+    ctx: OrganizationContext = Depends(require_org_admin),
+) -> DeployNotifyResponse:
     """Receive deploy notification and trigger QA-E2E via gateway session message."""
     for field_name, value in payload.model_dump().items():
         if value is None or not str(value).strip():
             raise HTTPException(status_code=422, detail=f"{field_name} is required")
 
     async with async_session_maker() as session:
-        board, agent = await _resolve_target_agent(session)
+        board, agent = await _resolve_target_agent(session, organization_id=ctx.organization.id)
         task = await _require_board_task(session, board_id=board.id, task_id=payload.task_id)
 
         if task.status in _DEPLOY_NOTIFY_REJECTED_STATUSES:

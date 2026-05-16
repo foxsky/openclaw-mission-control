@@ -17,6 +17,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -26,6 +27,15 @@ import app.api.mission_control as mission_control
 from app.core.time import utcnow
 from app.models.agents import Agent
 from app.models.boards import Board
+
+
+def _fake_org_ctx() -> Any:
+    """Build a minimal OrganizationContext stand-in for handler unit
+    tests. The fake _FakeSession doesn't actually evaluate the
+    Gateway/Organization join — it returns whatever agents the test
+    set up — so the only field the handler actually reads
+    (``ctx.organization.id``) is enough."""
+    return SimpleNamespace(organization=SimpleNamespace(id=uuid4()))
 
 
 @dataclass
@@ -93,7 +103,7 @@ async def test_heartbeats_status_marks_board_paused_agent_as_disabled(
 
     monkeypatch.setattr(mission_control, "async_session_maker", _fake_maker)
 
-    response = await mission_control.mission_control_heartbeats()
+    response = await mission_control.mission_control_heartbeats(ctx=_fake_org_ctx())
 
     assert response["agents_monitored"] == 1
     listed = response["agents"]
@@ -120,7 +130,7 @@ async def test_heartbeats_status_marks_disabled_agent_row_as_disabled(
 
     monkeypatch.setattr(mission_control, "async_session_maker", _fake_maker)
 
-    response = await mission_control.mission_control_heartbeats()
+    response = await mission_control.mission_control_heartbeats(ctx=_fake_org_ctx())
 
     listed = response["agents"]
     assert len(listed) == 1
@@ -142,7 +152,7 @@ async def test_heartbeats_status_keeps_enabled_for_unpaused_agent(
 
     monkeypatch.setattr(mission_control, "async_session_maker", _fake_maker)
 
-    response = await mission_control.mission_control_heartbeats()
+    response = await mission_control.mission_control_heartbeats(ctx=_fake_org_ctx())
 
     listed = response["agents"]
     assert len(listed) == 1
@@ -165,6 +175,6 @@ async def test_heartbeats_status_still_omits_zero_every_agents(
 
     monkeypatch.setattr(mission_control, "async_session_maker", _fake_maker)
 
-    response = await mission_control.mission_control_heartbeats()
+    response = await mission_control.mission_control_heartbeats(ctx=_fake_org_ctx())
 
     assert response["agents_monitored"] == 0

@@ -25,7 +25,6 @@ from app.models.approval_task_links import ApprovalTaskLink
 from app.models.approvals import Approval
 from app.models.board_webhook_payloads import BoardWebhookPayload
 from app.models.boards import Board
-from app.models.gateways import Gateway
 from app.models.tags import Tag
 from app.models.task_dependencies import TaskDependency
 from app.models.tasks import Task
@@ -572,16 +571,15 @@ async def list_boards(
     if agent_ctx.agent.board_id:
         statement = statement.where(col(Board.id) == agent_ctx.agent.board_id)
     else:
-        # Main agents (board_id=None) must be scoped to their organization
-        # via their gateway to prevent cross-tenant board leakage.
-        gateway = await Gateway.objects.by_id(agent_ctx.agent.gateway_id).first(session)
-        if gateway is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Agent gateway not found; cannot determine organization scope.",
-            )
+        # Gateway-main agents (board_id=None) are scoped to their gateway
+        # to match agent_can_access_board's same-gateway rule (codex
+        # follow-up to e752b38c). Pre-fix this filtered by
+        # ``Board.organization_id`` derived from the gateway's org, which
+        # was broader than the per-board guard — same-org cross-gateway
+        # board names + ids leaked here even though per-board endpoints
+        # denied access. Same-gateway filter closes the inconsistency.
         statement = statement.where(
-            col(Board.organization_id) == gateway.organization_id,
+            col(Board.gateway_id) == agent_ctx.agent.gateway_id,
         )
     statement = statement.order_by(col(Board.created_at).desc())
     return await paginate(session, statement)
@@ -733,7 +731,12 @@ async def list_agents(
         # default listing is gateway-scoped instead of fleet-wide.
         if board_id:
             target_board = await Board.objects.by_id(board_id).first(session)
-            if target_board is None or target_board.gateway_id != agent_ctx.agent.gateway_id:
+            # Split 404 vs 403 (codex follow-up to e752b38c): missing
+            # board is 404 like get_board_for_actor_read; wrong-gateway
+            # is 403 to make the distinction observable to callers.
+            if target_board is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+            if target_board.gateway_id != agent_ctx.agent.gateway_id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
             statement = statement.where(Agent.board_id == board_id)
         else:

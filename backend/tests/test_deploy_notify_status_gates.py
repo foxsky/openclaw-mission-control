@@ -14,6 +14,8 @@ silent fast-path behavior — those are the canonical webhook targets.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -33,6 +35,12 @@ from app.models.organizations import Organization
 from app.models.task_pipeline_events import TaskPipelineEvent
 from app.models.tasks import Task
 from app.services.openclaw.gateway_rpc import GatewayConfig
+
+
+def _fake_org_ctx(org_id: Any) -> Any:
+    """Minimal OrganizationContext stand-in for handler unit tests —
+    only ``ctx.organization.id`` is read by api_deploy_notify."""
+    return SimpleNamespace(organization=SimpleNamespace(id=org_id))
 
 
 async def _make_engine() -> AsyncEngine:
@@ -114,6 +122,7 @@ async def deploy_seed(
         "engine": engine,
         "board_id": board_id,
         "agent_id": agent_id,
+        "org_id": org_id,
         "sent": sent,
     }
     try:
@@ -158,7 +167,9 @@ async def test_deploy_notify_rejects_cancelled_task(
     task = await _seed_task(engine, board_id=handles["board_id"], status="cancelled")
 
     with pytest.raises(HTTPException) as exc_info:
-        await deploy_api.api_deploy_notify(payload=_payload(task.id))
+        await deploy_api.api_deploy_notify(
+            payload=_payload(task.id), ctx=_fake_org_ctx(handles["org_id"])
+        )
     assert exc_info.value.status_code == 409
     detail = exc_info.value.detail
     assert isinstance(detail, dict)
@@ -187,7 +198,9 @@ async def test_deploy_notify_records_audit_when_task_inbox(
     engine, handles = deploy_seed
     task = await _seed_task(engine, board_id=handles["board_id"], status="inbox")
 
-    response = await deploy_api.api_deploy_notify(payload=_payload(task.id))
+    response = await deploy_api.api_deploy_notify(
+        payload=_payload(task.id), ctx=_fake_org_ctx(handles["org_id"])
+    )
     assert response.ok is True
 
     async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -213,7 +226,9 @@ async def test_deploy_notify_no_audit_when_task_in_progress(
     engine, handles = deploy_seed
     task = await _seed_task(engine, board_id=handles["board_id"], status="in_progress")
 
-    response = await deploy_api.api_deploy_notify(payload=_payload(task.id))
+    response = await deploy_api.api_deploy_notify(
+        payload=_payload(task.id), ctx=_fake_org_ctx(handles["org_id"])
+    )
     assert response.ok is True
 
     async with AsyncSession(engine, expire_on_commit=False) as session:

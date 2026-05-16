@@ -14,6 +14,7 @@ from app.core.time import utcnow
 from app.db.session import async_session_maker
 from app.models.agents import Agent
 from app.models.boards import Board
+from app.models.gateways import Gateway
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import openclaw_call
 from app.services.openclaw.heartbeat_sweep import (
@@ -21,6 +22,7 @@ from app.services.openclaw.heartbeat_sweep import (
     _fetch_paused_board_ids,
 )
 from app.services.openclaw.provisioning import _any_board_active_on_gateway
+from app.services.organizations import OrganizationContext
 
 logger = get_logger(__name__)
 
@@ -93,11 +95,42 @@ def _heartbeat_enabled(agent: Agent) -> bool:
     return bool(every and every != "0m")
 
 
+async def _require_org_board(
+    session: AsyncSession, *, board_id: UUID, organization_id: UUID
+) -> Board:
+    """Load a board and verify it belongs to the caller's org.
+
+    Codex follow-up to e752b38c: ``require_org_admin`` proves admin
+    status but does NOT scope by organization; pre-fix this let an
+    admin in Org A pause/resume boards in Org B by guessing UUIDs.
+    Returns the board on success; raises 404 for missing and 403
+    when the board belongs to a different org.
+    """
+    board = (await session.exec(select(Board).where(col(Board.id) == board_id))).first()
+    if board is None:
+        raise HTTPException(status_code=404, detail="Board not found")
+    if board.organization_id != organization_id:
+        raise HTTPException(status_code=403, detail="Board not in your organization")
+    return board
+
+
 @router.get("/heartbeats")
-async def mission_control_heartbeats() -> dict[str, Any]:
+async def mission_control_heartbeats(
+    ctx: OrganizationContext = Depends(require_org_admin),
+) -> dict[str, Any]:
     now = utcnow()
     async with async_session_maker() as session:
-        agents = (await session.exec(select(Agent).order_by(col(Agent.name).asc()))).all()
+        # Org-scope via gateway → organization_id. Pre-fix this returned
+        # every agent on every gateway in the deployment regardless of the
+        # caller's organization (codex follow-up to e752b38c).
+        agents = (
+            await session.exec(
+                select(Agent)
+                .join(Gateway, col(Gateway.id) == col(Agent.gateway_id))
+                .where(col(Gateway.organization_id) == ctx.organization.id)
+                .order_by(col(Agent.name).asc())
+            )
+        ).all()
         board_ids = {a.board_id for a in agents if a.board_id is not None}
         boards: dict[UUID, Board] = {}
         if board_ids:
@@ -157,7 +190,10 @@ async def mission_control_heartbeats() -> dict[str, Any]:
 
 
 @router.post("/boards/{board_id}/pause", status_code=200)
-async def api_pause_board(board_id: str) -> dict[str, Any]:
+async def api_pause_board(
+    board_id: str,
+    ctx: OrganizationContext = Depends(require_org_admin),
+) -> dict[str, Any]:
     """Mark a board as paused — heartbeat monitor will skip nudge/wake for its agents.
 
     Also disables agent heartbeats in the gateway by calling set-heartbeats RPC
@@ -172,6 +208,7 @@ async def api_pause_board(board_id: str) -> dict[str, Any]:
 
     now = utcnow()
     async with async_session_maker() as session:
+        await _require_org_board(session, board_id=bid, organization_id=ctx.organization.id)
         await session.execute(text("""
             INSERT INTO board_pause_states (board_id, is_paused, paused_at, paused_by)
             VALUES (:board_id, TRUE, :paused_at, 'human')
@@ -225,7 +262,10 @@ async def api_pause_board(board_id: str) -> dict[str, Any]:
 
 
 @router.post("/boards/{board_id}/resume", status_code=200)
-async def api_resume_board(board_id: str) -> dict[str, Any]:
+async def api_resume_board(
+    board_id: str,
+    ctx: OrganizationContext = Depends(require_org_admin),
+) -> dict[str, Any]:
     """Mark a board as resumed — heartbeat monitor resumes normal nudge/wake behaviour.
 
     Also re-enables agent heartbeats in the gateway by calling set-heartbeats RPC
@@ -239,6 +279,7 @@ async def api_resume_board(board_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="Invalid board_id format")
 
     async with async_session_maker() as session:
+        await _require_org_board(session, board_id=bid, organization_id=ctx.organization.id)
         await session.execute(text("""
             INSERT INTO board_pause_states (board_id, is_paused, paused_at, paused_by)
             VALUES (:board_id, FALSE, NULL, NULL)
@@ -289,7 +330,10 @@ async def api_resume_board(board_id: str) -> dict[str, Any]:
 
 
 @router.get("/boards/{board_id}/pause", status_code=200)
-async def api_get_board_pause_state(board_id: str) -> dict[str, Any]:
+async def api_get_board_pause_state(
+    board_id: str,
+    ctx: OrganizationContext = Depends(require_org_admin),
+) -> dict[str, Any]:
     """Return the current pause state for a board."""
     if not board_id or len(board_id) > 256:
         raise HTTPException(status_code=422, detail="Invalid board_id")
@@ -299,6 +343,7 @@ async def api_get_board_pause_state(board_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="Invalid board_id format")
 
     async with async_session_maker() as session:
+        await _require_org_board(session, board_id=bid, organization_id=ctx.organization.id)
         result = await session.execute(text("""
             SELECT is_paused, paused_at, paused_by FROM board_pause_states WHERE board_id = :board_id
         """).bindparams(board_id=bid))
