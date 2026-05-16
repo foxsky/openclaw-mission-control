@@ -168,11 +168,19 @@ clears. If it reports a reconcile or link failure, report `HEARTBEAT_FAILED`.
    - synthesis ran if the board is fully complete
    - **mc-supervisor-gate enforcement.** If MC's heartbeat prompt
      reported `action_required`, the gateway plugin will REJECT
-     `HEARTBEAT_OK` unless this tick ran at least one mutating tool
-     call (status PATCH, approval create/decide, nudge, comment,
-     blocker create/resolve, dependency edit). Either do the work or
-     return `HEARTBEAT_FAILED: <specific reason the action could not
-     be taken>`. Replying `HEARTBEAT_OK` without a mutation gets
+     `HEARTBEAT_OK` unless this tick ran at least one tool call that
+     matches the mutation detector — either an HTTP request with
+     `-X POST|PATCH|PUT|DELETE` (curl form or JSON params with
+     `method/request/httpMethod`), an MC API path
+     (`api/mission-control|tasks|approvals|reviews|lead`) paired
+     with one of those verbs, or one of the named workflow
+     commands: `create-task`, `assign-task`, `add-comment`,
+     `approve-task`, `block-task`, `close-task`, `return-to-todo`,
+     `submit-to-review`, `promote-to-review`, `record-review`,
+     `record-signoff`, `record-artifact`, `update-heartbeat`,
+     `ack-mention`. Either do the work or return
+     `HEARTBEAT_FAILED: <specific reason the action could not be
+     taken>`. Replying `HEARTBEAT_OK` without a mutation gets
      bounced at `before_agent_finalize` and the turn re-runs.
 {% else %}
 # HEARTBEAT.md

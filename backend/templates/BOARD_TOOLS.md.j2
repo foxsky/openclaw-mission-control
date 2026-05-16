@@ -18,7 +18,7 @@
 {% endif %}- Required tools: `curl`, `jq`
 - Browser tools: `browser` (native) or `npx playwright test`
 {% if is_main or is_lead %}
-- Gateway tools (call via your runtime, not curl): `message` (deliver to another agent/subagent session), `tasks.list|get|cancel` (gateway runtime task ledger — distinct from MC's task DB), `cron.get` (inspect one stored cron job). Run `tools.effective` to confirm what's enabled in your current session before scripting against any of these.
+- Gateway tools: `message` (deliver to another agent/subagent session) is in the lead/main allowlist when seeded via `tools.alsoAllow`. Operator-side gateway RPCs `tasks.list|get|cancel` and `cron.get` exist (5.9 catalog) but are NOT in the per-agent runtime allowlist by default — they're admin/operator surfaces. Run `tools.effective` to confirm what your session can actually call before scripting against any of these.
 {% endif %}
 
 {% if is_main %}
