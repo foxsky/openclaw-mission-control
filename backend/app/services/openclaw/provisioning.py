@@ -1005,14 +1005,18 @@ def _updated_agent_list(
             "workspace": workspace_path,
             "heartbeat": heartbeat,
         }
-        # Channel-routed agents (Supervisor lead-* and main) need the
-        # ``message`` tool to reply on WhatsApp/Discord/etc. Doctor on
-        # 5.12 flags this gap explicitly and the fix is invisible until
-        # an operator notices a silent agent. Seed it here so newly
-        # created entries start in the right shape; existing entries
-        # preserve any operator-set ``tools`` via the dict(raw_entry)
-        # shallow copy above.
-        if agent_id == "main" or agent_id.startswith("lead-"):
+        # Supervisor lead-* agents reply to operators on WhatsApp/
+        # Discord/etc and need the ``message`` tool. Doctor on 5.12
+        # flags the gap explicitly and the fix is invisible until an
+        # operator notices a silent Supervisor. Seed it here so newly
+        # provisioned boards start in the right shape. Other prefixes
+        # are intentionally excluded: the gateway-managed ``main``
+        # agent is not provisioned through this path (gateway-main is
+        # ``mc-gateway-<uuid>`` here — see constants.MC_GATEWAY_AGENT_PREFIX),
+        # and workers (``mc-*`` UUID) execute and report via task
+        # comments rather than messaging channels — granting them
+        # ``message`` would let them bypass the Supervisor.
+        if agent_id.startswith("lead-"):
             entry["tools"] = {"alsoAllow": ["message"]}
         new_list.append(entry)
 

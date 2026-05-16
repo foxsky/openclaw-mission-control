@@ -131,14 +131,6 @@ def build_state_from_frame(frame: dict[str, Any]) -> SessionState | None:
     if not isinstance(payload, dict):
         return None
 
-    # 5.12 catalog #18/#19: gateway broadcasts now stamp `kind` on
-    # every sessions.changed payload. ACP per-run children carry
-    # `kind: "spawn-child"`; we already drop them by segment count
-    # via parse_session_key, but kind is the authoritative signal
-    # and survives future key-shape changes.
-    if _optional_str(payload.get("kind")) == "spawn-child":
-        return None
-
     parsed = parse_session_key(payload.get("sessionKey"))
     if parsed is None:
         return None

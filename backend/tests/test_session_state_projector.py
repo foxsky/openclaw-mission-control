@@ -270,18 +270,6 @@ async def test_projector_ignores_unparseable_session_key() -> None:
 
 
 @pytest.mark.asyncio
-async def test_projector_ignores_spawn_child_kind() -> None:
-    """5.12 catalog #18/#19: gateway stamps top-level ``kind`` on every
-    sessions.changed payload. ``spawn-child`` rows are per-run ACP
-    children; drop them at the projection boundary."""
-    p = SessionStateProjector()
-    frame = _make_event()
-    frame["payload"]["kind"] = "spawn-child"
-    await p(frame)
-    assert p.snapshot() == ()
-
-
-@pytest.mark.asyncio
 async def test_projector_ignores_frame_with_no_payload() -> None:
     """The dispatcher passes the full frame; a frame missing the inner
     ``payload`` dict (or with a non-dict value) must be silently
