@@ -50,7 +50,6 @@ _NON_PK_COLUMNS = (
     "parent_session_key",
     "last_status",
     "last_lifecycle_reason",
-    "is_heartbeat",
     "updated_at",
 )
 
@@ -103,7 +102,6 @@ async def upsert_session_state(
         "parent_session_key": state.parent_session_key,
         "last_status": state.last_status,
         "last_lifecycle_reason": state.last_lifecycle_reason,
-        "is_heartbeat": state.is_heartbeat,
         "updated_at": utcnow(),
     }
     dialect_name: str | None = session.bind.dialect.name if session.bind is not None else None
