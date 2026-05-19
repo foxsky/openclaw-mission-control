@@ -68,6 +68,14 @@ class GatewaySessionState(QueryModel, table=True):
     parent_session_key: str | None = Field(default=None, index=True)
     last_status: str | None = Field(default=None)
     last_lifecycle_reason: str | None = Field(default=None)
+    # OpenClaw 5.14 #80610 broadcasts optional ``isHeartbeat`` on agent
+    # event payloads so clients can distinguish scheduled heartbeat ticks
+    # from chat-driven runs. ``None`` means the gateway did not stamp it
+    # on this frame (older gateway OR non-heartbeat-relevant event);
+    # ``True``/``False`` are explicit. Indexed because the lead next-
+    # action surface uses it to separate "agent silent on chat" (likely
+    # wedged) from "agent silent on heartbeat tick" (probably fine).
+    is_heartbeat: bool | None = Field(default=None, index=True)
     # MC's own wall-clock write timestamp; useful to spot subscriber
     # gaps independent of gateway clock skew.
     updated_at: datetime = Field(default_factory=utcnow)

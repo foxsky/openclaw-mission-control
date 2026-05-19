@@ -448,6 +448,70 @@ async def test_projector_lifecycle_fields_default_to_none_when_absent() -> None:
     assert states[0].parent_session_key is None
     assert states[0].last_status is None
     assert states[0].last_lifecycle_reason is None
+    assert states[0].is_heartbeat is None
+
+
+# ---------------------------------------------------------------------------
+# OpenClaw 5.14 #80610: gateway optionally stamps ``isHeartbeat`` on agent
+# event payloads. Pre-5.14 the only way to infer a heartbeat tick was the
+# 4-segment ``main:heartbeat`` sub-label; chat-driven runs were
+# indistinguishable from heartbeat ticks for top-level sessions. The
+# projector captures the explicit signal when present and leaves
+# ``is_heartbeat=None`` for older gateways / non-heartbeat-relevant frames.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_projector_records_is_heartbeat_when_top_level_true() -> None:
+    p = SessionStateProjector()
+    frame = _make_event()
+    frame["payload"]["isHeartbeat"] = True
+    await p(frame)
+    states = p.get("mc-dd1abee5-97f0-4aaa-8d34-ecac1f7ddf66")
+    assert len(states) == 1
+    assert states[0].is_heartbeat is True
+
+
+@pytest.mark.asyncio
+async def test_projector_records_is_heartbeat_when_top_level_false() -> None:
+    """Explicit ``False`` is captured — distinguishes chat-driven runs
+    from frames where the gateway just didn't stamp the flag."""
+    p = SessionStateProjector()
+    frame = _make_event()
+    frame["payload"]["isHeartbeat"] = False
+    await p(frame)
+    states = p.get("mc-dd1abee5-97f0-4aaa-8d34-ecac1f7ddf66")
+    assert len(states) == 1
+    assert states[0].is_heartbeat is False
+
+
+@pytest.mark.asyncio
+async def test_projector_ignores_non_bool_is_heartbeat() -> None:
+    """Defensive: a truthy non-bool (e.g., string ``"true"``) MUST NOT
+    flip the field to ``True`` — strict identity check, same pattern as
+    ``aborted_last_run``."""
+    p = SessionStateProjector()
+    frame = _make_event()
+    frame["payload"]["isHeartbeat"] = "true"
+    await p(frame)
+    states = p.get("mc-dd1abee5-97f0-4aaa-8d34-ecac1f7ddf66")
+    assert len(states) == 1
+    assert states[0].is_heartbeat is None
+
+
+@pytest.mark.asyncio
+async def test_projector_reads_is_heartbeat_from_nested_session_object() -> None:
+    """Message-phase frames mirror top-level fields under
+    ``payload.session.*`` for legacy 4.x compat. The picker checks
+    top-level first but falls back to the nested copy."""
+    p = SessionStateProjector()
+    frame = _make_event()
+    frame["payload"].pop("isHeartbeat", None)
+    frame["payload"]["session"]["isHeartbeat"] = True
+    await p(frame)
+    states = p.get("mc-dd1abee5-97f0-4aaa-8d34-ecac1f7ddf66")
+    assert len(states) == 1
+    assert states[0].is_heartbeat is True
 
 
 @pytest.mark.asyncio

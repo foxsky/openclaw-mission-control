@@ -70,6 +70,15 @@ class SessionState:
     parent_session_key: str | None = None
     last_status: str | None = None
     last_lifecycle_reason: str | None = None
+    # OpenClaw 5.14 #80610: gateway optionally stamps ``isHeartbeat``
+    # on agent event payloads so clients can distinguish scheduled
+    # heartbeat runs from chat-driven runs. Pre-5.14 this was indirectly
+    # inferable from the 4-segment ``main:heartbeat`` sub-label but
+    # not exposed on chat-driven sessions; now it's authoritative on
+    # the wire when present. ``None`` means the gateway did not stamp
+    # it (older gateway OR not a heartbeat-relevant frame); ``True``
+    # / ``False`` are explicit signals from the broadcast.
+    is_heartbeat: bool | None = None
 
 
 _STABLE_SUB_LABELS = frozenset({"heartbeat"})
@@ -166,6 +175,16 @@ def build_state_from_frame(frame: dict[str, Any]) -> SessionState | None:
             return top
         return _optional_int(session.get(field))
 
+    def _pick_is_heartbeat() -> bool | None:
+        """Strict identity check: only ``True``/``False`` from the
+        broadcast count. Absent or non-bool → ``None`` (older gateway
+        or non-heartbeat-relevant frame)."""
+        for source in (payload, session):
+            value = source.get("isHeartbeat") if isinstance(source, dict) else None
+            if value is True or value is False:
+                return value
+        return None
+
     return SessionState(
         agent_id=agent_id,
         session_label=label,
@@ -189,6 +208,7 @@ def build_state_from_frame(frame: dict[str, Any]) -> SessionState | None:
         parent_session_key=_optional_str(payload.get("parentSessionKey")),
         last_status=_optional_str(payload.get("status")),
         last_lifecycle_reason=_optional_str(payload.get("reason")),
+        is_heartbeat=_pick_is_heartbeat(),
     )
 
 
