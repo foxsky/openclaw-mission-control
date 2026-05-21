@@ -21,9 +21,11 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  ConfigSchemaLookupResponse,
   DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteParams,
   EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostParams,
   GatewayCommandsResponse,
+  GatewayConfigLookupParams,
   GatewayCreate,
   GatewayEvalApprovalResolveRequest,
   GatewayEvalSessionEnsureRequest,
@@ -3882,6 +3884,234 @@ export const useUpdateGatewayApiV1GatewaysGatewayIdPatch = <
     queryClient,
   );
 };
+/**
+ * Look up gateway config schema + reload metadata for a single path.
+ * @summary Gateway Config Lookup
+ */
+export type gatewayConfigLookupResponse200 = {
+  data: ConfigSchemaLookupResponse;
+  status: 200;
+};
+
+export type gatewayConfigLookupResponse422 = {
+  data: HTTPValidationError;
+  status: 422;
+};
+
+export type gatewayConfigLookupResponseSuccess =
+  gatewayConfigLookupResponse200 & {
+    headers: Headers;
+  };
+export type gatewayConfigLookupResponseError =
+  gatewayConfigLookupResponse422 & {
+    headers: Headers;
+  };
+
+export type gatewayConfigLookupResponse =
+  | gatewayConfigLookupResponseSuccess
+  | gatewayConfigLookupResponseError;
+
+export const getGatewayConfigLookupUrl = (
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/gateways/${gatewayId}/config/lookup?${stringifiedParams}`
+    : `/api/v1/gateways/${gatewayId}/config/lookup`;
+};
+
+export const gatewayConfigLookup = async (
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options?: RequestInit,
+): Promise<gatewayConfigLookupResponse> => {
+  return customFetch<gatewayConfigLookupResponse>(
+    getGatewayConfigLookupUrl(gatewayId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGatewayConfigLookupQueryKey = (
+  gatewayId: string,
+  params?: GatewayConfigLookupParams,
+) => {
+  return [
+    `/api/v1/gateways/${gatewayId}/config/lookup`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGatewayConfigLookupQueryOptions = <
+  TData = Awaited<ReturnType<typeof gatewayConfigLookup>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof gatewayConfigLookup>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGatewayConfigLookupQueryKey(gatewayId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof gatewayConfigLookup>>
+  > = ({ signal }) =>
+    gatewayConfigLookup(gatewayId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!gatewayId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof gatewayConfigLookup>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GatewayConfigLookupQueryResult = NonNullable<
+  Awaited<ReturnType<typeof gatewayConfigLookup>>
+>;
+export type GatewayConfigLookupQueryError = HTTPValidationError;
+
+export function useGatewayConfigLookup<
+  TData = Awaited<ReturnType<typeof gatewayConfigLookup>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof gatewayConfigLookup>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof gatewayConfigLookup>>,
+          TError,
+          Awaited<ReturnType<typeof gatewayConfigLookup>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGatewayConfigLookup<
+  TData = Awaited<ReturnType<typeof gatewayConfigLookup>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof gatewayConfigLookup>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof gatewayConfigLookup>>,
+          TError,
+          Awaited<ReturnType<typeof gatewayConfigLookup>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGatewayConfigLookup<
+  TData = Awaited<ReturnType<typeof gatewayConfigLookup>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof gatewayConfigLookup>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Gateway Config Lookup
+ */
+
+export function useGatewayConfigLookup<
+  TData = Awaited<ReturnType<typeof gatewayConfigLookup>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof gatewayConfigLookup>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGatewayConfigLookupQueryOptions(
+    gatewayId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
 /**
  * Sync templates for a gateway and optionally rotate runtime settings.
  * @summary Sync Gateway Templates
