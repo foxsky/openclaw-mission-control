@@ -1,4 +1,4 @@
-import { clsx } from "clsx";
+import { cn } from "@/lib/utils";
 
 type KnownKind = "restart" | "hot" | "none";
 
@@ -29,7 +29,7 @@ export function ConfigReloadKindBadge({
   if (reloadKind === null || reloadKind === undefined) {
     return (
       <span
-        className={clsx(
+        className={cn(
           "inline-flex items-center rounded px-2 py-0.5 text-xs text-muted",
           className,
         )}
@@ -43,7 +43,7 @@ export function ConfigReloadKindBadge({
   const known = KNOWN[reloadKind as KnownKind];
   return (
     <span
-      className={clsx(
+      className={cn(
         "inline-flex items-center rounded px-2 py-0.5 text-xs font-medium",
         known?.className ?? "bg-zinc-100 text-zinc-700 border border-zinc-200",
         className,
