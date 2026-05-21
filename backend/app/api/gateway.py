@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -40,6 +40,7 @@ from app.services.openclaw.gateway_rpc import (
     GATEWAY_EVENTS,
     GATEWAY_METHODS,
     PROTOCOL_VERSION,
+    OpenClawGatewayError,
     openclaw_call,
 )
 from app.services.openclaw.internal.agent_key import projection_lookup_id
@@ -365,6 +366,50 @@ async def projected_gateway_sessions(
     )
 
 
+_GATEWAY_METHOD_REQUIRED_VERSION = "2026.5.19"
+
+
+def _map_gateway_error(exc: OpenClawGatewayError, path: str) -> HTTPException:
+    """Translate an OpenClawGatewayError into a structured HTTPException."""
+
+    details: dict[str, Any] = exc.details if isinstance(exc.details, dict) else {}
+    code = str(details.get("code") or "").upper()
+    message = str(details.get("message") or str(exc) or "")
+    lowered = message.lower()
+
+    if code == "INVALID_REQUEST":
+        if message == "config schema path not found":
+            return HTTPException(
+                status_code=404,
+                detail={"error": "path_not_found", "path": path},
+            )
+        return HTTPException(
+            status_code=422,
+            detail={"error": "gateway_rejected_request", "detail": message},
+        )
+    if (
+        code in {"METHOD_NOT_FOUND", "METHOD_NOT_REGISTERED", "NOT_IMPLEMENTED"}
+        or "method not found" in lowered
+        or "unknown method" in lowered
+    ):
+        return HTTPException(
+            status_code=501,
+            detail={
+                "error": "method_unsupported",
+                "requires_gateway_version": _GATEWAY_METHOD_REQUIRED_VERSION,
+            },
+        )
+    if code == "UNAVAILABLE":
+        return HTTPException(
+            status_code=503,
+            detail={"error": "gateway_unavailable", "detail": message},
+        )
+    return HTTPException(
+        status_code=503,
+        detail={"error": "gateway_unreachable", "detail": message},
+    )
+
+
 @router.get(
     "/{gateway_id}/config/lookup",
     response_model=ConfigSchemaLookupResponse,
@@ -398,9 +443,16 @@ async def gateway_config_lookup(
             timeout=_CONFIG_LOOKUP_RPC_TIMEOUT_SECONDS,
         )
 
-    payload = await _CONFIG_LOOKUP_CACHE.get_or_load(
-        (gateway_id, trimmed_path), _load,
-    )
+    try:
+        payload = await _CONFIG_LOOKUP_CACHE.get_or_load(
+            (gateway_id, trimmed_path), _load,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504, detail={"error": "gateway_timeout"},
+        ) from exc
+    except OpenClawGatewayError as exc:
+        raise _map_gateway_error(exc, trimmed_path) from exc
     if not isinstance(payload, dict):
         raise HTTPException(
             status_code=502,

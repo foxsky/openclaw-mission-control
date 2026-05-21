@@ -24,6 +24,7 @@ from app.models.gateways import Gateway
 from app.models.organization_members import OrganizationMember
 from app.models.organizations import Organization
 from app.models.users import User
+from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 from app.services.organizations import OrganizationContext
 
 
@@ -187,3 +188,148 @@ async def test_invalid_path_short_circuits_before_rpc(
     assert resp.status_code == 400
     assert resp.json()["detail"]["error"] == "invalid_path"
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_path_not_found_returns_404(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    _reset_cache()
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        raise OpenClawGatewayError(
+            "config schema path not found",
+            details={"code": "INVALID_REQUEST", "message": "config schema path not found"},
+        )
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "no.such.path"},
+        )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error"] == "path_not_found"
+    assert resp.json()["detail"]["path"] == "no.such.path"
+
+
+@pytest.mark.asyncio
+async def test_other_invalid_request_returns_422(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    _reset_cache()
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        raise OpenClawGatewayError(
+            "bad shape",
+            details={"code": "INVALID_REQUEST", "message": "config schema lookup returned invalid payload"},
+        )
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "agents"},
+        )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "gateway_rejected_request"
+
+
+@pytest.mark.asyncio
+async def test_method_not_supported_returns_501(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    _reset_cache()
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        raise OpenClawGatewayError(
+            "method not found",
+            details={"code": "METHOD_NOT_FOUND", "message": "unknown method config.schema.lookup"},
+        )
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "agents"},
+        )
+    assert resp.status_code == 501
+    assert resp.json()["detail"]["error"] == "method_unsupported"
+    assert resp.json()["detail"]["requires_gateway_version"] == "2026.5.19"
+
+
+@pytest.mark.asyncio
+async def test_unavailable_returns_503(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    _reset_cache()
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        raise OpenClawGatewayError("down", details={"code": "UNAVAILABLE"})
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "agents"},
+        )
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "gateway_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_timeout_returns_504(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio as _asyncio
+
+    app, _, gateway = setup
+    _reset_cache()
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        await _asyncio.sleep(10)  # exceeds the 5s wait_for in handler
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "_CONFIG_LOOKUP_RPC_TIMEOUT_SECONDS", 0.05)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "agents"},
+        )
+    assert resp.status_code == 504
+    assert resp.json()["detail"]["error"] == "gateway_timeout"
+
+
+@pytest.mark.asyncio
+async def test_other_gateway_id_returns_404(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, _ = setup
+    _reset_cache()
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        return {}
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{uuid4()}/config/lookup",
+            params={"path": "agents"},
+        )
+    assert resp.status_code == 404
