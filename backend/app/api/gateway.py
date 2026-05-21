@@ -375,12 +375,11 @@ async def gateway_config_lookup(
     gateway_id: UUID,
     path: str = Query(..., min_length=1, max_length=512),
     session: AsyncSession = SESSION_DEP,
-    auth: AuthContext = AUTH_DEP,
+    _auth: AuthContext = AUTH_DEP,
     ctx: OrganizationContext = ORG_ADMIN_DEP,
 ) -> ConfigSchemaLookupResponse:
     """Look up gateway config schema + reload metadata for a single path."""
 
-    del auth  # required only to enforce the dependency
     trimmed_path = _validate_config_lookup_path(path)
 
     gateway = await GatewayAdminLifecycleService(session).require_gateway(

@@ -24,7 +24,6 @@ from app.models.gateways import Gateway
 from app.models.organization_members import OrganizationMember
 from app.models.organizations import Organization
 from app.models.users import User
-from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 from app.services.organizations import OrganizationContext
 
 
