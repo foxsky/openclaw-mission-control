@@ -4,6 +4,7 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { BoardUpdateRolloutFlags } from "./boardUpdateRolloutFlags";
 import type { BoardUpdateSuccessMetrics } from "./boardUpdateSuccessMetrics";
 
 /**
@@ -14,6 +15,7 @@ export interface BoardUpdate {
   board_group_id?: string | null;
   board_type?: string | null;
   comment_required_for_review?: boolean | null;
+  comment_signal_filter?: "off" | "default_hidden" | "hidden_strict" | null;
   description?: string | null;
   gateway_id?: string | null;
   goal_confirmed?: boolean | null;
@@ -22,9 +24,10 @@ export interface BoardUpdate {
   name?: string | null;
   objective?: string | null;
   only_lead_can_change_status?: boolean | null;
-  show_cancelled_column?: boolean | null;
   require_approval_for_done?: boolean | null;
   require_review_before_done?: boolean | null;
+  rollout_flags?: BoardUpdateRolloutFlags;
+  show_cancelled_column?: boolean | null;
   slug?: string | null;
   success_metrics?: BoardUpdateSuccessMetrics;
   target_date?: string | null;

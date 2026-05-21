@@ -4,6 +4,9 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { BoardReadCommentSignalFilter } from "./boardReadCommentSignalFilter";
+import type { BoardReadRolloutFlags } from "./boardReadRolloutFlags";
+import type { BoardReadRolloutFlagsUnknown } from "./boardReadRolloutFlagsUnknown";
 import type { BoardReadSuccessMetrics } from "./boardReadSuccessMetrics";
 
 /**
@@ -14,6 +17,7 @@ export interface BoardRead {
   board_group_id?: string | null;
   board_type?: string;
   comment_required_for_review?: boolean;
+  comment_signal_filter?: BoardReadCommentSignalFilter;
   created_at: string;
   description: string;
   gateway_id?: string | null;
@@ -25,10 +29,12 @@ export interface BoardRead {
   name: string;
   objective?: string | null;
   only_lead_can_change_status?: boolean;
-  show_cancelled_column?: boolean;
   organization_id: string;
   require_approval_for_done?: boolean;
   require_review_before_done?: boolean;
+  rollout_flags?: BoardReadRolloutFlags;
+  rollout_flags_unknown?: BoardReadRolloutFlagsUnknown;
+  show_cancelled_column?: boolean;
   slug: string;
   success_metrics?: BoardReadSuccessMetrics;
   target_date?: string | null;

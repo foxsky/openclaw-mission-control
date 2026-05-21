@@ -15,6 +15,7 @@ export interface TaskRead {
   assigned_agent_id?: string | null;
   blocked_by_task_ids?: string[];
   board_id: string | null;
+  cancelled_at: string | null;
   created_at: string;
   created_by_user_id: string | null;
   custom_field_values?: TaskReadCustomFieldValues;
@@ -24,10 +25,41 @@ export interface TaskRead {
   id: string;
   in_progress_at: string | null;
   is_blocked?: boolean;
+  open_blocker_reason_codes?: string[];
+  operator_decision_required?: boolean;
+  operator_decision_summary?: string | null;
+  orphan_child_task_ids?: string[];
+  packet_build_sha?: string | null;
+  packet_commit_sha?: string | null;
+  parent_task_id?: string | null;
+  pending_operator_decision_reason_codes?: string[];
+  previous_in_progress_at?: string | null;
   priority?: string;
+  review_packet_type?:
+    | "frontend_ui"
+    | "backend_api"
+    | "review_only"
+    | "content_copy"
+    | "infra_ops"
+    | "mixed"
+    | "other"
+    | null;
+  rework_entry_commit_sha?: string | null;
+  rework_started_at?: string | null;
+  source_memory_id?: string | null;
   status?: TaskReadStatus;
+  supports_build_metadata?: boolean | null;
   tag_ids?: string[];
   tags?: TagRef[];
   title: string;
   updated_at: string;
+  validation_target?: string | null;
+  validation_target_kind?:
+    | "live_url"
+    | "deploy_env"
+    | "workspace"
+    | "api_base"
+    | "other"
+    | null;
+  validation_target_scope?: "review" | "runtime" | "deploy" | "all" | null;
 }

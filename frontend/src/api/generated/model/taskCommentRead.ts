@@ -10,6 +10,7 @@
  */
 export interface TaskCommentRead {
   agent_id: string | null;
+  classifier_flags?: string[] | null;
   created_at: string;
   id: string;
   message: string | null;

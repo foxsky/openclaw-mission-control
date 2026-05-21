@@ -16,7 +16,20 @@ export interface TaskUpdate {
   depends_on_task_ids?: string[] | null;
   description?: string | null;
   due_at?: string | null;
+  operator_decision_required?: boolean | null;
+  operator_decision_summary?: string | null;
+  packet_build_sha?: string | null;
+  packet_commit_sha?: string | null;
   priority?: string | null;
+  review_packet_type?:
+    | "frontend_ui"
+    | "backend_api"
+    | "review_only"
+    | "content_copy"
+    | "infra_ops"
+    | "mixed"
+    | "other"
+    | null;
   status?:
     | "inbox"
     | "in_progress"
@@ -25,6 +38,16 @@ export interface TaskUpdate {
     | "done"
     | "cancelled"
     | null;
+  supports_build_metadata?: boolean | null;
   tag_ids?: string[] | null;
   title?: string | null;
+  validation_target?: string | null;
+  validation_target_kind?:
+    | "live_url"
+    | "deploy_env"
+    | "workspace"
+    | "api_base"
+    | "other"
+    | null;
+  validation_target_scope?: "review" | "runtime" | "deploy" | "all" | null;
 }

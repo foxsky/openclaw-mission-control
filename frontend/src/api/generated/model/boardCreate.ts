@@ -4,6 +4,8 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { BoardCreateCommentSignalFilter } from "./boardCreateCommentSignalFilter";
+import type { BoardCreateRolloutFlags } from "./boardCreateRolloutFlags";
 import type { BoardCreateSuccessMetrics } from "./boardCreateSuccessMetrics";
 
 /**
@@ -14,6 +16,7 @@ export interface BoardCreate {
   board_group_id?: string | null;
   board_type?: string;
   comment_required_for_review?: boolean;
+  comment_signal_filter?: BoardCreateCommentSignalFilter;
   description: string;
   gateway_id?: string | null;
   goal_confirmed?: boolean;
@@ -23,9 +26,10 @@ export interface BoardCreate {
   name: string;
   objective?: string | null;
   only_lead_can_change_status?: boolean;
-  show_cancelled_column?: boolean;
   require_approval_for_done?: boolean;
   require_review_before_done?: boolean;
+  rollout_flags?: BoardCreateRolloutFlags;
+  show_cancelled_column?: boolean;
   slug: string;
   success_metrics?: BoardCreateSuccessMetrics;
   target_date?: string | null;
