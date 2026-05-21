@@ -52,11 +52,13 @@ class ConfigLookupCache:
 
         try:
             value = await loader()
-        except BaseException as exc:  # noqa: BLE001 — propagate to all waiters
+        except BaseException as exc:  # noqa: BLE001 — propagate (incl. CancelledError) to all waiters
             async with self._lock:
                 self._inflight.pop(key, None)
             if not inflight.done():
                 inflight.set_exception(exc)
+            # Mark consumed so asyncio doesn't warn when no waiter retrieved it.
+            inflight.exception()
             raise
 
         async with self._lock:
