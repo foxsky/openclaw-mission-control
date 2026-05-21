@@ -19,11 +19,11 @@
 ```bash
 cd .worktrees/config-reload-inspector
 # Backend deps
-cd backend && pip install -e .[dev] && cd ..
+cd backend && uv sync --extra dev && cd ..
 # Frontend deps
 cd frontend && npm install && cd ..
 # Baseline backend tests (should pass on master)
-cd backend && pytest -x -q
+cd backend && uv run pytest -x -q
 ```
 Expected: all pre-existing tests pass. If anything is red, stop and ask before continuing — don't paper over pre-existing failures.
 
@@ -105,7 +105,7 @@ def test_child_defaults() -> None:
 **Step 2 — Verify it fails:**
 
 ```bash
-cd backend && pytest tests/test_gateway_config_lookup_schema.py -v
+cd backend && uv run pytest tests/test_gateway_config_lookup_schema.py -v
 ```
 Expected: `ImportError: cannot import name 'ConfigSchemaLookupChild' from 'app.schemas.gateway_api'`.
 
@@ -156,7 +156,7 @@ from sqlmodel._compat import SQLModelConfig
 **Step 4 — Verify it passes:**
 
 ```bash
-cd backend && pytest tests/test_gateway_config_lookup_schema.py -v
+cd backend && uv run pytest tests/test_gateway_config_lookup_schema.py -v
 ```
 Expected: 3 passed.
 
@@ -232,7 +232,7 @@ def test_control_chars_rejected(bad: str) -> None:
 **Step 2 — Verify it fails:**
 
 ```bash
-cd backend && pytest tests/test_gateway_config_lookup_path_validation.py -v
+cd backend && uv run pytest tests/test_gateway_config_lookup_path_validation.py -v
 ```
 Expected: `ImportError: cannot import name '_validate_config_lookup_path'`.
 
@@ -262,7 +262,7 @@ Add `from fastapi import HTTPException` to the existing fastapi import line if n
 **Step 4 — Verify it passes:**
 
 ```bash
-cd backend && pytest tests/test_gateway_config_lookup_path_validation.py -v
+cd backend && uv run pytest tests/test_gateway_config_lookup_path_validation.py -v
 ```
 Expected: 9 passed.
 
@@ -402,7 +402,7 @@ async def test_ttl_expiry_refetches() -> None:
 **Step 2 — Verify it fails:**
 
 ```bash
-cd backend && pytest tests/test_config_lookup_cache.py -v
+cd backend && uv run pytest tests/test_config_lookup_cache.py -v
 ```
 Expected: `ImportError: No module named 'app.services.openclaw.config_lookup_cache'`.
 
@@ -483,7 +483,7 @@ class ConfigLookupCache:
 **Step 4 — Verify it passes:**
 
 ```bash
-cd backend && pytest tests/test_config_lookup_cache.py -v
+cd backend && uv run pytest tests/test_config_lookup_cache.py -v
 ```
 Expected: 5 passed.
 
@@ -693,7 +693,7 @@ async def test_invalid_path_short_circuits_before_rpc(
 **Step 2 — Verify it fails:**
 
 ```bash
-cd backend && pytest tests/test_gateway_config_lookup_api.py -v
+cd backend && uv run pytest tests/test_gateway_config_lookup_api.py -v
 ```
 Expected: `AttributeError: module 'app.api.gateway' has no attribute '_CONFIG_LOOKUP_CACHE'` (and/or 404 from missing route).
 
@@ -766,7 +766,7 @@ Add `import asyncio` and the imports for `GatewayAdminLifecycleService`, `Config
 **Step 4 — Verify happy + cache + invalid path pass:**
 
 ```bash
-cd backend && pytest tests/test_gateway_config_lookup_api.py -v -k "happy or cache_singleflight or invalid_path"
+cd backend && uv run pytest tests/test_gateway_config_lookup_api.py -v -k "happy or cache_singleflight or invalid_path"
 ```
 Expected: 3 passed (error-mapping tests in Task 5 still failing, that's fine — only run the matching `-k` here).
 
@@ -936,7 +936,7 @@ async def test_other_gateway_id_returns_404(
 **Step 2 — Verify they fail:**
 
 ```bash
-cd backend && pytest tests/test_gateway_config_lookup_api.py -v -k "404 or 422 or 501 or 503 or 504"
+cd backend && uv run pytest tests/test_gateway_config_lookup_api.py -v -k "404 or 422 or 501 or 503 or 504"
 ```
 Expected: 6 failing (most likely 500 with unhandled `OpenClawGatewayError` / `TimeoutError`).
 
@@ -1000,7 +1000,7 @@ Note: `gateway_rpc.openclaw_call` wraps `TimeoutError` as `OpenClawGatewayError(
 **Step 4 — Verify all error tests pass + previous tests still pass:**
 
 ```bash
-cd backend && pytest tests/test_gateway_config_lookup_api.py -v
+cd backend && uv run pytest tests/test_gateway_config_lookup_api.py -v
 ```
 Expected: 9 passed (3 from Task 4 + 6 error mappings).
 
@@ -1053,14 +1053,14 @@ async def test_future_reload_kind_passes_through(
 **Step 2 — Verify it passes** (no code change should be needed if Task 1 was done right):
 
 ```bash
-cd backend && pytest tests/test_gateway_config_lookup_api.py::test_future_reload_kind_passes_through -v
+cd backend && uv run pytest tests/test_gateway_config_lookup_api.py::test_future_reload_kind_passes_through -v
 ```
 Expected: passed. If it fails, the schema was tightened — go back to Task 1.
 
 **Step 3 — Run full backend suite:**
 
 ```bash
-cd backend && pytest -q
+cd backend && uv run pytest -q
 ```
 Expected: 0 new failures vs. master baseline.
 
@@ -1624,7 +1624,7 @@ Tasks 1–6 can ship as one backend PR. Tasks 7–10 are the frontend PR. Task 1
 ## Verification rollup (run after every backend task)
 
 ```bash
-cd backend && pytest -q
+cd backend && uv run pytest -q
 ```
 
 ## Verification rollup (run after every frontend task)
