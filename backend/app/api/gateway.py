@@ -11,6 +11,7 @@ from sqlmodel import col, select
 
 from app.api.deps import require_org_admin
 from app.core.auth import AuthContext, get_auth_context
+from app.core.logging import get_logger
 from app.db.session import get_session
 from app.models.agents import Agent
 from app.models.gateways import Gateway
@@ -50,6 +51,8 @@ from app.services.organizations import OrganizationContext
 
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/gateways", tags=["gateways"])
 SESSION_DEP = Depends(get_session)
@@ -377,6 +380,14 @@ def _map_gateway_error(exc: OpenClawGatewayError, path: str) -> HTTPException:
     message = str(details.get("message") or str(exc) or "")
     lowered = message.lower()
 
+    logger.warning(
+        "gateway.config_lookup.failed path=%r code=%s request_id=%s message=%s",
+        path,
+        code or "<none>",
+        exc.request_id or "<none>",
+        message or "<none>",
+    )
+
     if code == "INVALID_REQUEST":
         if message == "config schema path not found":
             return HTTPException(
@@ -454,6 +465,12 @@ async def gateway_config_lookup(
     except OpenClawGatewayError as exc:
         raise _map_gateway_error(exc, trimmed_path) from exc
     if not isinstance(payload, dict):
+        logger.error(
+            "gateway.config_lookup.invalid_payload gateway_id=%s path=%r type=%s",
+            gateway_id,
+            trimmed_path,
+            type(payload).__name__,
+        )
         raise HTTPException(
             status_code=502,
             detail={"error": "gateway_invalid_payload"},
