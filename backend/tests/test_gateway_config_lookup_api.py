@@ -333,3 +333,32 @@ async def test_other_gateway_id_returns_404(
             params={"path": "agents"},
         )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_future_reload_kind_passes_through(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard: don't tighten reload_kind to a Literal[...] later."""
+
+    app, _, gateway = setup
+    _reset_cache()
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        return {
+            "path": ".",
+            "schema": {},
+            "reloadKind": "warm-restart-future",
+            "children": [],
+        }
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "."},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["reloadKind"] == "warm-restart-future"
