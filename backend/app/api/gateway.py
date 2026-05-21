@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import col, select
@@ -14,6 +16,7 @@ from app.models.agents import Agent
 from app.models.gateways import Gateway
 from app.schemas.common import OkResponse
 from app.schemas.gateway_api import (
+    ConfigSchemaLookupResponse,
     GatewayCommandsResponse,
     GatewayEvalApprovalResolveRequest,
     GatewayEvalSessionEnsureRequest,
@@ -30,7 +33,15 @@ from app.schemas.gateway_api import (
 from app.services.mc_gateway_subscriber.session_state_repo import (
     list_session_states_for_agent_ids,
 )
-from app.services.openclaw.gateway_rpc import GATEWAY_EVENTS, GATEWAY_METHODS, PROTOCOL_VERSION
+from app.services.openclaw.admin_service import GatewayAdminLifecycleService
+from app.services.openclaw.config_lookup_cache import ConfigLookupCache
+from app.services.openclaw.gateway_resolver import gateway_client_config
+from app.services.openclaw.gateway_rpc import (
+    GATEWAY_EVENTS,
+    GATEWAY_METHODS,
+    PROTOCOL_VERSION,
+    openclaw_call,
+)
 from app.services.openclaw.internal.agent_key import projection_lookup_id
 from app.services.openclaw.runtime_status import collect_openclaw_status
 from app.services.openclaw.session_service import GatewaySessionService
@@ -61,6 +72,10 @@ def _validate_config_lookup_path(raw: str) -> str:
     if any(ord(ch) < 0x20 for ch in trimmed):
         raise HTTPException(status_code=400, detail={"error": "invalid_path"})
     return trimmed
+
+
+_CONFIG_LOOKUP_CACHE = ConfigLookupCache(ttl_seconds=30.0)
+_CONFIG_LOOKUP_RPC_TIMEOUT_SECONDS = 5.0
 
 
 def _query_to_resolve_input(
@@ -348,3 +363,48 @@ async def projected_gateway_sessions(
             ProjectedGatewaySession.model_validate(row, from_attributes=True) for row in rows
         ],
     )
+
+
+@router.get(
+    "/{gateway_id}/config/lookup",
+    response_model=ConfigSchemaLookupResponse,
+    response_model_by_alias=True,
+    operation_id="gateway_config_lookup",
+)
+async def gateway_config_lookup(
+    gateway_id: UUID,
+    path: str = Query(..., min_length=1, max_length=512),
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> ConfigSchemaLookupResponse:
+    """Look up gateway config schema + reload metadata for a single path."""
+
+    del auth  # required only to enforce the dependency
+    trimmed_path = _validate_config_lookup_path(path)
+
+    gateway = await GatewayAdminLifecycleService(session).require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    cfg = gateway_client_config(gateway)
+
+    async def _load() -> object:
+        return await asyncio.wait_for(
+            openclaw_call(
+                "config.schema.lookup",
+                {"path": trimmed_path},
+                config=cfg,
+            ),
+            timeout=_CONFIG_LOOKUP_RPC_TIMEOUT_SECONDS,
+        )
+
+    payload = await _CONFIG_LOOKUP_CACHE.get_or_load(
+        (gateway_id, trimmed_path), _load,
+    )
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        )
+    return ConfigSchemaLookupResponse.model_validate({**payload, "gateway_id": gateway_id})

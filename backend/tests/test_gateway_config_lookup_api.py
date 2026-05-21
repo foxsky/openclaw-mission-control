@@ -1,0 +1,190 @@
+# ruff: noqa: INP001
+"""Integration tests for /api/v1/gateways/{id}/config/lookup."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from typing import Any
+from uuid import UUID, uuid4
+
+import pytest
+import pytest_asyncio
+from fastapi import APIRouter, FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlmodel import SQLModel
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from app.api import gateway as gateway_api
+from app.api.deps import require_org_admin
+from app.api.gateway import router as gateway_router
+from app.core.auth import AuthContext, get_auth_context
+from app.db.session import get_session
+from app.models.gateways import Gateway
+from app.models.organization_members import OrganizationMember
+from app.models.organizations import Organization
+from app.models.users import User
+from app.services.openclaw.gateway_rpc import OpenClawGatewayError
+from app.services.organizations import OrganizationContext
+
+
+def _build_app(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    organization: Organization,
+) -> FastAPI:
+    app = FastAPI()
+    api_v1 = APIRouter(prefix="/api/v1")
+    api_v1.include_router(gateway_router)
+    app.include_router(api_v1)
+
+    async def _override_get_session() -> AsyncSession:
+        async with session_maker() as session:
+            yield session
+
+    async def _override_require_org_admin() -> OrganizationContext:
+        return OrganizationContext(
+            organization=organization,
+            member=OrganizationMember(
+                organization_id=organization.id,
+                user_id=uuid4(),
+                role="owner",
+                all_boards_read=True,
+                all_boards_write=True,
+            ),
+        )
+
+    async def _override_get_auth_context() -> AuthContext:
+        return AuthContext(
+            actor_type="user",
+            user=User(id=uuid4(), clerk_user_id="test-user", email="t@e"),
+        )
+
+    app.dependency_overrides[get_session] = _override_get_session
+    app.dependency_overrides[require_org_admin] = _override_require_org_admin
+    app.dependency_overrides[get_auth_context] = _override_get_auth_context
+    return app
+
+
+@pytest_asyncio.fixture
+async def setup() -> AsyncIterator[tuple[FastAPI, Organization, Gateway]]:
+    engine: AsyncEngine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    org = Organization(id=uuid4(), name="Org One")
+    gateway = Gateway(
+        id=uuid4(),
+        organization_id=org.id,
+        name="Gateway One",
+        url="https://gateway.example.local",
+        workspace_root="/workspace/openclaw",
+    )
+    async with session_maker() as session:
+        session.add(org)
+        session.add(gateway)
+        await session.commit()
+
+    app = _build_app(session_maker, organization=org)
+    try:
+        yield app, org, gateway
+    finally:
+        await engine.dispose()
+
+
+def _reset_cache() -> None:
+    gateway_api._CONFIG_LOOKUP_CACHE = type(gateway_api._CONFIG_LOOKUP_CACHE)(ttl_seconds=30.0)
+
+
+@pytest.mark.asyncio
+async def test_happy_path_returns_schema_and_badges(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    _reset_cache()
+
+    captured: list[tuple[str, Any]] = []
+
+    async def _fake_openclaw_call(method: str, params: Any = None, *, config: Any) -> object:
+        captured.append((method, params))
+        return {
+            "path": "agents.defaults.models",
+            "schema": {"type": "object"},
+            "reloadKind": "restart",
+            "hint": "Restart required.",
+            "hintPath": "agents.defaults.models",
+            "children": [
+                {"path": "agents.defaults.models.foo", "reloadKind": "hot"},
+            ],
+        }
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake_openclaw_call)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "agents.defaults.models"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["gateway_id"] == str(gateway.id)
+    assert body["reloadKind"] == "restart"
+    assert body["children"][0]["reloadKind"] == "hot"
+    assert captured == [("config.schema.lookup", {"path": "agents.defaults.models"})]
+
+
+@pytest.mark.asyncio
+async def test_cache_singleflight_single_invocation_within_ttl(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    _reset_cache()
+
+    calls = 0
+
+    async def _fake_openclaw_call(method: str, params: Any = None, *, config: Any) -> object:
+        nonlocal calls
+        calls += 1
+        return {"path": "p", "schema": {}, "reloadKind": "none", "children": []}
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake_openclaw_call)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        url = f"/api/v1/gateways/{gateway.id}/config/lookup"
+        r1 = await client.get(url, params={"path": "agents"})
+        r2 = await client.get(url, params={"path": "agents"})
+
+    assert r1.status_code == r2.status_code == 200
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_path_short_circuits_before_rpc(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    _reset_cache()
+
+    called = False
+
+    async def _fake_openclaw_call(method: str, params: Any = None, *, config: Any) -> object:
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake_openclaw_call)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "\x00bad"},
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "invalid_path"
+    assert called is False
