@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import col, select
 
 from app.api.deps import require_org_admin
@@ -44,6 +44,23 @@ SESSION_DEP = Depends(get_session)
 AUTH_DEP = Depends(get_auth_context)
 ORG_ADMIN_DEP = Depends(require_org_admin)
 BOARD_ID_QUERY = Query(default=None)
+
+_MAX_CONFIG_LOOKUP_PATH_LEN = 512
+
+
+def _validate_config_lookup_path(raw: str) -> str:
+    """Cheap pre-validation; lets the gateway parser be authoritative on grammar.
+
+    Rejects only empty/oversize/control-char input so the WS RPC never sees
+    obviously-bad payloads. Bracket-quoted keys, dotted paths, and the root
+    sentinel `.` all pass through unchanged.
+    """
+    trimmed = raw.strip()
+    if not trimmed or len(trimmed) > _MAX_CONFIG_LOOKUP_PATH_LEN:
+        raise HTTPException(status_code=400, detail={"error": "invalid_path"})
+    if any(ord(ch) < 0x20 for ch in trimmed):
+        raise HTTPException(status_code=400, detail={"error": "invalid_path"})
+    return trimmed
 
 
 def _query_to_resolve_input(
