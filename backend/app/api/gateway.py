@@ -38,14 +38,12 @@ from app.services.mc_gateway_subscriber.session_state_repo import (
 )
 from app.services.openclaw.admin_service import GatewayAdminLifecycleService
 from app.services.openclaw.config_lookup_cache import ConfigLookupCache
-from app.services.openclaw.gateway_resolver import (
-    GatewayClientConfig,
-    gateway_client_config,
-)
+from app.services.openclaw.gateway_resolver import gateway_client_config
 from app.services.openclaw.gateway_rpc import (
     GATEWAY_EVENTS,
     GATEWAY_METHODS,
     PROTOCOL_VERSION,
+    GatewayConfig,
     OpenClawGatewayError,
     openclaw_call,
 )
@@ -83,14 +81,14 @@ def _validate_config_lookup_path(raw: str) -> str:
     return trimmed
 
 
-def _gateway_connection_fingerprint(cfg: GatewayClientConfig) -> str:
+def _gateway_connection_fingerprint(cfg: GatewayConfig) -> str:
     """Stable per-connection fingerprint so the cache invalidates when the
     gateway target changes within the TTL window.
 
     The Gateway row's ``updated_at`` is not bumped on PATCH (no SQL
     ``onupdate=`` and ``apply_updates`` does not touch it), so we cannot
     rely on it. Hash the connection-identifying fields of the resolved
-    ``GatewayClientConfig`` instead; generic tunables are intentionally
+    ``GatewayConfig`` instead; generic tunables are intentionally
     excluded so they do not perturb the cache.
     """
     h = hashlib.sha256()
