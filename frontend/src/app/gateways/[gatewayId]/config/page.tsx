@@ -8,9 +8,14 @@ import {
   useSearchParams,
 } from "next/navigation";
 
+import { useAuth } from "@/auth/clerk";
+
 import { ConfigReloadKindBadge } from "@/components/ConfigReloadKindBadge";
+import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
+import { Button } from "@/components/ui/button";
 import { useGatewayConfigLookup } from "@/api/generated/gateways/gateways";
 import type { ConfigSchemaLookupResponse } from "@/api/generated/model";
+import { useOrganizationMembership } from "@/lib/use-organization-membership";
 
 export const dynamic = "force-dynamic";
 
@@ -40,8 +45,10 @@ function Inner() {
 
   const goTo = (nextPath: string) => {
     const next = new URLSearchParams(searchParams.toString());
-    next.set("path", nextPath);
-    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+    if (nextPath === ".") next.delete("path");
+    else next.set("path", nextPath);
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
   if (isLoading) {
@@ -150,6 +157,11 @@ function ErrorPanel({ error }: { error: unknown }) {
       </div>
     );
   }
+  if (status === 422) {
+    return (
+      <div className="text-sm text-red-700">Gateway rejected the request.</div>
+    );
+  }
   if (status === 501) {
     return (
       <div className="text-sm text-amber-800">
@@ -158,13 +170,49 @@ function ErrorPanel({ error }: { error: unknown }) {
       </div>
     );
   }
-  return <div className="text-sm text-red-700">Gateway unreachable.</div>;
+  if (status === 503) {
+    return <div className="text-sm text-red-700">Gateway unreachable.</div>;
+  }
+  if (status === 504) {
+    return <div className="text-sm text-red-700">Gateway timed out.</div>;
+  }
+  return <div className="text-sm text-red-700">Unexpected error.</div>;
 }
 
 export default function GatewayConfigPage() {
+  const { isSignedIn } = useAuth();
+  const { isAdmin } = useOrganizationMembership(isSignedIn);
+  const router = useRouter();
+  const params = useParams();
+  const gatewayIdParam = params?.gatewayId;
+  const gatewayId = Array.isArray(gatewayIdParam)
+    ? gatewayIdParam[0]
+    : (gatewayIdParam ?? "");
+
   return (
-    <Suspense fallback={<div className="text-sm text-muted">Loading…</div>}>
-      <Inner />
-    </Suspense>
+    <DashboardPageLayout
+      signedOut={{
+        message: "Sign in to inspect gateway config.",
+        forceRedirectUrl: `/gateways/${gatewayId}/config`,
+      }}
+      title="Gateway config schema lookup"
+      description="Browse the gateway config schema and inspect reload metadata (Restart / Hot / No-op)."
+      headerActions={
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => router.push(`/gateways/${gatewayId}`)}
+          >
+            Back to gateway
+          </Button>
+        </div>
+      }
+      isAdmin={isAdmin}
+      adminOnlyMessage="Only organization owners and admins can inspect gateway config."
+    >
+      <Suspense fallback={<div className="text-sm text-muted">Loading…</div>}>
+        <Inner />
+      </Suspense>
+    </DashboardPageLayout>
   );
 }

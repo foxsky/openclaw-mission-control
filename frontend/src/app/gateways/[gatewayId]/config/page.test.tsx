@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -31,6 +32,33 @@ vi.mock("next/navigation", () => ({
   useParams: () => ({ gatewayId: "gw-1" }),
   useSearchParams: () => new URLSearchParams("path=agents.defaults.models"),
   usePathname: () => "/gateways/gw-1/config",
+}));
+
+vi.mock("@/auth/clerk", () => ({
+  useAuth: () => ({ isSignedIn: true }),
+}));
+
+vi.mock("@/lib/use-organization-membership", () => ({
+  useOrganizationMembership: () => ({ isAdmin: true }),
+}));
+
+// The page renders inside DashboardPageLayout, which pulls in DashboardShell,
+// DashboardSidebar, UserMenu, OrgSwitcher, etc. — far more than this inspector
+// test needs. Stub the layout down to children + headerActions so we exercise
+// only the page's own JSX.
+vi.mock("@/components/templates/DashboardPageLayout", () => ({
+  DashboardPageLayout: ({
+    headerActions,
+    children,
+  }: {
+    headerActions?: ReactNode;
+    children: ReactNode;
+  }) => (
+    <div>
+      <div data-testid="header-actions">{headerActions}</div>
+      <div>{children}</div>
+    </div>
+  ),
 }));
 
 import GatewayConfigPage from "./page";
