@@ -22,7 +22,7 @@ async def test_first_call_invokes_loader() -> None:
         calls += 1
         return {"reloadKind": "restart"}
 
-    result = await cache.get_or_load((gateway_id, "agents"), _load)
+    result = await cache.get_or_load((gateway_id, "agents", "fp-1"), _load)
 
     assert result == {"reloadKind": "restart"}
     assert calls == 1
@@ -39,8 +39,8 @@ async def test_cache_hit_within_ttl_skips_loader() -> None:
         calls += 1
         return {"v": calls}
 
-    first = await cache.get_or_load((gateway_id, "agents"), _load)
-    second = await cache.get_or_load((gateway_id, "agents"), _load)
+    first = await cache.get_or_load((gateway_id, "agents", "fp-1"), _load)
+    second = await cache.get_or_load((gateway_id, "agents", "fp-1"), _load)
 
     assert first == second == {"v": 1}
     assert calls == 1
@@ -61,9 +61,9 @@ async def test_singleflight_concurrent_calls_share_loader() -> None:
         await release.wait()
         return {"v": calls}
 
-    task_a = asyncio.create_task(cache.get_or_load((gateway_id, "p"), _load))
+    task_a = asyncio.create_task(cache.get_or_load((gateway_id, "p", "fp-1"), _load))
     await started.wait()
-    task_b = asyncio.create_task(cache.get_or_load((gateway_id, "p"), _load))
+    task_b = asyncio.create_task(cache.get_or_load((gateway_id, "p", "fp-1"), _load))
     await asyncio.sleep(0)  # let task_b register on the same future
     release.set()
 
@@ -84,12 +84,12 @@ async def test_loader_exception_is_not_cached() -> None:
         raise RuntimeError("boom")
 
     with pytest.raises(RuntimeError, match="boom"):
-        await cache.get_or_load((gateway_id, "agents"), _failing)
+        await cache.get_or_load((gateway_id, "agents", "fp-1"), _failing)
 
     async def _ok() -> dict[str, object]:
         return {"ok": True}
 
-    result = await cache.get_or_load((gateway_id, "agents"), _ok)
+    result = await cache.get_or_load((gateway_id, "agents", "fp-1"), _ok)
     assert result == {"ok": True}
     assert calls == 1  # the failing loader ran once; subsequent _ok ran independently
 
@@ -105,7 +105,7 @@ async def test_ttl_expiry_refetches() -> None:
         calls += 1
         return {"v": calls}
 
-    first = await cache.get_or_load((gateway_id, "agents"), _load)
-    second = await cache.get_or_load((gateway_id, "agents"), _load)
+    first = await cache.get_or_load((gateway_id, "agents", "fp-1"), _load)
+    second = await cache.get_or_load((gateway_id, "agents", "fp-1"), _load)
     assert first == {"v": 1}
     assert second == {"v": 2}

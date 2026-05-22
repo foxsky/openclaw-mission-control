@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 from sqlmodel import col, select
 
 from app.api.deps import require_org_admin
@@ -36,7 +38,10 @@ from app.services.mc_gateway_subscriber.session_state_repo import (
 )
 from app.services.openclaw.admin_service import GatewayAdminLifecycleService
 from app.services.openclaw.config_lookup_cache import ConfigLookupCache
-from app.services.openclaw.gateway_resolver import gateway_client_config
+from app.services.openclaw.gateway_resolver import (
+    GatewayClientConfig,
+    gateway_client_config,
+)
 from app.services.openclaw.gateway_rpc import (
     GATEWAY_EVENTS,
     GATEWAY_METHODS,
@@ -76,6 +81,27 @@ def _validate_config_lookup_path(raw: str) -> str:
     if any(ord(ch) < 0x20 for ch in trimmed):
         raise HTTPException(status_code=400, detail={"error": "invalid_path"})
     return trimmed
+
+
+def _gateway_connection_fingerprint(cfg: GatewayClientConfig) -> str:
+    """Stable per-connection fingerprint so the cache invalidates when the
+    gateway target changes within the TTL window.
+
+    The Gateway row's ``updated_at`` is not bumped on PATCH (no SQL
+    ``onupdate=`` and ``apply_updates`` does not touch it), so we cannot
+    rely on it. Hash the connection-identifying fields of the resolved
+    ``GatewayClientConfig`` instead; generic tunables are intentionally
+    excluded so they do not perturb the cache.
+    """
+    h = hashlib.sha256()
+    h.update(cfg.url.encode("utf-8"))
+    h.update(b"\x00")
+    h.update(str(cfg.allow_insecure_tls).encode("utf-8"))
+    h.update(b"\x00")
+    h.update(str(cfg.disable_device_pairing).encode("utf-8"))
+    h.update(b"\x00")
+    h.update((cfg.token or "").encode("utf-8"))
+    return h.hexdigest()[:16]
 
 
 _CONFIG_LOOKUP_CACHE = ConfigLookupCache(ttl_seconds=30.0)
@@ -443,6 +469,7 @@ async def gateway_config_lookup(
         organization_id=ctx.organization.id,
     )
     cfg = gateway_client_config(gateway)
+    fingerprint = _gateway_connection_fingerprint(cfg)
 
     async def _load() -> object:
         return await asyncio.wait_for(
@@ -456,7 +483,7 @@ async def gateway_config_lookup(
 
     try:
         payload = await _CONFIG_LOOKUP_CACHE.get_or_load(
-            (gateway_id, trimmed_path), _load,
+            (gateway_id, trimmed_path, fingerprint), _load,
         )
     except asyncio.TimeoutError as exc:
         raise HTTPException(
@@ -475,4 +502,17 @@ async def gateway_config_lookup(
             status_code=502,
             detail={"error": "gateway_invalid_payload"},
         )
-    return ConfigSchemaLookupResponse.model_validate({**payload, "gateway_id": gateway_id})
+    try:
+        return ConfigSchemaLookupResponse.model_validate(
+            {**payload, "gateway_id": gateway_id},
+        )
+    except ValidationError as exc:
+        logger.error(
+            "gateway.config_lookup.invalid_payload_shape gateway_id=%s path=%r errors=%s",
+            gateway_id,
+            trimmed_path,
+            exc.errors(include_url=False, include_input=False),
+        )
+        raise HTTPException(
+            status_code=502, detail={"error": "gateway_invalid_payload"},
+        ) from exc

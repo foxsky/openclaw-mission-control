@@ -362,3 +362,54 @@ async def test_future_reload_kind_passes_through(
         )
     assert resp.status_code == 200
     assert resp.json()["reloadKind"] == "warm-restart-future"
+
+
+@pytest.mark.asyncio
+async def test_non_dict_payload_returns_502(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    _reset_cache()
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        return ["not", "a", "dict"]
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "agents"},
+        )
+    assert resp.status_code == 502
+    assert resp.json()["detail"]["error"] == "gateway_invalid_payload"
+
+
+@pytest.mark.asyncio
+async def test_malformed_reload_kind_shape_returns_502(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pydantic ValidationError on a non-string reloadKind must surface as 502, not 500."""
+
+    app, _, gateway = setup
+    _reset_cache()
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        return {
+            "path": "agents",
+            "schema": {},
+            "reloadKind": ["restart"],  # array — not str | None
+            "children": [],
+        }
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "agents"},
+        )
+    assert resp.status_code == 502
+    assert resp.json()["detail"]["error"] == "gateway_invalid_payload"

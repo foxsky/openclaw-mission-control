@@ -25,13 +25,13 @@ class ConfigLookupCache:
 
     def __init__(self, ttl_seconds: float) -> None:
         self._ttl = ttl_seconds
-        self._values: dict[tuple[UUID, str], _Entry] = {}
-        self._inflight: dict[tuple[UUID, str], asyncio.Future[object]] = {}
+        self._values: dict[tuple[UUID, str, str], _Entry] = {}
+        self._inflight: dict[tuple[UUID, str, str], asyncio.Future[object]] = {}
         self._lock = asyncio.Lock()
 
     async def get_or_load(
         self,
-        key: tuple[UUID, str],
+        key: tuple[UUID, str, str],
         loader: Callable[[], Awaitable[object]],
     ) -> object:
         now = time.monotonic()
