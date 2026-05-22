@@ -26,14 +26,16 @@ function Inner() {
 
   const path = searchParams.get("path") ?? ".";
 
-  const { data, isLoading, error } = useGatewayConfigLookup(gatewayId, {
-    path,
-  });
+  const queryResult = useGatewayConfigLookup(gatewayId, { path });
+
+  if (!gatewayId) {
+    return <div className="text-sm text-muted">Missing gateway id.</div>;
+  }
+
+  const { data, isLoading, error } = queryResult;
 
   // The orval-generated hook returns the customFetch envelope
   // `{ data: ConfigSchemaLookupResponse; status: number; headers: Headers }`.
-  // Tests mock the hook to return the raw response directly, so we accept either
-  // shape and resolve down to `ConfigSchemaLookupResponse`.
   const lookup = resolveLookup(data);
 
   const goTo = (nextPath: string) => {
@@ -78,13 +80,15 @@ function Inner() {
         <h3 className="font-medium">Children ({children.length})</h3>
         <ul className="mt-2 divide-y divide-[color:var(--border)]">
           {children.map((child) => (
-            <li
-              key={child.path}
-              className="flex cursor-pointer items-center justify-between py-2 hover:bg-zinc-50"
-              onClick={() => goTo(child.path)}
-            >
-              <span className="text-sm">{child.path}</span>
-              <ConfigReloadKindBadge reloadKind={child.reloadKind ?? null} />
+            <li key={child.path}>
+              <button
+                type="button"
+                onClick={() => goTo(child.path)}
+                className="flex w-full cursor-pointer items-center justify-between py-2 text-left hover:bg-slate-50"
+              >
+                <span className="text-sm">{child.path}</span>
+                <ConfigReloadKindBadge reloadKind={child.reloadKind ?? null} />
+              </button>
             </li>
           ))}
         </ul>
@@ -93,28 +97,17 @@ function Inner() {
   );
 }
 
+type LookupEnvelope = {
+  status: number;
+  data: unknown;
+};
+
 function resolveLookup(
-  data: unknown,
+  envelope: LookupEnvelope | undefined | null,
 ): ConfigSchemaLookupResponse | null {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
-  // Orval envelope: { data, status, headers }
-  const maybeEnvelope = data as {
-    status?: number;
-    data?: ConfigSchemaLookupResponse;
-  };
-  if (
-    typeof maybeEnvelope.status === "number" &&
-    maybeEnvelope.data &&
-    typeof maybeEnvelope.data === "object" &&
-    "path" in maybeEnvelope.data
-  ) {
-    return maybeEnvelope.data;
-  }
-  // Raw response (used by tests)
-  if ("path" in data) {
-    return data as ConfigSchemaLookupResponse;
+  if (!envelope) return null;
+  if (envelope.status === 200 && envelope.data) {
+    return envelope.data as ConfigSchemaLookupResponse;
   }
   return null;
 }

@@ -6,15 +6,19 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/api/generated/gateways/gateways", () => ({
   useGatewayConfigLookup: vi.fn(() => ({
     data: {
-      gateway_id: "gw-1",
-      path: "agents.defaults.models",
-      schema: { type: "object" },
-      reloadKind: "restart",
-      hint: "Restart required.",
-      hintPath: "agents.defaults.models",
-      children: [
-        { path: "agents.defaults.models.foo", reloadKind: "hot" },
-      ],
+      status: 200,
+      data: {
+        gateway_id: "gw-1",
+        path: "agents.defaults.models",
+        schema: { type: "object" },
+        reloadKind: "restart",
+        hint: "Restart required.",
+        hintPath: "agents.defaults.models",
+        children: [
+          { path: "agents.defaults.models.foo", reloadKind: "hot" },
+        ],
+      },
+      headers: new Headers(),
     },
     isLoading: false,
     error: null,
