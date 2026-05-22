@@ -227,7 +227,10 @@ async def test_other_invalid_request_returns_422(
     async def _fake(method: str, params: Any = None, *, config: Any) -> object:
         raise OpenClawGatewayError(
             "bad shape",
-            details={"code": "INVALID_REQUEST", "message": "config schema lookup returned invalid payload"},
+            details={
+                "code": "INVALID_REQUEST",
+                "message": "config schema lookup returned invalid payload",
+            },
         )
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)

@@ -483,11 +483,13 @@ async def gateway_config_lookup(
 
     try:
         payload = await _CONFIG_LOOKUP_CACHE.get_or_load(
-            (gateway_id, trimmed_path, fingerprint), _load,
+            (gateway_id, trimmed_path, fingerprint),
+            _load,
         )
     except asyncio.TimeoutError as exc:
         raise HTTPException(
-            status_code=504, detail={"error": "gateway_timeout"},
+            status_code=504,
+            detail={"error": "gateway_timeout"},
         ) from exc
     except OpenClawGatewayError as exc:
         raise _map_gateway_error(exc, trimmed_path) from exc
@@ -514,5 +516,6 @@ async def gateway_config_lookup(
             exc.errors(include_url=False, include_input=False),
         )
         raise HTTPException(
-            status_code=502, detail={"error": "gateway_invalid_payload"},
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
         ) from exc

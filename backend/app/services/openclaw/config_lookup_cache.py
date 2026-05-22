@@ -52,7 +52,9 @@ class ConfigLookupCache:
 
         try:
             value = await loader()
-        except BaseException as exc:  # noqa: BLE001 — propagate (incl. CancelledError) to all waiters
+        except (
+            BaseException
+        ) as exc:  # noqa: BLE001 — propagate (incl. CancelledError) to all waiters
             async with self._lock:
                 self._inflight.pop(key, None)
             if not inflight.done():
