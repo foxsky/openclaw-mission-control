@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import {
   useParams,
   usePathname,
@@ -33,6 +33,13 @@ function Inner() {
 
   const queryResult = useGatewayConfigLookup(gatewayId, { path });
 
+  const [draft, setDraft] = useState(path);
+
+  // Keep input in sync if URL changes (e.g., breadcrumb click)
+  useEffect(() => {
+    setDraft(path);
+  }, [path]);
+
   if (!gatewayId) {
     return <div className="text-sm text-muted">Missing gateway id.</div>;
   }
@@ -51,6 +58,11 @@ function Inner() {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
+  const submit = (raw: string) => {
+    const trimmed = raw.trim();
+    goTo(trimmed === "" ? "." : trimmed);
+  };
+
   if (isLoading) {
     return <div className="text-sm text-muted">Loading…</div>;
   }
@@ -65,6 +77,34 @@ function Inner() {
 
   return (
     <div className="flex flex-col gap-4">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit(draft);
+        }}
+        className="flex items-center gap-2"
+      >
+        <label htmlFor="config-lookup-path" className="text-sm font-medium">
+          Path
+        </label>
+        <input
+          id="config-lookup-path"
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="agents.defaults.models"
+          spellCheck={false}
+          autoComplete="off"
+          className="flex-1 rounded border border-[color:var(--border)] px-2 py-1 text-sm font-mono"
+        />
+        <button
+          type="submit"
+          className="rounded border border-[color:var(--border)] px-3 py-1 text-sm hover:bg-slate-50"
+        >
+          Lookup
+        </button>
+      </form>
+
       <header className="flex items-center justify-between">
         <Breadcrumbs path={lookup.path} onJump={goTo} />
         <ConfigReloadKindBadge reloadKind={lookup.reloadKind ?? null} />
@@ -119,6 +159,32 @@ function resolveLookup(
   return null;
 }
 
+/**
+ * Split a config schema path into segments while preserving bracket-quoted keys.
+ *
+ * `agents.defaults.models["openai-codex/gpt-5.5"].params`
+ *   → ["agents", "defaults", "models[\"openai-codex/gpt-5.5\"]", "params"]
+ */
+function splitPath(path: string): string[] {
+  if (path === "." || path === "") return [];
+  const out: string[] = [];
+  let current = "";
+  let inBrackets = false;
+  for (let i = 0; i < path.length; i++) {
+    const ch = path[i];
+    if (ch === "[") inBrackets = true;
+    else if (ch === "]") inBrackets = false;
+    if (ch === "." && !inBrackets) {
+      if (current.length > 0) out.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  if (current.length > 0) out.push(current);
+  return out;
+}
+
 function Breadcrumbs({
   path,
   onJump,
@@ -126,7 +192,7 @@ function Breadcrumbs({
   path: string;
   onJump: (p: string) => void;
 }) {
-  const segments = path === "." ? ["."] : ["."].concat(path.split("."));
+  const segments = path === "." ? ["."] : ["."].concat(splitPath(path));
   return (
     <nav className="flex items-center gap-1 text-sm">
       {segments.map((seg, i) => {
