@@ -1945,3 +1945,13 @@ cd frontend && npx tsc --noEmit && \
 - Bulk-revoke / age-filtered auto-purge
 - Token rotation
 - Public-key fingerprint display
+
+## Verified shapes (from Task 1 probe — 2026-05-23)
+
+- **Accepted params:** `{"deviceId": "<hex>"}` (schema-accepted; returned the not-found path for the bogus id)
+- **Not-found error:** `code='INVALID_REQUEST', message='unknown deviceId'` (exact strings from the probe output)
+- **Other shapes:** `{"id": ...}` and `{"device": ...}` both returned `code='INVALID_REQUEST', message="invalid device.pair.remove params: must have required property 'deviceId'; at root: unexpected property '<id|device>'"` — schema-validation failures before any lookup
+- **Pairing-scope denied:** NOT observed in probe (MC has operator.pairing). DELETE handler tests use the canonical INVALID_REQUEST + "insufficient scope" pattern; if the live shape ever differs, a real-prod failure will surface it.
+
+These verified strings are used by Task 5's substring matchers in `_map_pairing_error` (`"device not found"` / `"unknown device"`) — update those matchers if the real strings don't match either substring. **Note:** the live message is `"unknown deviceId"` (camelCase, not `"unknown device"`), so the `"unknown device"` substring matcher will still match (substring-contains), but the more precise check is `"unknown deviceid"` (case-insensitive) or just `"unknown device"`.
+
