@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -396,12 +396,18 @@ async def projected_gateway_sessions(
 _GATEWAY_METHOD_REQUIRED_VERSION = "2026.5.19"
 
 
-def _map_gateway_error_common(exc: OpenClawGatewayError) -> dict[str, Any]:
-    """Extract canonical fields used by every endpoint-specific mapper.
+class _GatewayErrorFields(TypedDict):
+    """Canonical fields extracted from an ``OpenClawGatewayError`` for HTTP mapping."""
 
-    Returned dict has keys: ``code`` (uppercased), ``message``, ``lowered``
-    (message.lower()), ``request_id``, ``is_method_unsupported``.
-    """
+    code: str
+    message: str
+    lowered: str
+    request_id: str | None
+    is_method_unsupported: bool
+
+
+def _map_gateway_error_common(exc: OpenClawGatewayError) -> _GatewayErrorFields:
+    """Canonical OpenClawGatewayError -> mapper-fields extraction."""
 
     details: dict[str, Any] = exc.details if isinstance(exc.details, dict) else {}
     code = str(details.get("code") or "").upper()
