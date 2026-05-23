@@ -14,10 +14,18 @@ vi.mock("@/api/generated/gateways/gateways", () => ({
         path: "agents.defaults.models",
         schema: { type: "object" },
         reloadKind: "restart",
-        hint: "Restart required.",
+        hint: {
+          label: "Models",
+          help: "Restart required.",
+          tags: ["advanced"],
+        },
         hintPath: "agents.defaults.models",
         children: [
-          { path: "agents.defaults.models.foo", reloadKind: "hot" },
+          {
+            path: "agents.defaults.models.foo",
+            reloadKind: "hot",
+            hint: { label: "Foo", help: "Hot-reloadable." },
+          },
         ],
       },
       headers: new Headers(),
@@ -145,5 +153,13 @@ describe("GatewayConfigPage", () => {
     expect(
       screen.getByRole("button", { name: 'models["openai-codex/gpt-5.5"]' }),
     ).toBeInTheDocument();
+  });
+
+  it("renders the structured hint object (label + help + tags)", () => {
+    renderPage();
+    // The hint mock above is { label: "Models", help: "Restart required.", tags: ["advanced"] }
+    expect(screen.getByText("Models")).toBeInTheDocument();
+    expect(screen.getByText("Restart required.")).toBeInTheDocument();
+    expect(screen.getByText("advanced")).toBeInTheDocument();
   });
 });

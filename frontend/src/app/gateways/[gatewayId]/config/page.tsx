@@ -119,7 +119,7 @@ function Inner() {
         </div>
         <div className="rounded border border-[color:var(--border)] p-3 text-sm">
           <h3 className="font-medium">Hint</h3>
-          <p className="mt-2 text-muted">{lookup.hint ?? "—"}</p>
+          <HintBody hint={lookup.hint} />
         </div>
       </section>
 
@@ -183,6 +183,41 @@ function splitPath(path: string): string[] {
   }
   if (current.length > 0) out.push(current);
   return out;
+}
+
+/**
+ * Render the structured hint payload the gateway emits at each schema path.
+ *
+ * Shape (observed against OpenClaw 2026.5.19):
+ *   { label, help, tags?: string[], group?, order? }
+ * All keys are optional in practice; null/undefined hint → em-dash.
+ */
+function HintBody({ hint }: { hint: { [key: string]: unknown } | null | undefined }) {
+  if (!hint) return <p className="mt-2 text-muted">—</p>;
+  const label = typeof hint.label === "string" ? hint.label : null;
+  const help = typeof hint.help === "string" ? hint.help : null;
+  const tags = Array.isArray(hint.tags)
+    ? hint.tags.filter((t): t is string => typeof t === "string")
+    : [];
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      {label && <p className="font-medium">{label}</p>}
+      {help && <p className="text-muted">{help}</p>}
+      {tags.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {tags.map((t) => (
+            <span
+              key={t}
+              className="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-700"
+            >
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+      {!label && !help && tags.length === 0 && <p className="text-muted">—</p>}
+    </div>
+  );
 }
 
 function Breadcrumbs({
