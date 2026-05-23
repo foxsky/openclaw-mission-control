@@ -113,10 +113,14 @@ async def test_happy_path_returns_schema_and_badges(
             "path": "agents.defaults.models",
             "schema": {"type": "object"},
             "reloadKind": "restart",
-            "hint": "Restart required.",
+            "hint": {"label": "Models", "help": "Restart required."},
             "hintPath": "agents.defaults.models",
             "children": [
-                {"path": "agents.defaults.models.foo", "reloadKind": "hot"},
+                {
+                    "path": "agents.defaults.models.foo",
+                    "reloadKind": "hot",
+                    "hint": {"label": "Foo", "help": "Hot-reloadable."},
+                },
             ],
         }
 
@@ -416,3 +420,72 @@ async def test_malformed_reload_kind_shape_returns_502(
         )
     assert resp.status_code == 502
     assert resp.json()["detail"]["error"] == "gateway_invalid_payload"
+
+
+@pytest.mark.asyncio
+async def test_accepts_live_gateway_shape_with_object_hint_and_extra_child_fields(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: gateway emits ``hint`` as ``{label, help, tags, ...}`` and
+    children carry extra fields (``key``, ``type``, ``required``, ``hasChildren``,
+    ``hintPath``). The schema must accept the live shape verbatim."""
+
+    app, _, gateway = setup
+    _reset_cache()
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        return {
+            "path": "agents",
+            "schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+            },
+            "reloadKind": "restart",
+            "children": [
+                {
+                    "key": "meta",
+                    "path": "agents.meta",
+                    "type": "object",
+                    "required": False,
+                    "hasChildren": True,
+                    "reloadKind": "none",
+                    "hint": {
+                        "label": "Metadata",
+                        "help": "Metadata fields automatically maintained.",
+                        "tags": ["advanced"],
+                    },
+                    "hintPath": "agents.meta",
+                },
+                {
+                    "key": "env",
+                    "path": "agents.env",
+                    "type": "object",
+                    "required": False,
+                    "hasChildren": True,
+                    "reloadKind": "restart",
+                    "hint": {
+                        "label": "Environment",
+                        "group": "Wizard",
+                        "order": 20,
+                        "help": "Environment overrides.",
+                        "tags": ["advanced", "observability"],
+                    },
+                    "hintPath": "agents.env",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            f"/api/v1/gateways/{gateway.id}/config/lookup",
+            params={"path": "agents"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reloadKind"] == "restart"
+    assert body["children"][0]["hint"]["help"].startswith("Metadata")
+    assert body["children"][1]["hint"]["group"] == "Wizard"
+    assert body["children"][1]["hint"]["order"] == 20

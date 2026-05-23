@@ -4,12 +4,18 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { ConfigSchemaLookupChildHint } from "./configSchemaLookupChildHint";
 
 /**
  * One direct child of a config schema path (returned by config.schema.lookup).
+
+The gateway emits ``hint`` as a structured object — typically
+``{label, help, tags, group?, order?}`` — when the path is annotated. We
+pass the dict through untouched so the UI can choose which key to render
+without forcing a backend release each time the gateway adds a hint field.
  */
 export interface ConfigSchemaLookupChild {
-  hint?: string | null;
+  hint?: ConfigSchemaLookupChildHint;
   path: string;
   reloadKind?: string | null;
 }

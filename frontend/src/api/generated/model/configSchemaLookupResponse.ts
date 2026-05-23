@@ -5,18 +5,21 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ConfigSchemaLookupChild } from "./configSchemaLookupChild";
+import type { ConfigSchemaLookupResponseHint } from "./configSchemaLookupResponseHint";
 import type { ConfigSchemaLookupResponseSchema } from "./configSchemaLookupResponseSchema";
 
 /**
  * Read-only gateway config schema lookup result.
 
-`reload_kind` is passed through unchanged from `resolveConfigReloadMetadata`
-so future gateway values land in the UI without a backend release.
+``reload_kind`` is passed through unchanged from ``resolveConfigReloadMetadata``
+so future gateway values land in the UI without a backend release. ``hint``
+is a structured dict (``{label, help, tags, ...}``) when annotated — see
+:class:`ConfigSchemaLookupChild` for the rationale.
  */
 export interface ConfigSchemaLookupResponse {
   children?: ConfigSchemaLookupChild[];
   gateway_id: string;
-  hint?: string | null;
+  hint?: ConfigSchemaLookupResponseHint;
   hintPath?: string | null;
   path: string;
   reloadKind?: string | null;

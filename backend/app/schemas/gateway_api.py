@@ -140,11 +140,17 @@ class ProjectedGatewaySessionsResponse(SQLModel):
 
 
 class ConfigSchemaLookupChild(SQLModel):
-    """One direct child of a config schema path (returned by config.schema.lookup)."""
+    """One direct child of a config schema path (returned by config.schema.lookup).
+
+    The gateway emits ``hint`` as a structured object — typically
+    ``{label, help, tags, group?, order?}`` — when the path is annotated. We
+    pass the dict through untouched so the UI can choose which key to render
+    without forcing a backend release each time the gateway adds a hint field.
+    """
 
     path: str
     reload_kind: str | None = Field(default=None, alias="reloadKind")
-    hint: str | None = None
+    hint: dict[str, Any] | None = None
 
     model_config = SQLModelConfig(validate_by_name=True)
 
@@ -152,15 +158,17 @@ class ConfigSchemaLookupChild(SQLModel):
 class ConfigSchemaLookupResponse(SQLModel):
     """Read-only gateway config schema lookup result.
 
-    `reload_kind` is passed through unchanged from `resolveConfigReloadMetadata`
-    so future gateway values land in the UI without a backend release.
+    ``reload_kind`` is passed through unchanged from ``resolveConfigReloadMetadata``
+    so future gateway values land in the UI without a backend release. ``hint``
+    is a structured dict (``{label, help, tags, ...}``) when annotated — see
+    :class:`ConfigSchemaLookupChild` for the rationale.
     """
 
     gateway_id: UUID
     path: str
     schema_: dict[str, Any] = Field(default_factory=dict, alias="schema")
     reload_kind: str | None = Field(default=None, alias="reloadKind")
-    hint: str | None = None
+    hint: dict[str, Any] | None = None
     hint_path: str | None = Field(default=None, alias="hintPath")
     children: list[ConfigSchemaLookupChild] = Field(default_factory=list)
 

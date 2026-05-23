@@ -18,10 +18,14 @@ def test_response_accepts_gateway_camel_case_aliases() -> None:
         "path": "agents.defaults.models",
         "schema": {"type": "object"},
         "reloadKind": "restart",
-        "hint": "Restart required.",
+        "hint": {"label": "Models", "help": "Restart required."},
         "hintPath": "agents.defaults.models",
         "children": [
-            {"path": "agents.defaults.models.foo", "reloadKind": "hot"},
+            {
+                "path": "agents.defaults.models.foo",
+                "reloadKind": "hot",
+                "hint": {"label": "Foo", "help": "Hot-reloadable."},
+            },
             {"path": "agents.defaults.models.bar", "reloadKind": None},
         ],
     }
@@ -32,8 +36,11 @@ def test_response_accepts_gateway_camel_case_aliases() -> None:
     assert resp.path == "agents.defaults.models"
     assert resp.schema_ == {"type": "object"}
     assert resp.reload_kind == "restart"
+    assert resp.hint == {"label": "Models", "help": "Restart required."}
     assert resp.hint_path == "agents.defaults.models"
     assert [c.reload_kind for c in resp.children] == ["hot", None]
+    assert resp.children[0].hint == {"label": "Foo", "help": "Hot-reloadable."}
+    assert resp.children[1].hint is None
 
 
 def test_response_passes_through_unknown_reload_kind() -> None:
