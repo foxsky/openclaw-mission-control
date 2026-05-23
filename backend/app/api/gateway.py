@@ -540,6 +540,60 @@ def _map_config_lookup_error(
     )
 
 
+def _map_pairing_error(
+    exc: OpenClawGatewayError,
+    *,
+    device_id: str,
+) -> HTTPException:
+    """Translate an OpenClawGatewayError from a device.pair.* RPC into HTTP."""
+
+    fields = _map_gateway_error_common(exc)
+    code = fields["code"]
+    message = fields["message"]
+    lowered = fields["lowered"]
+
+    logger.warning(
+        "gateway.pairing.failed device_id=%s code=%s request_id=%s message=%s",
+        device_id,
+        code or "<none>",
+        fields["request_id"] or "<none>",
+        message or "<none>",
+    )
+
+    if code == "INVALID_REQUEST":
+        if "device not found" in lowered or "unknown device" in lowered:
+            return HTTPException(
+                status_code=404,
+                detail={"error": "device_not_found", "device_id": device_id},
+            )
+        if "insufficient scope" in lowered or "missing scope" in lowered:
+            return HTTPException(
+                status_code=403,
+                detail={"error": "gateway_pairing_scope_denied"},
+            )
+        return HTTPException(
+            status_code=422,
+            detail={"error": "gateway_rejected_request", "detail": message},
+        )
+    if fields["is_method_unsupported"]:
+        return HTTPException(
+            status_code=501,
+            detail={
+                "error": "method_unsupported",
+                "requires_gateway_version": _GATEWAY_METHOD_REQUIRED_VERSION,
+            },
+        )
+    if code == "UNAVAILABLE":
+        return HTTPException(
+            status_code=503,
+            detail={"error": "gateway_unavailable", "detail": message},
+        )
+    return HTTPException(
+        status_code=503,
+        detail={"error": "gateway_unreachable", "detail": message},
+    )
+
+
 @router.get(
     "/{gateway_id}/config/lookup",
     response_model=ConfigSchemaLookupResponse,
@@ -714,3 +768,51 @@ async def list_gateway_devices(
         devices=devices,
         is_self_resolved=local_device_id is not None,
     )
+
+
+@router.delete(
+    "/{gateway_id}/devices/{device_id}",
+    operation_id="remove_gateway_device",
+)
+async def remove_gateway_device(
+    gateway_id: UUID,
+    device_id: str,
+    session: AsyncSession = SESSION_DEP,
+    _auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> dict[str, Any]:
+    """Revoke a paired device from the gateway, with self-protect."""
+
+    gateway = await GatewayAdminLifecycleService(session).require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+
+    local_device_id = _resolve_local_device_id()
+    if local_device_id is None:
+        # Refuse writes when self-protect cannot be evaluated.
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "self_identity_unavailable"},
+        )
+    if device_id == local_device_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "cannot_remove_self", "device_id": device_id},
+        )
+
+    cfg = gateway_client_config(gateway)
+    try:
+        await asyncio.wait_for(
+            openclaw_call("device.pair.remove", {"deviceId": device_id}, config=cfg),
+            timeout=_PAIRING_RPC_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={"error": "gateway_timeout"},
+        ) from exc
+    except OpenClawGatewayError as exc:
+        raise _map_pairing_error(exc, device_id=device_id) from exc
+
+    return {"ok": True, "device_id": device_id}

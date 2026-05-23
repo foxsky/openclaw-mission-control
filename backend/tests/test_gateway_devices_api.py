@@ -305,3 +305,154 @@ async def test_list_does_not_cache_rpc_calls(
         r2 = await client.get(url)
     assert r1.status_code == r2.status_code == 200
     assert calls == 2  # one per request — no cache
+
+
+@pytest.mark.asyncio
+async def test_remove_happy(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    captured: list[tuple[str, Any]] = []
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        captured.append((method, params))
+        return {"ok": True}
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/some-other-device")
+    assert resp.status_code == 200
+    assert captured == [("device.pair.remove", {"deviceId": "some-other-device"})]
+
+
+@pytest.mark.asyncio
+async def test_remove_self_protect(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    called = False
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        nonlocal called
+        called = True
+        return {"ok": True}
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/{_LOCAL_DEVICE_ID}")
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "cannot_remove_self"
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_remove_self_identity_unavailable_refuses(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+    called = False
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_raises)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/anything")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "self_identity_unavailable"
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_remove_device_not_found_returns_404(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        # Verified live shape from Task 1 probe — gateway emits "unknown deviceId" (camelCase).
+        raise OpenClawGatewayError(
+            "unknown deviceId",
+            details={"code": "INVALID_REQUEST", "message": "unknown deviceId"},
+        )
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/xx")
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error"] == "device_not_found"
+
+
+@pytest.mark.asyncio
+async def test_remove_pairing_scope_denied_returns_403(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        raise OpenClawGatewayError(
+            "insufficient scope",
+            details={"code": "INVALID_REQUEST", "message": "insufficient scope: operator.pairing"},
+        )
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/xx")
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "gateway_pairing_scope_denied"
+
+
+@pytest.mark.asyncio
+async def test_remove_gateway_unavailable_returns_503(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        raise OpenClawGatewayError("down", details={"code": "UNAVAILABLE"})
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/xx")
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_remove_timeout_returns_504(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio as _asyncio
+
+    app, _, gateway = setup
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        await _asyncio.sleep(10)
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "_PAIRING_RPC_TIMEOUT_SECONDS", 0.05)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/xx")
+    assert resp.status_code == 504
