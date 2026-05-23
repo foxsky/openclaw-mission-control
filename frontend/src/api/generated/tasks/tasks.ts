@@ -32,7 +32,13 @@ import type {
   TaskCommentCreate,
   TaskCommentRead,
   TaskCreate,
+  TaskPipelineEventCreate,
+  TaskPipelineEventRead,
+  TaskPipelineStateRead,
   TaskRead,
+  TaskReviewEventCreate,
+  TaskReviewEventRead,
+  TaskReviewReadinessRead,
   TaskUpdate,
 } from ".././model";
 
@@ -782,6 +788,228 @@ export const useDeleteTaskApiV1BoardsBoardIdTasksTaskIdDelete = <
   );
 };
 /**
+ * Return the full task envelope by id.
+
+Pair endpoint to ``GET /tasks`` (list) — lets clients fetch one task
+without paginating the whole board. Output shape matches list-page
+items (same enrichments via ``_task_read_page``).
+ * @summary Get Task
+ */
+export type getTaskApiV1BoardsBoardIdTasksTaskIdGetResponse200 = {
+  data: TaskRead;
+  status: 200;
+};
+
+export type getTaskApiV1BoardsBoardIdTasksTaskIdGetResponse422 = {
+  data: HTTPValidationError;
+  status: 422;
+};
+
+export type getTaskApiV1BoardsBoardIdTasksTaskIdGetResponseSuccess =
+  getTaskApiV1BoardsBoardIdTasksTaskIdGetResponse200 & {
+    headers: Headers;
+  };
+export type getTaskApiV1BoardsBoardIdTasksTaskIdGetResponseError =
+  getTaskApiV1BoardsBoardIdTasksTaskIdGetResponse422 & {
+    headers: Headers;
+  };
+
+export type getTaskApiV1BoardsBoardIdTasksTaskIdGetResponse =
+  | getTaskApiV1BoardsBoardIdTasksTaskIdGetResponseSuccess
+  | getTaskApiV1BoardsBoardIdTasksTaskIdGetResponseError;
+
+export const getGetTaskApiV1BoardsBoardIdTasksTaskIdGetUrl = (
+  boardId: string,
+  taskId: string,
+) => {
+  return `/api/v1/boards/${boardId}/tasks/${taskId}`;
+};
+
+export const getTaskApiV1BoardsBoardIdTasksTaskIdGet = async (
+  boardId: string,
+  taskId: string,
+  options?: RequestInit,
+): Promise<getTaskApiV1BoardsBoardIdTasksTaskIdGetResponse> => {
+  return customFetch<getTaskApiV1BoardsBoardIdTasksTaskIdGetResponse>(
+    getGetTaskApiV1BoardsBoardIdTasksTaskIdGetUrl(boardId, taskId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetTaskApiV1BoardsBoardIdTasksTaskIdGetQueryKey = (
+  boardId: string,
+  taskId: string,
+) => {
+  return [`/api/v1/boards/${boardId}/tasks/${taskId}`] as const;
+};
+
+export const getGetTaskApiV1BoardsBoardIdTasksTaskIdGetQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetTaskApiV1BoardsBoardIdTasksTaskIdGetQueryKey(boardId, taskId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>
+  > = ({ signal }) =>
+    getTaskApiV1BoardsBoardIdTasksTaskIdGet(boardId, taskId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!(boardId && taskId),
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetTaskApiV1BoardsBoardIdTasksTaskIdGetQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>
+>;
+export type GetTaskApiV1BoardsBoardIdTasksTaskIdGetQueryError =
+  HTTPValidationError;
+
+export function useGetTaskApiV1BoardsBoardIdTasksTaskIdGet<
+  TData = Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+          TError,
+          Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetTaskApiV1BoardsBoardIdTasksTaskIdGet<
+  TData = Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+          TError,
+          Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetTaskApiV1BoardsBoardIdTasksTaskIdGet<
+  TData = Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get Task
+ */
+
+export function useGetTaskApiV1BoardsBoardIdTasksTaskIdGet<
+  TData = Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getTaskApiV1BoardsBoardIdTasksTaskIdGet>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetTaskApiV1BoardsBoardIdTasksTaskIdGetQueryOptions(
+    boardId,
+    taskId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
  * Update task status, assignment, comment, and dependency state.
  * @summary Update Task
  */
@@ -922,6 +1150,9 @@ export const useUpdateTaskApiV1BoardsBoardIdTasksTaskIdPatch = <
 };
 /**
  * List comments for a task in chronological order.
+
+Applies the board's ``comment_signal_filter`` policy. See
+``app/services/comment_policy.py`` for filter semantics.
  * @summary List Task Comments
  */
 export type listTaskCommentsApiV1BoardsBoardIdTasksTaskIdCommentsGetResponse200 =
@@ -1401,3 +1632,916 @@ export const useCreateTaskCommentApiV1BoardsBoardIdTasksTaskIdCommentsPost = <
     queryClient,
   );
 };
+/**
+ * Return structured pipeline readiness for the current task cycle.
+ * @summary Get Task Pipeline State
+ */
+export type getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponse200 =
+  {
+    data: TaskPipelineStateRead;
+    status: 200;
+  };
+
+export type getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponseSuccess =
+  getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponse200 & {
+    headers: Headers;
+  };
+export type getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponseError =
+  getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponse422 & {
+    headers: Headers;
+  };
+
+export type getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponse =
+
+    | getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponseSuccess
+    | getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponseError;
+
+export const getGetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetUrl =
+  (boardId: string, taskId: string) => {
+    return `/api/v1/boards/${boardId}/tasks/${taskId}/pipeline`;
+  };
+
+export const getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet =
+  async (
+    boardId: string,
+    taskId: string,
+    options?: RequestInit,
+  ): Promise<getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponse> => {
+    return customFetch<getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetResponse>(
+      getGetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetUrl(
+        boardId,
+        taskId,
+      ),
+      {
+        ...options,
+        method: "GET",
+      },
+    );
+  };
+
+export const getGetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetQueryKey =
+  (boardId: string, taskId: string) => {
+    return [`/api/v1/boards/${boardId}/tasks/${taskId}/pipeline`] as const;
+  };
+
+export const getGetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetQueryOptions =
+  <
+    TData = Awaited<
+      ReturnType<
+        typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+      >
+    >,
+    TError = HTTPValidationError,
+  >(
+    boardId: string,
+    taskId: string,
+    options?: {
+      query?: Partial<
+        UseQueryOptions<
+          Awaited<
+            ReturnType<
+              typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+            >
+          >,
+          TError,
+          TData
+        >
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+  ) => {
+    const { query: queryOptions, request: requestOptions } = options ?? {};
+
+    const queryKey =
+      queryOptions?.queryKey ??
+      getGetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetQueryKey(
+        boardId,
+        taskId,
+      );
+
+    const queryFn: QueryFunction<
+      Awaited<
+        ReturnType<
+          typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+        >
+      >
+    > = ({ signal }) =>
+      getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet(
+        boardId,
+        taskId,
+        { signal, ...requestOptions },
+      );
+
+    return {
+      queryKey,
+      queryFn,
+      enabled: !!(boardId && taskId),
+      ...queryOptions,
+    } as UseQueryOptions<
+      Awaited<
+        ReturnType<
+          typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+        >
+      >,
+      TError,
+      TData
+    > & { queryKey: DataTag<QueryKey, TData, TError> };
+  };
+
+export type GetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetQueryResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+      >
+    >
+  >;
+export type GetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetQueryError =
+  HTTPValidationError;
+
+export function useGetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get Task Pipeline State
+ */
+
+export function useGetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions =
+    getGetTaskPipelineStateApiV1BoardsBoardIdTasksTaskIdPipelineGetQueryOptions(
+      boardId,
+      taskId,
+      options,
+    );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Record an append-only structured pipeline event for a task.
+ * @summary Record Task Pipeline Event
+ */
+export type recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponse200 =
+  {
+    data: TaskPipelineEventRead;
+    status: 200;
+  };
+
+export type recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponseSuccess =
+  recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponse200 & {
+    headers: Headers;
+  };
+export type recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponseError =
+  recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponse422 & {
+    headers: Headers;
+  };
+
+export type recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponse =
+
+    | recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponseSuccess
+    | recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponseError;
+
+export const getRecordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostUrl =
+  (boardId: string, taskId: string) => {
+    return `/api/v1/boards/${boardId}/tasks/${taskId}/pipeline/events`;
+  };
+
+export const recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPost =
+  async (
+    boardId: string,
+    taskId: string,
+    taskPipelineEventCreate: TaskPipelineEventCreate,
+    options?: RequestInit,
+  ): Promise<recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponse> => {
+    return customFetch<recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostResponse>(
+      getRecordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostUrl(
+        boardId,
+        taskId,
+      ),
+      {
+        ...options,
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(taskPipelineEventCreate),
+      },
+    );
+  };
+
+export const getRecordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostMutationOptions =
+  <TError = HTTPValidationError, TContext = unknown>(options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<
+          typeof recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPost
+        >
+      >,
+      TError,
+      { boardId: string; taskId: string; data: TaskPipelineEventCreate },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }): UseMutationOptions<
+    Awaited<
+      ReturnType<
+        typeof recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPost
+      >
+    >,
+    TError,
+    { boardId: string; taskId: string; data: TaskPipelineEventCreate },
+    TContext
+  > => {
+    const mutationKey = [
+      "recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPost",
+    ];
+    const { mutation: mutationOptions, request: requestOptions } = options
+      ? options.mutation &&
+        "mutationKey" in options.mutation &&
+        options.mutation.mutationKey
+        ? options
+        : { ...options, mutation: { ...options.mutation, mutationKey } }
+      : { mutation: { mutationKey }, request: undefined };
+
+    const mutationFn: MutationFunction<
+      Awaited<
+        ReturnType<
+          typeof recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPost
+        >
+      >,
+      { boardId: string; taskId: string; data: TaskPipelineEventCreate }
+    > = (props) => {
+      const { boardId, taskId, data } = props ?? {};
+
+      return recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPost(
+        boardId,
+        taskId,
+        data,
+        requestOptions,
+      );
+    };
+
+    return { mutationFn, ...mutationOptions };
+  };
+
+export type RecordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostMutationResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPost
+      >
+    >
+  >;
+export type RecordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostMutationBody =
+  TaskPipelineEventCreate;
+export type RecordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostMutationError =
+  HTTPValidationError;
+
+/**
+ * @summary Record Task Pipeline Event
+ */
+export const useRecordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPost =
+  <TError = HTTPValidationError, TContext = unknown>(
+    options?: {
+      mutation?: UseMutationOptions<
+        Awaited<
+          ReturnType<
+            typeof recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPost
+          >
+        >,
+        TError,
+        { boardId: string; taskId: string; data: TaskPipelineEventCreate },
+        TContext
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+    queryClient?: QueryClient,
+  ): UseMutationResult<
+    Awaited<
+      ReturnType<
+        typeof recordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPost
+      >
+    >,
+    TError,
+    { boardId: string; taskId: string; data: TaskPipelineEventCreate },
+    TContext
+  > => {
+    return useMutation(
+      getRecordTaskPipelineEventApiV1BoardsBoardIdTasksTaskIdPipelineEventsPostMutationOptions(
+        options,
+      ),
+      queryClient,
+    );
+  };
+/**
+ * Record an append-only structured reviewer verdict for a task.
+ * @summary Record Task Review Event
+ */
+export type recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponse200 =
+  {
+    data: TaskReviewEventRead;
+    status: 200;
+  };
+
+export type recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponseSuccess =
+  recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponse200 & {
+    headers: Headers;
+  };
+export type recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponseError =
+  recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponse422 & {
+    headers: Headers;
+  };
+
+export type recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponse =
+
+    | recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponseSuccess
+    | recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponseError;
+
+export const getRecordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostUrl =
+  (boardId: string, taskId: string) => {
+    return `/api/v1/boards/${boardId}/tasks/${taskId}/review-events`;
+  };
+
+export const recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPost =
+  async (
+    boardId: string,
+    taskId: string,
+    taskReviewEventCreate: TaskReviewEventCreate,
+    options?: RequestInit,
+  ): Promise<recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponse> => {
+    return customFetch<recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostResponse>(
+      getRecordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostUrl(
+        boardId,
+        taskId,
+      ),
+      {
+        ...options,
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(taskReviewEventCreate),
+      },
+    );
+  };
+
+export const getRecordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostMutationOptions =
+  <TError = HTTPValidationError, TContext = unknown>(options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<
+          typeof recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPost
+        >
+      >,
+      TError,
+      { boardId: string; taskId: string; data: TaskReviewEventCreate },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }): UseMutationOptions<
+    Awaited<
+      ReturnType<
+        typeof recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPost
+      >
+    >,
+    TError,
+    { boardId: string; taskId: string; data: TaskReviewEventCreate },
+    TContext
+  > => {
+    const mutationKey = [
+      "recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPost",
+    ];
+    const { mutation: mutationOptions, request: requestOptions } = options
+      ? options.mutation &&
+        "mutationKey" in options.mutation &&
+        options.mutation.mutationKey
+        ? options
+        : { ...options, mutation: { ...options.mutation, mutationKey } }
+      : { mutation: { mutationKey }, request: undefined };
+
+    const mutationFn: MutationFunction<
+      Awaited<
+        ReturnType<
+          typeof recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPost
+        >
+      >,
+      { boardId: string; taskId: string; data: TaskReviewEventCreate }
+    > = (props) => {
+      const { boardId, taskId, data } = props ?? {};
+
+      return recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPost(
+        boardId,
+        taskId,
+        data,
+        requestOptions,
+      );
+    };
+
+    return { mutationFn, ...mutationOptions };
+  };
+
+export type RecordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostMutationResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPost
+      >
+    >
+  >;
+export type RecordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostMutationBody =
+  TaskReviewEventCreate;
+export type RecordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostMutationError =
+  HTTPValidationError;
+
+/**
+ * @summary Record Task Review Event
+ */
+export const useRecordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPost =
+  <TError = HTTPValidationError, TContext = unknown>(
+    options?: {
+      mutation?: UseMutationOptions<
+        Awaited<
+          ReturnType<
+            typeof recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPost
+          >
+        >,
+        TError,
+        { boardId: string; taskId: string; data: TaskReviewEventCreate },
+        TContext
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+    queryClient?: QueryClient,
+  ): UseMutationResult<
+    Awaited<
+      ReturnType<
+        typeof recordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPost
+      >
+    >,
+    TError,
+    { boardId: string; taskId: string; data: TaskReviewEventCreate },
+    TContext
+  > => {
+    return useMutation(
+      getRecordTaskReviewEventApiV1BoardsBoardIdTasksTaskIdReviewEventsPostMutationOptions(
+        options,
+      ),
+      queryClient,
+    );
+  };
+/**
+ * Return structured reviewer verdict readiness for the current task cycle.
+ * @summary Get Task Review Readiness State
+ */
+export type getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponse200 =
+  {
+    data: TaskReviewReadinessRead;
+    status: 200;
+  };
+
+export type getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponseSuccess =
+  getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponse200 & {
+    headers: Headers;
+  };
+export type getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponseError =
+  getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponse422 & {
+    headers: Headers;
+  };
+
+export type getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponse =
+
+    | getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponseSuccess
+    | getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponseError;
+
+export const getGetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetUrl =
+  (boardId: string, taskId: string) => {
+    return `/api/v1/boards/${boardId}/tasks/${taskId}/review-readiness`;
+  };
+
+export const getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet =
+  async (
+    boardId: string,
+    taskId: string,
+    options?: RequestInit,
+  ): Promise<getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponse> => {
+    return customFetch<getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetResponse>(
+      getGetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetUrl(
+        boardId,
+        taskId,
+      ),
+      {
+        ...options,
+        method: "GET",
+      },
+    );
+  };
+
+export const getGetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetQueryKey =
+  (boardId: string, taskId: string) => {
+    return [
+      `/api/v1/boards/${boardId}/tasks/${taskId}/review-readiness`,
+    ] as const;
+  };
+
+export const getGetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetQueryOptions =
+  <
+    TData = Awaited<
+      ReturnType<
+        typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+      >
+    >,
+    TError = HTTPValidationError,
+  >(
+    boardId: string,
+    taskId: string,
+    options?: {
+      query?: Partial<
+        UseQueryOptions<
+          Awaited<
+            ReturnType<
+              typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+            >
+          >,
+          TError,
+          TData
+        >
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+  ) => {
+    const { query: queryOptions, request: requestOptions } = options ?? {};
+
+    const queryKey =
+      queryOptions?.queryKey ??
+      getGetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetQueryKey(
+        boardId,
+        taskId,
+      );
+
+    const queryFn: QueryFunction<
+      Awaited<
+        ReturnType<
+          typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+        >
+      >
+    > = ({ signal }) =>
+      getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet(
+        boardId,
+        taskId,
+        { signal, ...requestOptions },
+      );
+
+    return {
+      queryKey,
+      queryFn,
+      enabled: !!(boardId && taskId),
+      ...queryOptions,
+    } as UseQueryOptions<
+      Awaited<
+        ReturnType<
+          typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+        >
+      >,
+      TError,
+      TData
+    > & { queryKey: DataTag<QueryKey, TData, TError> };
+  };
+
+export type GetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetQueryResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+      >
+    >
+  >;
+export type GetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetQueryError =
+  HTTPValidationError;
+
+export function useGetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get Task Review Readiness State
+ */
+
+export function useGetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  taskId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions =
+    getGetTaskReviewReadinessStateApiV1BoardsBoardIdTasksTaskIdReviewReadinessGetQueryOptions(
+      boardId,
+      taskId,
+      options,
+    );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

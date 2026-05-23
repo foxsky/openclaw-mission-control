@@ -6,6 +6,7 @@
  */
 
 export type ListTaskCommentsApiV1BoardsBoardIdTasksTaskIdCommentsGetParams = {
+  include_flagged?: boolean;
   /**
    * @minimum 1
    * @maximum 200

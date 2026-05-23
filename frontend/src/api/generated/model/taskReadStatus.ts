@@ -14,4 +14,5 @@ export const TaskReadStatus = {
   review: "review",
   rework: "rework",
   done: "done",
+  cancelled: "cancelled",
 } as const;

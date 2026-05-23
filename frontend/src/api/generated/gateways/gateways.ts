@@ -21,8 +21,14 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  ConfigSchemaLookupResponse,
+  DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteParams,
+  EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostParams,
   GatewayCommandsResponse,
+  GatewayConfigLookupParams,
   GatewayCreate,
+  GatewayEvalApprovalResolveRequest,
+  GatewayEvalSessionEnsureRequest,
   GatewayRead,
   GatewaySessionHistoryResponse,
   GatewaySessionMessageRequest,
@@ -32,6 +38,7 @@ import type {
   GatewayUpdate,
   GatewaysStatusApiV1GatewaysStatusGetParams,
   GatewaysStatusResponse,
+  GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetParams,
   GetGatewaySessionApiV1GatewaysSessionsSessionIdGetParams,
   GetSessionHistoryApiV1GatewaysSessionsSessionIdHistoryGetParams,
   HTTPValidationError,
@@ -39,6 +46,11 @@ import type {
   ListGatewaySessionsApiV1GatewaysSessionsGetParams,
   ListGatewaysApiV1GatewaysGetParams,
   OkResponse,
+  OpenClawRuntimeStatusResponse,
+  ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams,
+  ProjectedGatewaySessionsResponse,
+  ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostParams,
+  SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostParams,
   SendGatewaySessionMessageApiV1GatewaysSessionsSessionIdMessagePostParams,
   SyncGatewayTemplatesApiV1GatewaysGatewayIdTemplatesSyncPostParams,
 } from ".././model";
@@ -542,6 +554,1636 @@ export function useGatewayCommandsApiV1GatewaysCommandsGet<
 } {
   const queryOptions =
     getGatewayCommandsApiV1GatewaysCommandsGetQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Delete an isolated eval session.
+ * @summary Delete Eval Gateway Session
+ */
+export type deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponse200 =
+  {
+    data: OkResponse;
+    status: 200;
+  };
+
+export type deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponseSuccess =
+  deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponse200 & {
+    headers: Headers;
+  };
+export type deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponseError =
+  deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponse422 & {
+    headers: Headers;
+  };
+
+export type deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponse =
+
+    | deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponseSuccess
+    | deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponseError;
+
+export const getDeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteUrl =
+  (
+    sessionId: string,
+    params?: DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteParams,
+  ) => {
+    const normalizedParams = new URLSearchParams();
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+      if (value !== undefined) {
+        normalizedParams.append(
+          key,
+          value === null ? "null" : value.toString(),
+        );
+      }
+    });
+
+    const stringifiedParams = normalizedParams.toString();
+
+    return stringifiedParams.length > 0
+      ? `/api/v1/gateways/evals/sessions/${sessionId}?${stringifiedParams}`
+      : `/api/v1/gateways/evals/sessions/${sessionId}`;
+  };
+
+export const deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDelete =
+  async (
+    sessionId: string,
+    params?: DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteParams,
+    options?: RequestInit,
+  ): Promise<deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponse> => {
+    return customFetch<deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteResponse>(
+      getDeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteUrl(
+        sessionId,
+        params,
+      ),
+      {
+        ...options,
+        method: "DELETE",
+      },
+    );
+  };
+
+export const getDeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteMutationOptions =
+  <TError = HTTPValidationError, TContext = unknown>(options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<
+          typeof deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDelete
+        >
+      >,
+      TError,
+      {
+        sessionId: string;
+        params?: DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteParams;
+      },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }): UseMutationOptions<
+    Awaited<
+      ReturnType<
+        typeof deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDelete
+      >
+    >,
+    TError,
+    {
+      sessionId: string;
+      params?: DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteParams;
+    },
+    TContext
+  > => {
+    const mutationKey = [
+      "deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDelete",
+    ];
+    const { mutation: mutationOptions, request: requestOptions } = options
+      ? options.mutation &&
+        "mutationKey" in options.mutation &&
+        options.mutation.mutationKey
+        ? options
+        : { ...options, mutation: { ...options.mutation, mutationKey } }
+      : { mutation: { mutationKey }, request: undefined };
+
+    const mutationFn: MutationFunction<
+      Awaited<
+        ReturnType<
+          typeof deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDelete
+        >
+      >,
+      {
+        sessionId: string;
+        params?: DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteParams;
+      }
+    > = (props) => {
+      const { sessionId, params } = props ?? {};
+
+      return deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDelete(
+        sessionId,
+        params,
+        requestOptions,
+      );
+    };
+
+    return { mutationFn, ...mutationOptions };
+  };
+
+export type DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteMutationResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDelete
+      >
+    >
+  >;
+
+export type DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteMutationError =
+  HTTPValidationError;
+
+/**
+ * @summary Delete Eval Gateway Session
+ */
+export const useDeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDelete =
+  <TError = HTTPValidationError, TContext = unknown>(
+    options?: {
+      mutation?: UseMutationOptions<
+        Awaited<
+          ReturnType<
+            typeof deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDelete
+          >
+        >,
+        TError,
+        {
+          sessionId: string;
+          params?: DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteParams;
+        },
+        TContext
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+    queryClient?: QueryClient,
+  ): UseMutationResult<
+    Awaited<
+      ReturnType<
+        typeof deleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDelete
+      >
+    >,
+    TError,
+    {
+      sessionId: string;
+      params?: DeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteParams;
+    },
+    TContext
+  > => {
+    return useMutation(
+      getDeleteEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdDeleteMutationOptions(
+        options,
+      ),
+      queryClient,
+    );
+  };
+/**
+ * Create or reset an isolated eval session for a board gateway.
+ * @summary Ensure Eval Gateway Session
+ */
+export type ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponse200 =
+  {
+    data: GatewaySessionResponse;
+    status: 200;
+  };
+
+export type ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponseSuccess =
+  ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponse200 & {
+    headers: Headers;
+  };
+export type ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponseError =
+  ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponse422 & {
+    headers: Headers;
+  };
+
+export type ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponse =
+
+    | ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponseSuccess
+    | ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponseError;
+
+export const getEnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostUrl =
+  (
+    sessionId: string,
+    params?: EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostParams,
+  ) => {
+    const normalizedParams = new URLSearchParams();
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+      if (value !== undefined) {
+        normalizedParams.append(
+          key,
+          value === null ? "null" : value.toString(),
+        );
+      }
+    });
+
+    const stringifiedParams = normalizedParams.toString();
+
+    return stringifiedParams.length > 0
+      ? `/api/v1/gateways/evals/sessions/${sessionId}?${stringifiedParams}`
+      : `/api/v1/gateways/evals/sessions/${sessionId}`;
+  };
+
+export const ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost =
+  async (
+    sessionId: string,
+    gatewayEvalSessionEnsureRequest: GatewayEvalSessionEnsureRequest,
+    params?: EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostParams,
+    options?: RequestInit,
+  ): Promise<ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponse> => {
+    return customFetch<ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostResponse>(
+      getEnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostUrl(
+        sessionId,
+        params,
+      ),
+      {
+        ...options,
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(gatewayEvalSessionEnsureRequest),
+      },
+    );
+  };
+
+export const getEnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostMutationOptions =
+  <TError = HTTPValidationError, TContext = unknown>(options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<
+          typeof ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost
+        >
+      >,
+      TError,
+      {
+        sessionId: string;
+        data: GatewayEvalSessionEnsureRequest;
+        params?: EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostParams;
+      },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }): UseMutationOptions<
+    Awaited<
+      ReturnType<
+        typeof ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost
+      >
+    >,
+    TError,
+    {
+      sessionId: string;
+      data: GatewayEvalSessionEnsureRequest;
+      params?: EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostParams;
+    },
+    TContext
+  > => {
+    const mutationKey = [
+      "ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost",
+    ];
+    const { mutation: mutationOptions, request: requestOptions } = options
+      ? options.mutation &&
+        "mutationKey" in options.mutation &&
+        options.mutation.mutationKey
+        ? options
+        : { ...options, mutation: { ...options.mutation, mutationKey } }
+      : { mutation: { mutationKey }, request: undefined };
+
+    const mutationFn: MutationFunction<
+      Awaited<
+        ReturnType<
+          typeof ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost
+        >
+      >,
+      {
+        sessionId: string;
+        data: GatewayEvalSessionEnsureRequest;
+        params?: EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostParams;
+      }
+    > = (props) => {
+      const { sessionId, data, params } = props ?? {};
+
+      return ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost(
+        sessionId,
+        data,
+        params,
+        requestOptions,
+      );
+    };
+
+    return { mutationFn, ...mutationOptions };
+  };
+
+export type EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostMutationResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost
+      >
+    >
+  >;
+export type EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostMutationBody =
+  GatewayEvalSessionEnsureRequest;
+export type EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostMutationError =
+  HTTPValidationError;
+
+/**
+ * @summary Ensure Eval Gateway Session
+ */
+export const useEnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost =
+  <TError = HTTPValidationError, TContext = unknown>(
+    options?: {
+      mutation?: UseMutationOptions<
+        Awaited<
+          ReturnType<
+            typeof ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost
+          >
+        >,
+        TError,
+        {
+          sessionId: string;
+          data: GatewayEvalSessionEnsureRequest;
+          params?: EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostParams;
+        },
+        TContext
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+    queryClient?: QueryClient,
+  ): UseMutationResult<
+    Awaited<
+      ReturnType<
+        typeof ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost
+      >
+    >,
+    TError,
+    {
+      sessionId: string;
+      data: GatewayEvalSessionEnsureRequest;
+      params?: EnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostParams;
+    },
+    TContext
+  > => {
+    return useMutation(
+      getEnsureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPostMutationOptions(
+        options,
+      ),
+      queryClient,
+    );
+  };
+/**
+ * Resolve a pending exec approval inside an isolated eval session.
+ * @summary Resolve Eval Gateway Session Approval
+ */
+export type resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponse200 =
+  {
+    data: OkResponse;
+    status: 200;
+  };
+
+export type resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponseSuccess =
+  resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponse200 & {
+    headers: Headers;
+  };
+export type resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponseError =
+  resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponse422 & {
+    headers: Headers;
+  };
+
+export type resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponse =
+
+    | resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponseSuccess
+    | resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponseError;
+
+export const getResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostUrl =
+  (
+    sessionId: string,
+    params?: ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostParams,
+  ) => {
+    const normalizedParams = new URLSearchParams();
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+      if (value !== undefined) {
+        normalizedParams.append(
+          key,
+          value === null ? "null" : value.toString(),
+        );
+      }
+    });
+
+    const stringifiedParams = normalizedParams.toString();
+
+    return stringifiedParams.length > 0
+      ? `/api/v1/gateways/evals/sessions/${sessionId}/approvals/resolve?${stringifiedParams}`
+      : `/api/v1/gateways/evals/sessions/${sessionId}/approvals/resolve`;
+  };
+
+export const resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePost =
+  async (
+    sessionId: string,
+    gatewayEvalApprovalResolveRequest: GatewayEvalApprovalResolveRequest,
+    params?: ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostParams,
+    options?: RequestInit,
+  ): Promise<resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponse> => {
+    return customFetch<resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostResponse>(
+      getResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostUrl(
+        sessionId,
+        params,
+      ),
+      {
+        ...options,
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(gatewayEvalApprovalResolveRequest),
+      },
+    );
+  };
+
+export const getResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostMutationOptions =
+  <TError = HTTPValidationError, TContext = unknown>(options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<
+          typeof resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePost
+        >
+      >,
+      TError,
+      {
+        sessionId: string;
+        data: GatewayEvalApprovalResolveRequest;
+        params?: ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostParams;
+      },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }): UseMutationOptions<
+    Awaited<
+      ReturnType<
+        typeof resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePost
+      >
+    >,
+    TError,
+    {
+      sessionId: string;
+      data: GatewayEvalApprovalResolveRequest;
+      params?: ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostParams;
+    },
+    TContext
+  > => {
+    const mutationKey = [
+      "resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePost",
+    ];
+    const { mutation: mutationOptions, request: requestOptions } = options
+      ? options.mutation &&
+        "mutationKey" in options.mutation &&
+        options.mutation.mutationKey
+        ? options
+        : { ...options, mutation: { ...options.mutation, mutationKey } }
+      : { mutation: { mutationKey }, request: undefined };
+
+    const mutationFn: MutationFunction<
+      Awaited<
+        ReturnType<
+          typeof resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePost
+        >
+      >,
+      {
+        sessionId: string;
+        data: GatewayEvalApprovalResolveRequest;
+        params?: ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostParams;
+      }
+    > = (props) => {
+      const { sessionId, data, params } = props ?? {};
+
+      return resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePost(
+        sessionId,
+        data,
+        params,
+        requestOptions,
+      );
+    };
+
+    return { mutationFn, ...mutationOptions };
+  };
+
+export type ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostMutationResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePost
+      >
+    >
+  >;
+export type ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostMutationBody =
+  GatewayEvalApprovalResolveRequest;
+export type ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostMutationError =
+  HTTPValidationError;
+
+/**
+ * @summary Resolve Eval Gateway Session Approval
+ */
+export const useResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePost =
+  <TError = HTTPValidationError, TContext = unknown>(
+    options?: {
+      mutation?: UseMutationOptions<
+        Awaited<
+          ReturnType<
+            typeof resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePost
+          >
+        >,
+        TError,
+        {
+          sessionId: string;
+          data: GatewayEvalApprovalResolveRequest;
+          params?: ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostParams;
+        },
+        TContext
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+    queryClient?: QueryClient,
+  ): UseMutationResult<
+    Awaited<
+      ReturnType<
+        typeof resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePost
+      >
+    >,
+    TError,
+    {
+      sessionId: string;
+      data: GatewayEvalApprovalResolveRequest;
+      params?: ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostParams;
+    },
+    TContext
+  > => {
+    return useMutation(
+      getResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostMutationOptions(
+        options,
+      ),
+      queryClient,
+    );
+  };
+/**
+ * Fetch chat history for an isolated eval session.
+ * @summary Get Eval Gateway Session History
+ */
+export type getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponse200 =
+  {
+    data: GatewaySessionHistoryResponse;
+    status: 200;
+  };
+
+export type getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponseSuccess =
+  getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponse200 & {
+    headers: Headers;
+  };
+export type getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponseError =
+  getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponse422 & {
+    headers: Headers;
+  };
+
+export type getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponse =
+
+    | getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponseSuccess
+    | getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponseError;
+
+export const getGetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetUrl =
+  (
+    sessionId: string,
+    params?: GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetParams,
+  ) => {
+    const normalizedParams = new URLSearchParams();
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+      if (value !== undefined) {
+        normalizedParams.append(
+          key,
+          value === null ? "null" : value.toString(),
+        );
+      }
+    });
+
+    const stringifiedParams = normalizedParams.toString();
+
+    return stringifiedParams.length > 0
+      ? `/api/v1/gateways/evals/sessions/${sessionId}/history?${stringifiedParams}`
+      : `/api/v1/gateways/evals/sessions/${sessionId}/history`;
+  };
+
+export const getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet =
+  async (
+    sessionId: string,
+    params?: GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetParams,
+    options?: RequestInit,
+  ): Promise<getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponse> => {
+    return customFetch<getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetResponse>(
+      getGetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetUrl(
+        sessionId,
+        params,
+      ),
+      {
+        ...options,
+        method: "GET",
+      },
+    );
+  };
+
+export const getGetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetQueryKey =
+  (
+    sessionId: string,
+    params?: GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetParams,
+  ) => {
+    return [
+      `/api/v1/gateways/evals/sessions/${sessionId}/history`,
+      ...(params ? [params] : []),
+    ] as const;
+  };
+
+export const getGetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetQueryOptions =
+  <
+    TData = Awaited<
+      ReturnType<
+        typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+      >
+    >,
+    TError = HTTPValidationError,
+  >(
+    sessionId: string,
+    params?: GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetParams,
+    options?: {
+      query?: Partial<
+        UseQueryOptions<
+          Awaited<
+            ReturnType<
+              typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+            >
+          >,
+          TError,
+          TData
+        >
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+  ) => {
+    const { query: queryOptions, request: requestOptions } = options ?? {};
+
+    const queryKey =
+      queryOptions?.queryKey ??
+      getGetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetQueryKey(
+        sessionId,
+        params,
+      );
+
+    const queryFn: QueryFunction<
+      Awaited<
+        ReturnType<
+          typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+        >
+      >
+    > = ({ signal }) =>
+      getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet(
+        sessionId,
+        params,
+        { signal, ...requestOptions },
+      );
+
+    return {
+      queryKey,
+      queryFn,
+      enabled: !!sessionId,
+      ...queryOptions,
+    } as UseQueryOptions<
+      Awaited<
+        ReturnType<
+          typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+        >
+      >,
+      TError,
+      TData
+    > & { queryKey: DataTag<QueryKey, TData, TError> };
+  };
+
+export type GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetQueryResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+      >
+    >
+  >;
+export type GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetQueryError =
+  HTTPValidationError;
+
+export function useGetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  sessionId: string,
+  params:
+    | undefined
+    | GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  sessionId: string,
+  params?: GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  sessionId: string,
+  params?: GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get Eval Gateway Session History
+ */
+
+export function useGetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet<
+  TData = Awaited<
+    ReturnType<
+      typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  sessionId: string,
+  params?: GetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof getEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions =
+    getGetEvalGatewaySessionHistoryApiV1GatewaysEvalsSessionsSessionIdHistoryGetQueryOptions(
+      sessionId,
+      params,
+      options,
+    );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Send a prompt into an isolated eval session.
+ * @summary Send Eval Gateway Session Message
+ */
+export type sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponse200 =
+  {
+    data: OkResponse;
+    status: 200;
+  };
+
+export type sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponseSuccess =
+  sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponse200 & {
+    headers: Headers;
+  };
+export type sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponseError =
+  sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponse422 & {
+    headers: Headers;
+  };
+
+export type sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponse =
+
+    | sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponseSuccess
+    | sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponseError;
+
+export const getSendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostUrl =
+  (
+    sessionId: string,
+    params?: SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostParams,
+  ) => {
+    const normalizedParams = new URLSearchParams();
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+      if (value !== undefined) {
+        normalizedParams.append(
+          key,
+          value === null ? "null" : value.toString(),
+        );
+      }
+    });
+
+    const stringifiedParams = normalizedParams.toString();
+
+    return stringifiedParams.length > 0
+      ? `/api/v1/gateways/evals/sessions/${sessionId}/message?${stringifiedParams}`
+      : `/api/v1/gateways/evals/sessions/${sessionId}/message`;
+  };
+
+export const sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePost =
+  async (
+    sessionId: string,
+    gatewaySessionMessageRequest: GatewaySessionMessageRequest,
+    params?: SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostParams,
+    options?: RequestInit,
+  ): Promise<sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponse> => {
+    return customFetch<sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostResponse>(
+      getSendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostUrl(
+        sessionId,
+        params,
+      ),
+      {
+        ...options,
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(gatewaySessionMessageRequest),
+      },
+    );
+  };
+
+export const getSendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostMutationOptions =
+  <TError = HTTPValidationError, TContext = unknown>(options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<
+          typeof sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePost
+        >
+      >,
+      TError,
+      {
+        sessionId: string;
+        data: GatewaySessionMessageRequest;
+        params?: SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostParams;
+      },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }): UseMutationOptions<
+    Awaited<
+      ReturnType<
+        typeof sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePost
+      >
+    >,
+    TError,
+    {
+      sessionId: string;
+      data: GatewaySessionMessageRequest;
+      params?: SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostParams;
+    },
+    TContext
+  > => {
+    const mutationKey = [
+      "sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePost",
+    ];
+    const { mutation: mutationOptions, request: requestOptions } = options
+      ? options.mutation &&
+        "mutationKey" in options.mutation &&
+        options.mutation.mutationKey
+        ? options
+        : { ...options, mutation: { ...options.mutation, mutationKey } }
+      : { mutation: { mutationKey }, request: undefined };
+
+    const mutationFn: MutationFunction<
+      Awaited<
+        ReturnType<
+          typeof sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePost
+        >
+      >,
+      {
+        sessionId: string;
+        data: GatewaySessionMessageRequest;
+        params?: SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostParams;
+      }
+    > = (props) => {
+      const { sessionId, data, params } = props ?? {};
+
+      return sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePost(
+        sessionId,
+        data,
+        params,
+        requestOptions,
+      );
+    };
+
+    return { mutationFn, ...mutationOptions };
+  };
+
+export type SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostMutationResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePost
+      >
+    >
+  >;
+export type SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostMutationBody =
+  GatewaySessionMessageRequest;
+export type SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostMutationError =
+  HTTPValidationError;
+
+/**
+ * @summary Send Eval Gateway Session Message
+ */
+export const useSendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePost =
+  <TError = HTTPValidationError, TContext = unknown>(
+    options?: {
+      mutation?: UseMutationOptions<
+        Awaited<
+          ReturnType<
+            typeof sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePost
+          >
+        >,
+        TError,
+        {
+          sessionId: string;
+          data: GatewaySessionMessageRequest;
+          params?: SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostParams;
+        },
+        TContext
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+    queryClient?: QueryClient,
+  ): UseMutationResult<
+    Awaited<
+      ReturnType<
+        typeof sendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePost
+      >
+    >,
+    TError,
+    {
+      sessionId: string;
+      data: GatewaySessionMessageRequest;
+      params?: SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostParams;
+    },
+    TContext
+  > => {
+    return useMutation(
+      getSendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostMutationOptions(
+        options,
+      ),
+      queryClient,
+    );
+  };
+/**
+ * Return projected gateway session state for the caller's
+organization. Scoping rule: a projection row appears only if its
+``agent_id`` matches the strict-parse of ``openclaw_session_id``
+on an MC ``agents`` row joined to the caller's org via
+``Agent → Gateway → Organization``. The optional ``agent_id``
+query param is intersected with that set, so callers cannot
+widen across orgs by guessing identifiers.
+
+Rows for board leads (``lead-<board_id>``) and gateway-internal
+workers (``mc-gateway-<gateway_id>``) ARE returned when the
+operator has registered them as MC agents under the caller's
+gateway — they are org-bound by virtue of the agent registration.
+Projection rows with no matching Agent row in the caller's org
+are dropped, regardless of prefix.
+ * @summary Projected Gateway Sessions
+ */
+export type projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponse200 =
+  {
+    data: ProjectedGatewaySessionsResponse;
+    status: 200;
+  };
+
+export type projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponseSuccess =
+  projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponse200 & {
+    headers: Headers;
+  };
+export type projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponseError =
+  projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponse422 & {
+    headers: Headers;
+  };
+
+export type projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponse =
+  | projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponseSuccess
+  | projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponseError;
+
+export const getProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetUrl = (
+  params?: ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/gateways/projected-sessions?${stringifiedParams}`
+    : `/api/v1/gateways/projected-sessions`;
+};
+
+export const projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet = async (
+  params?: ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams,
+  options?: RequestInit,
+): Promise<projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponse> => {
+  return customFetch<projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetResponse>(
+    getProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetQueryKey =
+  (
+    params?: ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams,
+  ) => {
+    return [
+      `/api/v1/gateways/projected-sessions`,
+      ...(params ? [params] : []),
+    ] as const;
+  };
+
+export const getProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetQueryOptions =
+  <
+    TData = Awaited<
+      ReturnType<
+        typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+      >
+    >,
+    TError = HTTPValidationError,
+  >(
+    params?: ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams,
+    options?: {
+      query?: Partial<
+        UseQueryOptions<
+          Awaited<
+            ReturnType<
+              typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+            >
+          >,
+          TError,
+          TData
+        >
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+  ) => {
+    const { query: queryOptions, request: requestOptions } = options ?? {};
+
+    const queryKey =
+      queryOptions?.queryKey ??
+      getProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetQueryKey(
+        params,
+      );
+
+    const queryFn: QueryFunction<
+      Awaited<
+        ReturnType<
+          typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+        >
+      >
+    > = ({ signal }) =>
+      projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet(params, {
+        signal,
+        ...requestOptions,
+      });
+
+    return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+      Awaited<
+        ReturnType<
+          typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+        >
+      >,
+      TError,
+      TData
+    > & { queryKey: DataTag<QueryKey, TData, TError> };
+  };
+
+export type ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetQueryResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+      >
+    >
+  >;
+export type ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetQueryError =
+  HTTPValidationError;
+
+export function useProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGet<
+  TData = Awaited<
+    ReturnType<typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet>
+  >,
+  TError = HTTPValidationError,
+>(
+  params:
+    | undefined
+    | ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGet<
+  TData = Awaited<
+    ReturnType<typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet>
+  >,
+  TError = HTTPValidationError,
+>(
+  params?: ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGet<
+  TData = Awaited<
+    ReturnType<typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet>
+  >,
+  TError = HTTPValidationError,
+>(
+  params?: ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Projected Gateway Sessions
+ */
+
+export function useProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGet<
+  TData = Awaited<
+    ReturnType<typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet>
+  >,
+  TError = HTTPValidationError,
+>(
+  params?: ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof projectedGatewaySessionsApiV1GatewaysProjectedSessionsGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions =
+    getProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetQueryOptions(
+      params,
+      options,
+    );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Return the local OpenClaw runtime status snapshot.
+ * @summary Openclaw Runtime Status
+ */
+export type openclawRuntimeStatusApiV1GatewaysRuntimeStatusGetResponse200 = {
+  data: OpenClawRuntimeStatusResponse;
+  status: 200;
+};
+
+export type openclawRuntimeStatusApiV1GatewaysRuntimeStatusGetResponseSuccess =
+  openclawRuntimeStatusApiV1GatewaysRuntimeStatusGetResponse200 & {
+    headers: Headers;
+  };
+export type openclawRuntimeStatusApiV1GatewaysRuntimeStatusGetResponse =
+  openclawRuntimeStatusApiV1GatewaysRuntimeStatusGetResponseSuccess;
+
+export const getOpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGetUrl = () => {
+  return `/api/v1/gateways/runtime/status`;
+};
+
+export const openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet = async (
+  options?: RequestInit,
+): Promise<openclawRuntimeStatusApiV1GatewaysRuntimeStatusGetResponse> => {
+  return customFetch<openclawRuntimeStatusApiV1GatewaysRuntimeStatusGetResponse>(
+    getOpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGetUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getOpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGetQueryKey =
+  () => {
+    return [`/api/v1/gateways/runtime/status`] as const;
+  };
+
+export const getOpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGetQueryOptions =
+  <
+    TData = Awaited<
+      ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+    >,
+    TError = unknown,
+  >(options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }) => {
+    const { query: queryOptions, request: requestOptions } = options ?? {};
+
+    const queryKey =
+      queryOptions?.queryKey ??
+      getOpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGetQueryKey();
+
+    const queryFn: QueryFunction<
+      Awaited<
+        ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+      >
+    > = ({ signal }) =>
+      openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet({
+        signal,
+        ...requestOptions,
+      });
+
+    return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+      Awaited<
+        ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+      >,
+      TError,
+      TData
+    > & { queryKey: DataTag<QueryKey, TData, TError> };
+  };
+
+export type OpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGetQueryResult =
+  NonNullable<
+    Awaited<
+      ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+    >
+  >;
+export type OpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGetQueryError =
+  unknown;
+
+export function useOpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGet<
+  TData = Awaited<
+    ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+  >,
+  TError = unknown,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useOpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGet<
+  TData = Awaited<
+    ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+  >,
+  TError = unknown,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useOpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGet<
+  TData = Awaited<
+    ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+  >,
+  TError = unknown,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Openclaw Runtime Status
+ */
+
+export function useOpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGet<
+  TData = Awaited<
+    ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+  >,
+  TError = unknown,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<typeof openclawRuntimeStatusApiV1GatewaysRuntimeStatusGet>
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions =
+    getOpenclawRuntimeStatusApiV1GatewaysRuntimeStatusGetQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,
@@ -2242,6 +3884,234 @@ export const useUpdateGatewayApiV1GatewaysGatewayIdPatch = <
     queryClient,
   );
 };
+/**
+ * Look up gateway config schema + reload metadata for a single path.
+ * @summary Gateway Config Lookup
+ */
+export type gatewayConfigLookupResponse200 = {
+  data: ConfigSchemaLookupResponse;
+  status: 200;
+};
+
+export type gatewayConfigLookupResponse422 = {
+  data: HTTPValidationError;
+  status: 422;
+};
+
+export type gatewayConfigLookupResponseSuccess =
+  gatewayConfigLookupResponse200 & {
+    headers: Headers;
+  };
+export type gatewayConfigLookupResponseError =
+  gatewayConfigLookupResponse422 & {
+    headers: Headers;
+  };
+
+export type gatewayConfigLookupResponse =
+  | gatewayConfigLookupResponseSuccess
+  | gatewayConfigLookupResponseError;
+
+export const getGatewayConfigLookupUrl = (
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/gateways/${gatewayId}/config/lookup?${stringifiedParams}`
+    : `/api/v1/gateways/${gatewayId}/config/lookup`;
+};
+
+export const gatewayConfigLookup = async (
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options?: RequestInit,
+): Promise<gatewayConfigLookupResponse> => {
+  return customFetch<gatewayConfigLookupResponse>(
+    getGatewayConfigLookupUrl(gatewayId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGatewayConfigLookupQueryKey = (
+  gatewayId: string,
+  params?: GatewayConfigLookupParams,
+) => {
+  return [
+    `/api/v1/gateways/${gatewayId}/config/lookup`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGatewayConfigLookupQueryOptions = <
+  TData = Awaited<ReturnType<typeof gatewayConfigLookup>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof gatewayConfigLookup>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGatewayConfigLookupQueryKey(gatewayId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof gatewayConfigLookup>>
+  > = ({ signal }) =>
+    gatewayConfigLookup(gatewayId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!gatewayId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof gatewayConfigLookup>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GatewayConfigLookupQueryResult = NonNullable<
+  Awaited<ReturnType<typeof gatewayConfigLookup>>
+>;
+export type GatewayConfigLookupQueryError = HTTPValidationError;
+
+export function useGatewayConfigLookup<
+  TData = Awaited<ReturnType<typeof gatewayConfigLookup>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof gatewayConfigLookup>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof gatewayConfigLookup>>,
+          TError,
+          Awaited<ReturnType<typeof gatewayConfigLookup>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGatewayConfigLookup<
+  TData = Awaited<ReturnType<typeof gatewayConfigLookup>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof gatewayConfigLookup>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof gatewayConfigLookup>>,
+          TError,
+          Awaited<ReturnType<typeof gatewayConfigLookup>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGatewayConfigLookup<
+  TData = Awaited<ReturnType<typeof gatewayConfigLookup>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof gatewayConfigLookup>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Gateway Config Lookup
+ */
+
+export function useGatewayConfigLookup<
+  TData = Awaited<ReturnType<typeof gatewayConfigLookup>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  params: GatewayConfigLookupParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof gatewayConfigLookup>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGatewayConfigLookupQueryOptions(
+    gatewayId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
 /**
  * Sync templates for a gateway and optionally rotate runtime settings.
  * @summary Sync Gateway Templates

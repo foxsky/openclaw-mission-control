@@ -14,4 +14,5 @@ export const TaskCreateStatus = {
   review: "review",
   rework: "rework",
   done: "done",
+  cancelled: "cancelled",
 } as const;

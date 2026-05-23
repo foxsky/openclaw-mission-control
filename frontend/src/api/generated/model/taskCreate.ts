@@ -17,8 +17,32 @@ export interface TaskCreate {
   depends_on_task_ids?: string[];
   description?: string | null;
   due_at?: string | null;
+  operator_decision_required?: boolean;
+  operator_decision_summary?: string | null;
+  packet_build_sha?: string | null;
+  packet_commit_sha?: string | null;
+  parent_task_id?: string | null;
   priority?: string;
+  review_packet_type?:
+    | "frontend_ui"
+    | "backend_api"
+    | "review_only"
+    | "content_copy"
+    | "infra_ops"
+    | "mixed"
+    | "other"
+    | null;
   status?: TaskCreateStatus;
+  supports_build_metadata?: boolean | null;
   tag_ids?: string[];
   title: string;
+  validation_target?: string | null;
+  validation_target_kind?:
+    | "live_url"
+    | "deploy_env"
+    | "workspace"
+    | "api_base"
+    | "other"
+    | null;
+  validation_target_scope?: "review" | "runtime" | "deploy" | "all" | null;
 }

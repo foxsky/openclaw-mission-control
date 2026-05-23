@@ -4,28 +4,853 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
   DataTag,
   DefinedInitialDataOptions,
   DefinedUseQueryResult,
+  MutationFunction,
   QueryClient,
   QueryFunction,
   QueryKey,
   UndefinedInitialDataOptions,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
 import type {
+  ApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet200,
+  ApiPauseBoardApiMissionControlBoardsBoardIdPausePost200,
+  ApiResumeBoardApiMissionControlBoardsBoardIdResumePost200,
   DashboardMetrics,
   DashboardMetricsApiV1MetricsDashboardGetParams,
   HTTPValidationError,
+  LimitOffsetPageTypeVarCustomizedShadowMetricEventRead,
+  ListShadowMetricEventsApiV1MetricsShadowGetParams,
+  MissionControlHeartbeatsApiMissionControlHeartbeatsGet200,
 } from ".././model";
 
 import { customFetch } from "../../mutator";
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
+/**
+ * Return the current pause state for a board.
+ * @summary Api Get Board Pause State
+ */
+export type apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponse200 =
+  {
+    data: ApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet200;
+    status: 200;
+  };
+
+export type apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponseSuccess =
+  apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponse200 & {
+    headers: Headers;
+  };
+export type apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponseError =
+  apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponse422 & {
+    headers: Headers;
+  };
+
+export type apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponse =
+
+    | apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponseSuccess
+    | apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponseError;
+
+export const getApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetUrl =
+  (boardId: string) => {
+    return `/api/mission-control/boards/${boardId}/pause`;
+  };
+
+export const apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet =
+  async (
+    boardId: string,
+    options?: RequestInit,
+  ): Promise<apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponse> => {
+    return customFetch<apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetResponse>(
+      getApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetUrl(
+        boardId,
+      ),
+      {
+        ...options,
+        method: "GET",
+      },
+    );
+  };
+
+export const getApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetQueryKey =
+  (boardId: string) => {
+    return [`/api/mission-control/boards/${boardId}/pause`] as const;
+  };
+
+export const getApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetQueryOptions =
+  <
+    TData = Awaited<
+      ReturnType<
+        typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+      >
+    >,
+    TError = HTTPValidationError,
+  >(
+    boardId: string,
+    options?: {
+      query?: Partial<
+        UseQueryOptions<
+          Awaited<
+            ReturnType<
+              typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+            >
+          >,
+          TError,
+          TData
+        >
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+  ) => {
+    const { query: queryOptions, request: requestOptions } = options ?? {};
+
+    const queryKey =
+      queryOptions?.queryKey ??
+      getApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetQueryKey(
+        boardId,
+      );
+
+    const queryFn: QueryFunction<
+      Awaited<
+        ReturnType<
+          typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+        >
+      >
+    > = ({ signal }) =>
+      apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet(boardId, {
+        signal,
+        ...requestOptions,
+      });
+
+    return {
+      queryKey,
+      queryFn,
+      enabled: !!boardId,
+      ...queryOptions,
+    } as UseQueryOptions<
+      Awaited<
+        ReturnType<
+          typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+        >
+      >,
+      TError,
+      TData
+    > & { queryKey: DataTag<QueryKey, TData, TError> };
+  };
+
+export type ApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetQueryResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+      >
+    >
+  >;
+export type ApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetQueryError =
+  HTTPValidationError;
+
+export function useApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet<
+  TData = Awaited<
+    ReturnType<
+      typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet<
+  TData = Awaited<
+    ReturnType<
+      typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet<
+  TData = Awaited<
+    ReturnType<
+      typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Api Get Board Pause State
+ */
+
+export function useApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet<
+  TData = Awaited<
+    ReturnType<
+      typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+    >
+  >,
+  TError = HTTPValidationError,
+>(
+  boardId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof apiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions =
+    getApiGetBoardPauseStateApiMissionControlBoardsBoardIdPauseGetQueryOptions(
+      boardId,
+      options,
+    );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Mark a board as paused — heartbeat monitor will skip nudge/wake for its agents.
+
+Also disables agent heartbeats in the gateway by calling set-heartbeats RPC
+for all agents assigned to this board.
+ * @summary Api Pause Board
+ */
+export type apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponse200 = {
+  data: ApiPauseBoardApiMissionControlBoardsBoardIdPausePost200;
+  status: 200;
+};
+
+export type apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponse422 = {
+  data: HTTPValidationError;
+  status: 422;
+};
+
+export type apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponseSuccess =
+  apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponse200 & {
+    headers: Headers;
+  };
+export type apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponseError =
+  apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponse422 & {
+    headers: Headers;
+  };
+
+export type apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponse =
+  | apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponseSuccess
+  | apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponseError;
+
+export const getApiPauseBoardApiMissionControlBoardsBoardIdPausePostUrl = (
+  boardId: string,
+) => {
+  return `/api/mission-control/boards/${boardId}/pause`;
+};
+
+export const apiPauseBoardApiMissionControlBoardsBoardIdPausePost = async (
+  boardId: string,
+  options?: RequestInit,
+): Promise<apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponse> => {
+  return customFetch<apiPauseBoardApiMissionControlBoardsBoardIdPausePostResponse>(
+    getApiPauseBoardApiMissionControlBoardsBoardIdPausePostUrl(boardId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getApiPauseBoardApiMissionControlBoardsBoardIdPausePostMutationOptions =
+  <TError = HTTPValidationError, TContext = unknown>(options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<typeof apiPauseBoardApiMissionControlBoardsBoardIdPausePost>
+      >,
+      TError,
+      { boardId: string },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }): UseMutationOptions<
+    Awaited<
+      ReturnType<typeof apiPauseBoardApiMissionControlBoardsBoardIdPausePost>
+    >,
+    TError,
+    { boardId: string },
+    TContext
+  > => {
+    const mutationKey = [
+      "apiPauseBoardApiMissionControlBoardsBoardIdPausePost",
+    ];
+    const { mutation: mutationOptions, request: requestOptions } = options
+      ? options.mutation &&
+        "mutationKey" in options.mutation &&
+        options.mutation.mutationKey
+        ? options
+        : { ...options, mutation: { ...options.mutation, mutationKey } }
+      : { mutation: { mutationKey }, request: undefined };
+
+    const mutationFn: MutationFunction<
+      Awaited<
+        ReturnType<typeof apiPauseBoardApiMissionControlBoardsBoardIdPausePost>
+      >,
+      { boardId: string }
+    > = (props) => {
+      const { boardId } = props ?? {};
+
+      return apiPauseBoardApiMissionControlBoardsBoardIdPausePost(
+        boardId,
+        requestOptions,
+      );
+    };
+
+    return { mutationFn, ...mutationOptions };
+  };
+
+export type ApiPauseBoardApiMissionControlBoardsBoardIdPausePostMutationResult =
+  NonNullable<
+    Awaited<
+      ReturnType<typeof apiPauseBoardApiMissionControlBoardsBoardIdPausePost>
+    >
+  >;
+
+export type ApiPauseBoardApiMissionControlBoardsBoardIdPausePostMutationError =
+  HTTPValidationError;
+
+/**
+ * @summary Api Pause Board
+ */
+export const useApiPauseBoardApiMissionControlBoardsBoardIdPausePost = <
+  TError = HTTPValidationError,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<typeof apiPauseBoardApiMissionControlBoardsBoardIdPausePost>
+      >,
+      TError,
+      { boardId: string },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<
+    ReturnType<typeof apiPauseBoardApiMissionControlBoardsBoardIdPausePost>
+  >,
+  TError,
+  { boardId: string },
+  TContext
+> => {
+  return useMutation(
+    getApiPauseBoardApiMissionControlBoardsBoardIdPausePostMutationOptions(
+      options,
+    ),
+    queryClient,
+  );
+};
+/**
+ * Mark a board as resumed — heartbeat monitor resumes normal nudge/wake behaviour.
+
+Also re-enables agent heartbeats in the gateway by calling set-heartbeats RPC
+for all agents assigned to this board.
+ * @summary Api Resume Board
+ */
+export type apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponse200 =
+  {
+    data: ApiResumeBoardApiMissionControlBoardsBoardIdResumePost200;
+    status: 200;
+  };
+
+export type apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponseSuccess =
+  apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponse200 & {
+    headers: Headers;
+  };
+export type apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponseError =
+  apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponse422 & {
+    headers: Headers;
+  };
+
+export type apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponse =
+  | apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponseSuccess
+  | apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponseError;
+
+export const getApiResumeBoardApiMissionControlBoardsBoardIdResumePostUrl = (
+  boardId: string,
+) => {
+  return `/api/mission-control/boards/${boardId}/resume`;
+};
+
+export const apiResumeBoardApiMissionControlBoardsBoardIdResumePost = async (
+  boardId: string,
+  options?: RequestInit,
+): Promise<apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponse> => {
+  return customFetch<apiResumeBoardApiMissionControlBoardsBoardIdResumePostResponse>(
+    getApiResumeBoardApiMissionControlBoardsBoardIdResumePostUrl(boardId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getApiResumeBoardApiMissionControlBoardsBoardIdResumePostMutationOptions =
+  <TError = HTTPValidationError, TContext = unknown>(options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<
+          typeof apiResumeBoardApiMissionControlBoardsBoardIdResumePost
+        >
+      >,
+      TError,
+      { boardId: string },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }): UseMutationOptions<
+    Awaited<
+      ReturnType<typeof apiResumeBoardApiMissionControlBoardsBoardIdResumePost>
+    >,
+    TError,
+    { boardId: string },
+    TContext
+  > => {
+    const mutationKey = [
+      "apiResumeBoardApiMissionControlBoardsBoardIdResumePost",
+    ];
+    const { mutation: mutationOptions, request: requestOptions } = options
+      ? options.mutation &&
+        "mutationKey" in options.mutation &&
+        options.mutation.mutationKey
+        ? options
+        : { ...options, mutation: { ...options.mutation, mutationKey } }
+      : { mutation: { mutationKey }, request: undefined };
+
+    const mutationFn: MutationFunction<
+      Awaited<
+        ReturnType<
+          typeof apiResumeBoardApiMissionControlBoardsBoardIdResumePost
+        >
+      >,
+      { boardId: string }
+    > = (props) => {
+      const { boardId } = props ?? {};
+
+      return apiResumeBoardApiMissionControlBoardsBoardIdResumePost(
+        boardId,
+        requestOptions,
+      );
+    };
+
+    return { mutationFn, ...mutationOptions };
+  };
+
+export type ApiResumeBoardApiMissionControlBoardsBoardIdResumePostMutationResult =
+  NonNullable<
+    Awaited<
+      ReturnType<typeof apiResumeBoardApiMissionControlBoardsBoardIdResumePost>
+    >
+  >;
+
+export type ApiResumeBoardApiMissionControlBoardsBoardIdResumePostMutationError =
+  HTTPValidationError;
+
+/**
+ * @summary Api Resume Board
+ */
+export const useApiResumeBoardApiMissionControlBoardsBoardIdResumePost = <
+  TError = HTTPValidationError,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<
+          typeof apiResumeBoardApiMissionControlBoardsBoardIdResumePost
+        >
+      >,
+      TError,
+      { boardId: string },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<
+    ReturnType<typeof apiResumeBoardApiMissionControlBoardsBoardIdResumePost>
+  >,
+  TError,
+  { boardId: string },
+  TContext
+> => {
+  return useMutation(
+    getApiResumeBoardApiMissionControlBoardsBoardIdResumePostMutationOptions(
+      options,
+    ),
+    queryClient,
+  );
+};
+/**
+ * Mission Control Heartbeats.
+ * @summary Mission Control Heartbeats
+ */
+export type missionControlHeartbeatsApiMissionControlHeartbeatsGetResponse200 =
+  {
+    data: MissionControlHeartbeatsApiMissionControlHeartbeatsGet200;
+    status: 200;
+  };
+
+export type missionControlHeartbeatsApiMissionControlHeartbeatsGetResponseSuccess =
+  missionControlHeartbeatsApiMissionControlHeartbeatsGetResponse200 & {
+    headers: Headers;
+  };
+export type missionControlHeartbeatsApiMissionControlHeartbeatsGetResponse =
+  missionControlHeartbeatsApiMissionControlHeartbeatsGetResponseSuccess;
+
+export const getMissionControlHeartbeatsApiMissionControlHeartbeatsGetUrl =
+  () => {
+    return `/api/mission-control/heartbeats`;
+  };
+
+export const missionControlHeartbeatsApiMissionControlHeartbeatsGet = async (
+  options?: RequestInit,
+): Promise<missionControlHeartbeatsApiMissionControlHeartbeatsGetResponse> => {
+  return customFetch<missionControlHeartbeatsApiMissionControlHeartbeatsGetResponse>(
+    getMissionControlHeartbeatsApiMissionControlHeartbeatsGetUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getMissionControlHeartbeatsApiMissionControlHeartbeatsGetQueryKey =
+  () => {
+    return [`/api/mission-control/heartbeats`] as const;
+  };
+
+export const getMissionControlHeartbeatsApiMissionControlHeartbeatsGetQueryOptions =
+  <
+    TData = Awaited<
+      ReturnType<typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet>
+    >,
+    TError = unknown,
+  >(options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }) => {
+    const { query: queryOptions, request: requestOptions } = options ?? {};
+
+    const queryKey =
+      queryOptions?.queryKey ??
+      getMissionControlHeartbeatsApiMissionControlHeartbeatsGetQueryKey();
+
+    const queryFn: QueryFunction<
+      Awaited<
+        ReturnType<
+          typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+        >
+      >
+    > = ({ signal }) =>
+      missionControlHeartbeatsApiMissionControlHeartbeatsGet({
+        signal,
+        ...requestOptions,
+      });
+
+    return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+      Awaited<
+        ReturnType<
+          typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+        >
+      >,
+      TError,
+      TData
+    > & { queryKey: DataTag<QueryKey, TData, TError> };
+  };
+
+export type MissionControlHeartbeatsApiMissionControlHeartbeatsGetQueryResult =
+  NonNullable<
+    Awaited<
+      ReturnType<typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet>
+    >
+  >;
+export type MissionControlHeartbeatsApiMissionControlHeartbeatsGetQueryError =
+  unknown;
+
+export function useMissionControlHeartbeatsApiMissionControlHeartbeatsGet<
+  TData = Awaited<
+    ReturnType<typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet>
+  >,
+  TError = unknown,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMissionControlHeartbeatsApiMissionControlHeartbeatsGet<
+  TData = Awaited<
+    ReturnType<typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet>
+  >,
+  TError = unknown,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+          >
+        >,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<
+            ReturnType<
+              typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+            >
+          >,
+          TError,
+          Awaited<
+            ReturnType<
+              typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+            >
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMissionControlHeartbeatsApiMissionControlHeartbeatsGet<
+  TData = Awaited<
+    ReturnType<typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet>
+  >,
+  TError = unknown,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Mission Control Heartbeats
+ */
+
+export function useMissionControlHeartbeatsApiMissionControlHeartbeatsGet<
+  TData = Awaited<
+    ReturnType<typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet>
+  >,
+  TError = unknown,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<
+          ReturnType<
+            typeof missionControlHeartbeatsApiMissionControlHeartbeatsGet
+          >
+        >,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions =
+    getMissionControlHeartbeatsApiMissionControlHeartbeatsGetQueryOptions(
+      options,
+    );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * Return dashboard KPIs and time-series data for accessible boards.
@@ -234,6 +1059,244 @@ export function useDashboardMetricsApiV1MetricsDashboardGet<
     params,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * List Phase 0 shadow-metric events visible to the requesting org admin.
+
+Operator-scope only (amendment §A.7). Events without a board_id
+(orphaned after task deletion + cascade) are omitted from results —
+without board attribution there's no way to scope them to the
+admin's organization safely.
+ * @summary List Shadow Metric Events
+ */
+export type listShadowMetricEventsApiV1MetricsShadowGetResponse200 = {
+  data: LimitOffsetPageTypeVarCustomizedShadowMetricEventRead;
+  status: 200;
+};
+
+export type listShadowMetricEventsApiV1MetricsShadowGetResponse422 = {
+  data: HTTPValidationError;
+  status: 422;
+};
+
+export type listShadowMetricEventsApiV1MetricsShadowGetResponseSuccess =
+  listShadowMetricEventsApiV1MetricsShadowGetResponse200 & {
+    headers: Headers;
+  };
+export type listShadowMetricEventsApiV1MetricsShadowGetResponseError =
+  listShadowMetricEventsApiV1MetricsShadowGetResponse422 & {
+    headers: Headers;
+  };
+
+export type listShadowMetricEventsApiV1MetricsShadowGetResponse =
+  | listShadowMetricEventsApiV1MetricsShadowGetResponseSuccess
+  | listShadowMetricEventsApiV1MetricsShadowGetResponseError;
+
+export const getListShadowMetricEventsApiV1MetricsShadowGetUrl = (
+  params?: ListShadowMetricEventsApiV1MetricsShadowGetParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/metrics/shadow?${stringifiedParams}`
+    : `/api/v1/metrics/shadow`;
+};
+
+export const listShadowMetricEventsApiV1MetricsShadowGet = async (
+  params?: ListShadowMetricEventsApiV1MetricsShadowGetParams,
+  options?: RequestInit,
+): Promise<listShadowMetricEventsApiV1MetricsShadowGetResponse> => {
+  return customFetch<listShadowMetricEventsApiV1MetricsShadowGetResponse>(
+    getListShadowMetricEventsApiV1MetricsShadowGetUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListShadowMetricEventsApiV1MetricsShadowGetQueryKey = (
+  params?: ListShadowMetricEventsApiV1MetricsShadowGetParams,
+) => {
+  return [`/api/v1/metrics/shadow`, ...(params ? [params] : [])] as const;
+};
+
+export const getListShadowMetricEventsApiV1MetricsShadowGetQueryOptions = <
+  TData = Awaited<
+    ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>
+  >,
+  TError = HTTPValidationError,
+>(
+  params?: ListShadowMetricEventsApiV1MetricsShadowGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListShadowMetricEventsApiV1MetricsShadowGetQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>>
+  > = ({ signal }) =>
+    listShadowMetricEventsApiV1MetricsShadowGet(params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListShadowMetricEventsApiV1MetricsShadowGetQueryResult =
+  NonNullable<
+    Awaited<ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>>
+  >;
+export type ListShadowMetricEventsApiV1MetricsShadowGetQueryError =
+  HTTPValidationError;
+
+export function useListShadowMetricEventsApiV1MetricsShadowGet<
+  TData = Awaited<
+    ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>
+  >,
+  TError = HTTPValidationError,
+>(
+  params: undefined | ListShadowMetricEventsApiV1MetricsShadowGetParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<
+            ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>
+          >,
+          TError,
+          Awaited<
+            ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListShadowMetricEventsApiV1MetricsShadowGet<
+  TData = Awaited<
+    ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>
+  >,
+  TError = HTTPValidationError,
+>(
+  params?: ListShadowMetricEventsApiV1MetricsShadowGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<
+            ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>
+          >,
+          TError,
+          Awaited<
+            ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>
+          >
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListShadowMetricEventsApiV1MetricsShadowGet<
+  TData = Awaited<
+    ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>
+  >,
+  TError = HTTPValidationError,
+>(
+  params?: ListShadowMetricEventsApiV1MetricsShadowGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List Shadow Metric Events
+ */
+
+export function useListShadowMetricEventsApiV1MetricsShadowGet<
+  TData = Awaited<
+    ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>
+  >,
+  TError = HTTPValidationError,
+>(
+  params?: ListShadowMetricEventsApiV1MetricsShadowGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listShadowMetricEventsApiV1MetricsShadowGet>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions =
+    getListShadowMetricEventsApiV1MetricsShadowGetQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

@@ -23,6 +23,7 @@ import type {
   LimitOffsetPageTypeVarCustomizedActivityTaskCommentFeedItemRead,
   ListActivityApiV1ActivityGetParams,
   ListTaskCommentFeedApiV1ActivityTaskCommentsGetParams,
+  StreamActivityApiV1ActivityStreamGetParams,
   StreamTaskCommentFeedApiV1ActivityTaskCommentsStreamGetParams,
 } from ".././model";
 
@@ -229,6 +230,219 @@ export function useListActivityApiV1ActivityGet<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getListActivityApiV1ActivityGetQueryOptions(
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Stream activity events visible to the calling actor.
+ * @summary Stream Activity
+ */
+export type streamActivityApiV1ActivityStreamGetResponse200 = {
+  data: unknown;
+  status: 200;
+};
+
+export type streamActivityApiV1ActivityStreamGetResponse422 = {
+  data: HTTPValidationError;
+  status: 422;
+};
+
+export type streamActivityApiV1ActivityStreamGetResponseSuccess =
+  streamActivityApiV1ActivityStreamGetResponse200 & {
+    headers: Headers;
+  };
+export type streamActivityApiV1ActivityStreamGetResponseError =
+  streamActivityApiV1ActivityStreamGetResponse422 & {
+    headers: Headers;
+  };
+
+export type streamActivityApiV1ActivityStreamGetResponse =
+  | streamActivityApiV1ActivityStreamGetResponseSuccess
+  | streamActivityApiV1ActivityStreamGetResponseError;
+
+export const getStreamActivityApiV1ActivityStreamGetUrl = (
+  params?: StreamActivityApiV1ActivityStreamGetParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/activity/stream?${stringifiedParams}`
+    : `/api/v1/activity/stream`;
+};
+
+export const streamActivityApiV1ActivityStreamGet = async (
+  params?: StreamActivityApiV1ActivityStreamGetParams,
+  options?: RequestInit,
+): Promise<streamActivityApiV1ActivityStreamGetResponse> => {
+  return customFetch<streamActivityApiV1ActivityStreamGetResponse>(
+    getStreamActivityApiV1ActivityStreamGetUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getStreamActivityApiV1ActivityStreamGetQueryKey = (
+  params?: StreamActivityApiV1ActivityStreamGetParams,
+) => {
+  return [`/api/v1/activity/stream`, ...(params ? [params] : [])] as const;
+};
+
+export const getStreamActivityApiV1ActivityStreamGetQueryOptions = <
+  TData = Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+  TError = HTTPValidationError,
+>(
+  params?: StreamActivityApiV1ActivityStreamGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getStreamActivityApiV1ActivityStreamGetQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>
+  > = ({ signal }) =>
+    streamActivityApiV1ActivityStreamGet(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type StreamActivityApiV1ActivityStreamGetQueryResult = NonNullable<
+  Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>
+>;
+export type StreamActivityApiV1ActivityStreamGetQueryError =
+  HTTPValidationError;
+
+export function useStreamActivityApiV1ActivityStreamGet<
+  TData = Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+  TError = HTTPValidationError,
+>(
+  params: undefined | StreamActivityApiV1ActivityStreamGetParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+          TError,
+          Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStreamActivityApiV1ActivityStreamGet<
+  TData = Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+  TError = HTTPValidationError,
+>(
+  params?: StreamActivityApiV1ActivityStreamGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+          TError,
+          Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStreamActivityApiV1ActivityStreamGet<
+  TData = Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+  TError = HTTPValidationError,
+>(
+  params?: StreamActivityApiV1ActivityStreamGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Stream Activity
+ */
+
+export function useStreamActivityApiV1ActivityStreamGet<
+  TData = Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+  TError = HTTPValidationError,
+>(
+  params?: StreamActivityApiV1ActivityStreamGetParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof streamActivityApiV1ActivityStreamGet>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getStreamActivityApiV1ActivityStreamGetQueryOptions(
     params,
     options,
   );

@@ -23,10 +23,12 @@ import type {
 import type {
   ApprovalCreate,
   ApprovalRead,
+  ApprovalUnblock,
   ApprovalUpdate,
   HTTPValidationError,
   LimitOffsetPageTypeVarCustomizedApprovalRead,
   ListApprovalsApiV1BoardsBoardIdApprovalsGetParams,
+  OkResponse,
   StreamApprovalsApiV1BoardsBoardIdApprovalsStreamGetParams,
 } from ".././model";
 
@@ -700,6 +702,9 @@ export function useStreamApprovalsApiV1BoardsBoardIdApprovalsStreamGet<
 
 /**
  * Update an approval's status and resolution timestamp.
+
+Agents (board lead only) can reject approvals to unblock rework.
+Only humans can approve (final quality gate).
  * @summary Update Approval
  */
 export type updateApprovalApiV1BoardsBoardIdApprovalsApprovalIdPatchResponse200 =
@@ -858,3 +863,173 @@ export const useUpdateApprovalApiV1BoardsBoardIdApprovalsApprovalIdPatch = <
     queryClient,
   );
 };
+/**
+ * Clear a rejection loop by recording an authenticated ``unblocked``
+event in ``approval_history``.
+
+Authorization: human users pass via ``require_user_or_agent``; board
+lead agents may also unblock. Ordinary worker agents get 403 — this
+is the explicit privileged state Codex called for in the v1 review.
+
+Effect: appends one ``unblocked`` row per linked task. The next
+``_ensure_no_rejection_loop`` query sees the reset and lets the next
+pending submission through. A non-empty ``reason`` is required so
+the audit trail records why the loop was cut.
+ * @summary Unblock Approval
+ */
+export type unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponse200 =
+  {
+    data: OkResponse;
+    status: 200;
+  };
+
+export type unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponse422 =
+  {
+    data: HTTPValidationError;
+    status: 422;
+  };
+
+export type unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponseSuccess =
+  unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponse200 & {
+    headers: Headers;
+  };
+export type unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponseError =
+  unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponse422 & {
+    headers: Headers;
+  };
+
+export type unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponse =
+
+    | unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponseSuccess
+    | unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponseError;
+
+export const getUnblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostUrl =
+  (boardId: string, approvalId: string) => {
+    return `/api/v1/boards/${boardId}/approvals/${approvalId}/unblock`;
+  };
+
+export const unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPost =
+  async (
+    boardId: string,
+    approvalId: string,
+    approvalUnblock: ApprovalUnblock,
+    options?: RequestInit,
+  ): Promise<unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponse> => {
+    return customFetch<unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostResponse>(
+      getUnblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostUrl(
+        boardId,
+        approvalId,
+      ),
+      {
+        ...options,
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...options?.headers },
+        body: JSON.stringify(approvalUnblock),
+      },
+    );
+  };
+
+export const getUnblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostMutationOptions =
+  <TError = HTTPValidationError, TContext = unknown>(options?: {
+    mutation?: UseMutationOptions<
+      Awaited<
+        ReturnType<
+          typeof unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPost
+        >
+      >,
+      TError,
+      { boardId: string; approvalId: string; data: ApprovalUnblock },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  }): UseMutationOptions<
+    Awaited<
+      ReturnType<
+        typeof unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPost
+      >
+    >,
+    TError,
+    { boardId: string; approvalId: string; data: ApprovalUnblock },
+    TContext
+  > => {
+    const mutationKey = [
+      "unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPost",
+    ];
+    const { mutation: mutationOptions, request: requestOptions } = options
+      ? options.mutation &&
+        "mutationKey" in options.mutation &&
+        options.mutation.mutationKey
+        ? options
+        : { ...options, mutation: { ...options.mutation, mutationKey } }
+      : { mutation: { mutationKey }, request: undefined };
+
+    const mutationFn: MutationFunction<
+      Awaited<
+        ReturnType<
+          typeof unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPost
+        >
+      >,
+      { boardId: string; approvalId: string; data: ApprovalUnblock }
+    > = (props) => {
+      const { boardId, approvalId, data } = props ?? {};
+
+      return unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPost(
+        boardId,
+        approvalId,
+        data,
+        requestOptions,
+      );
+    };
+
+    return { mutationFn, ...mutationOptions };
+  };
+
+export type UnblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostMutationResult =
+  NonNullable<
+    Awaited<
+      ReturnType<
+        typeof unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPost
+      >
+    >
+  >;
+export type UnblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostMutationBody =
+  ApprovalUnblock;
+export type UnblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostMutationError =
+  HTTPValidationError;
+
+/**
+ * @summary Unblock Approval
+ */
+export const useUnblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPost =
+  <TError = HTTPValidationError, TContext = unknown>(
+    options?: {
+      mutation?: UseMutationOptions<
+        Awaited<
+          ReturnType<
+            typeof unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPost
+          >
+        >,
+        TError,
+        { boardId: string; approvalId: string; data: ApprovalUnblock },
+        TContext
+      >;
+      request?: SecondParameter<typeof customFetch>;
+    },
+    queryClient?: QueryClient,
+  ): UseMutationResult<
+    Awaited<
+      ReturnType<
+        typeof unblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPost
+      >
+    >,
+    TError,
+    { boardId: string; approvalId: string; data: ApprovalUnblock },
+    TContext
+  > => {
+    return useMutation(
+      getUnblockApprovalApiV1BoardsBoardIdApprovalsApprovalIdUnblockPostMutationOptions(
+        options,
+      ),
+      queryClient,
+    );
+  };
