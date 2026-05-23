@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
+from uuid import UUID
 
-from sqlmodel import SQLModel
+from sqlmodel import Field, SQLModel
+from sqlmodel._compat import SQLModelConfig
 
 from app.schemas.common import NonEmptyStr
 
@@ -134,3 +137,31 @@ class ProjectedGatewaySessionsResponse(SQLModel):
     """Response wrapper for ``/gateways/projected-sessions``."""
 
     sessions: list[ProjectedGatewaySession]
+
+
+class ConfigSchemaLookupChild(SQLModel):
+    """One direct child of a config schema path (returned by config.schema.lookup)."""
+
+    path: str
+    reload_kind: str | None = Field(default=None, alias="reloadKind")
+    hint: str | None = None
+
+    model_config = SQLModelConfig(validate_by_name=True)
+
+
+class ConfigSchemaLookupResponse(SQLModel):
+    """Read-only gateway config schema lookup result.
+
+    `reload_kind` is passed through unchanged from `resolveConfigReloadMetadata`
+    so future gateway values land in the UI without a backend release.
+    """
+
+    gateway_id: UUID
+    path: str
+    schema_: dict[str, Any] = Field(default_factory=dict, alias="schema")
+    reload_kind: str | None = Field(default=None, alias="reloadKind")
+    hint: str | None = None
+    hint_path: str | None = Field(default=None, alias="hintPath")
+    children: list[ConfigSchemaLookupChild] = Field(default_factory=list)
+
+    model_config = SQLModelConfig(validate_by_name=True)

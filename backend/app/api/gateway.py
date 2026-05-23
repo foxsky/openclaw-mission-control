@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+import hashlib
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 from sqlmodel import col, select
 
 from app.api.deps import require_org_admin
 from app.core.auth import AuthContext, get_auth_context
+from app.core.logging import get_logger
 from app.db.session import get_session
 from app.models.agents import Agent
 from app.models.gateways import Gateway
 from app.schemas.common import OkResponse
 from app.schemas.gateway_api import (
+    ConfigSchemaLookupResponse,
     GatewayCommandsResponse,
     GatewayEvalApprovalResolveRequest,
     GatewayEvalSessionEnsureRequest,
@@ -30,7 +36,17 @@ from app.schemas.gateway_api import (
 from app.services.mc_gateway_subscriber.session_state_repo import (
     list_session_states_for_agent_ids,
 )
-from app.services.openclaw.gateway_rpc import GATEWAY_EVENTS, GATEWAY_METHODS, PROTOCOL_VERSION
+from app.services.openclaw.admin_service import GatewayAdminLifecycleService
+from app.services.openclaw.config_lookup_cache import ConfigLookupCache
+from app.services.openclaw.gateway_resolver import gateway_client_config
+from app.services.openclaw.gateway_rpc import (
+    GATEWAY_EVENTS,
+    GATEWAY_METHODS,
+    PROTOCOL_VERSION,
+    GatewayConfig,
+    OpenClawGatewayError,
+    openclaw_call,
+)
 from app.services.openclaw.internal.agent_key import projection_lookup_id
 from app.services.openclaw.runtime_status import collect_openclaw_status
 from app.services.openclaw.session_service import GatewaySessionService
@@ -39,11 +55,55 @@ from app.services.organizations import OrganizationContext
 if TYPE_CHECKING:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/gateways", tags=["gateways"])
 SESSION_DEP = Depends(get_session)
 AUTH_DEP = Depends(get_auth_context)
 ORG_ADMIN_DEP = Depends(require_org_admin)
 BOARD_ID_QUERY = Query(default=None)
+
+_MAX_CONFIG_LOOKUP_PATH_LEN = 512
+
+
+def _validate_config_lookup_path(raw: str) -> str:
+    """Cheap pre-validation; lets the gateway parser be authoritative on grammar.
+
+    Rejects only empty/oversize/control-char input so the WS RPC never sees
+    obviously-bad payloads. Bracket-quoted keys, dotted paths, and the root
+    sentinel `.` all pass through unchanged.
+    """
+    trimmed = raw.strip()
+    if not trimmed or len(trimmed) > _MAX_CONFIG_LOOKUP_PATH_LEN:
+        raise HTTPException(status_code=400, detail={"error": "invalid_path"})
+    if any(ord(ch) < 0x20 for ch in trimmed):
+        raise HTTPException(status_code=400, detail={"error": "invalid_path"})
+    return trimmed
+
+
+def _gateway_connection_fingerprint(cfg: GatewayConfig) -> str:
+    """Stable per-connection fingerprint so the cache invalidates when the
+    gateway target changes within the TTL window.
+
+    The Gateway row's ``updated_at`` is not bumped on PATCH (no SQL
+    ``onupdate=`` and ``apply_updates`` does not touch it), so we cannot
+    rely on it. Hash the connection-identifying fields of the resolved
+    ``GatewayConfig`` instead; generic tunables are intentionally
+    excluded so they do not perturb the cache.
+    """
+    h = hashlib.sha256()
+    h.update(cfg.url.encode("utf-8"))
+    h.update(b"\x00")
+    h.update(str(cfg.allow_insecure_tls).encode("utf-8"))
+    h.update(b"\x00")
+    h.update(str(cfg.disable_device_pairing).encode("utf-8"))
+    h.update(b"\x00")
+    h.update((cfg.token or "").encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
+_CONFIG_LOOKUP_CACHE = ConfigLookupCache(ttl_seconds=30.0)
+_CONFIG_LOOKUP_RPC_TIMEOUT_SECONDS = 5.0
 
 
 def _query_to_resolve_input(
@@ -331,3 +391,129 @@ async def projected_gateway_sessions(
             ProjectedGatewaySession.model_validate(row, from_attributes=True) for row in rows
         ],
     )
+
+
+_GATEWAY_METHOD_REQUIRED_VERSION = "2026.5.19"
+
+
+def _map_gateway_error(exc: OpenClawGatewayError, path: str) -> HTTPException:
+    """Translate an OpenClawGatewayError into a structured HTTPException."""
+
+    details: dict[str, Any] = exc.details if isinstance(exc.details, dict) else {}
+    code = str(details.get("code") or "").upper()
+    message = str(details.get("message") or str(exc) or "")
+    lowered = message.lower()
+
+    logger.warning(
+        "gateway.config_lookup.failed path=%r code=%s request_id=%s message=%s",
+        path,
+        code or "<none>",
+        exc.request_id or "<none>",
+        message or "<none>",
+    )
+
+    if code == "INVALID_REQUEST":
+        if message == "config schema path not found":
+            return HTTPException(
+                status_code=404,
+                detail={"error": "path_not_found", "path": path},
+            )
+        return HTTPException(
+            status_code=422,
+            detail={"error": "gateway_rejected_request", "detail": message},
+        )
+    if (
+        code in {"METHOD_NOT_FOUND", "METHOD_NOT_REGISTERED", "NOT_IMPLEMENTED"}
+        or "method not found" in lowered
+        or "unknown method" in lowered
+    ):
+        return HTTPException(
+            status_code=501,
+            detail={
+                "error": "method_unsupported",
+                "requires_gateway_version": _GATEWAY_METHOD_REQUIRED_VERSION,
+            },
+        )
+    if code == "UNAVAILABLE":
+        return HTTPException(
+            status_code=503,
+            detail={"error": "gateway_unavailable", "detail": message},
+        )
+    return HTTPException(
+        status_code=503,
+        detail={"error": "gateway_unreachable", "detail": message},
+    )
+
+
+@router.get(
+    "/{gateway_id}/config/lookup",
+    response_model=ConfigSchemaLookupResponse,
+    response_model_by_alias=True,
+    operation_id="gateway_config_lookup",
+)
+async def gateway_config_lookup(
+    gateway_id: UUID,
+    path: str = Query(..., min_length=1, max_length=512),
+    session: AsyncSession = SESSION_DEP,
+    _auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> ConfigSchemaLookupResponse:
+    """Look up gateway config schema + reload metadata for a single path."""
+
+    trimmed_path = _validate_config_lookup_path(path)
+
+    gateway = await GatewayAdminLifecycleService(session).require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    cfg = gateway_client_config(gateway)
+    fingerprint = _gateway_connection_fingerprint(cfg)
+
+    async def _load() -> object:
+        return await asyncio.wait_for(
+            openclaw_call(
+                "config.schema.lookup",
+                {"path": trimmed_path},
+                config=cfg,
+            ),
+            timeout=_CONFIG_LOOKUP_RPC_TIMEOUT_SECONDS,
+        )
+
+    try:
+        payload = await _CONFIG_LOOKUP_CACHE.get_or_load(
+            (gateway_id, trimmed_path, fingerprint),
+            _load,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={"error": "gateway_timeout"},
+        ) from exc
+    except OpenClawGatewayError as exc:
+        raise _map_gateway_error(exc, trimmed_path) from exc
+    if not isinstance(payload, dict):
+        logger.error(
+            "gateway.config_lookup.invalid_payload gateway_id=%s path=%r type=%s",
+            gateway_id,
+            trimmed_path,
+            type(payload).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        )
+    try:
+        return ConfigSchemaLookupResponse.model_validate(
+            {**payload, "gateway_id": gateway_id},
+        )
+    except ValidationError as exc:
+        logger.error(
+            "gateway.config_lookup.invalid_payload_shape gateway_id=%s path=%r errors=%s",
+            gateway_id,
+            trimmed_path,
+            exc.errors(include_url=False, include_input=False),
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        ) from exc
