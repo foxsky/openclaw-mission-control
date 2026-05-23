@@ -396,19 +396,46 @@ async def projected_gateway_sessions(
 _GATEWAY_METHOD_REQUIRED_VERSION = "2026.5.19"
 
 
-def _map_gateway_error(exc: OpenClawGatewayError, path: str) -> HTTPException:
-    """Translate an OpenClawGatewayError into a structured HTTPException."""
+def _map_gateway_error_common(exc: OpenClawGatewayError) -> dict[str, Any]:
+    """Extract canonical fields used by every endpoint-specific mapper.
+
+    Returned dict has keys: ``code`` (uppercased), ``message``, ``lowered``
+    (message.lower()), ``request_id``, ``is_method_unsupported``.
+    """
 
     details: dict[str, Any] = exc.details if isinstance(exc.details, dict) else {}
     code = str(details.get("code") or "").upper()
     message = str(details.get("message") or str(exc) or "")
     lowered = message.lower()
+    is_method_unsupported = (
+        code in {"METHOD_NOT_FOUND", "METHOD_NOT_REGISTERED", "NOT_IMPLEMENTED"}
+        or "method not found" in lowered
+        or "unknown method" in lowered
+    )
+    return {
+        "code": code,
+        "message": message,
+        "lowered": lowered,
+        "request_id": exc.request_id,
+        "is_method_unsupported": is_method_unsupported,
+    }
+
+
+def _map_config_lookup_error(
+    exc: OpenClawGatewayError,
+    path: str,
+) -> HTTPException:
+    """Translate an OpenClawGatewayError from config.schema.lookup into HTTP."""
+
+    fields = _map_gateway_error_common(exc)
+    code = fields["code"]
+    message = fields["message"]
 
     logger.warning(
         "gateway.config_lookup.failed path=%r code=%s request_id=%s message=%s",
         path,
         code or "<none>",
-        exc.request_id or "<none>",
+        fields["request_id"] or "<none>",
         message or "<none>",
     )
 
@@ -422,11 +449,7 @@ def _map_gateway_error(exc: OpenClawGatewayError, path: str) -> HTTPException:
             status_code=422,
             detail={"error": "gateway_rejected_request", "detail": message},
         )
-    if (
-        code in {"METHOD_NOT_FOUND", "METHOD_NOT_REGISTERED", "NOT_IMPLEMENTED"}
-        or "method not found" in lowered
-        or "unknown method" in lowered
-    ):
+    if fields["is_method_unsupported"]:
         return HTTPException(
             status_code=501,
             detail={
@@ -490,7 +513,7 @@ async def gateway_config_lookup(
             detail={"error": "gateway_timeout"},
         ) from exc
     except OpenClawGatewayError as exc:
-        raise _map_gateway_error(exc, trimmed_path) from exc
+        raise _map_config_lookup_error(exc, trimmed_path) from exc
     if not isinstance(payload, dict):
         logger.error(
             "gateway.config_lookup.invalid_payload gateway_id=%s path=%r type=%s",
