@@ -635,10 +635,41 @@ async def list_gateway_devices(
     cfg = gateway_client_config(gateway)
     local_device_id = _resolve_local_device_id()
 
-    payload = await asyncio.wait_for(
-        openclaw_call("device.pair.list", config=cfg),
-        timeout=_PAIRING_RPC_TIMEOUT_SECONDS,
-    )
+    try:
+        payload = await asyncio.wait_for(
+            openclaw_call("device.pair.list", config=cfg),
+            timeout=_PAIRING_RPC_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={"error": "gateway_timeout"},
+        ) from exc
+    except OpenClawGatewayError as exc:
+        fields = _map_gateway_error_common(exc)
+        logger.warning(
+            "gateway.pairing.list.failed code=%s request_id=%s message=%s",
+            fields["code"] or "<none>",
+            fields["request_id"] or "<none>",
+            fields["message"] or "<none>",
+        )
+        if fields["is_method_unsupported"]:
+            raise HTTPException(
+                status_code=501,
+                detail={
+                    "error": "method_unsupported",
+                    "requires_gateway_version": _GATEWAY_METHOD_REQUIRED_VERSION,
+                },
+            ) from exc
+        if fields["code"] == "UNAVAILABLE":
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "gateway_unavailable", "detail": fields["message"]},
+            ) from exc
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "gateway_unreachable", "detail": fields["message"]},
+        ) from exc
     if not isinstance(payload, dict):
         logger.error(
             "gateway.pairing.list.invalid_payload gateway_id=%s type=%s",
@@ -678,10 +709,8 @@ async def list_gateway_devices(
             detail={"error": "gateway_invalid_payload"},
         ) from exc
 
-    return GatewayDeviceListResponse.model_validate(
-        {
-            "gateway_id": gateway_id,
-            "devices": [d.model_dump(by_alias=True) for d in devices],
-            "isSelfResolved": local_device_id is not None,
-        }
+    return GatewayDeviceListResponse(
+        gateway_id=gateway_id,
+        devices=devices,
+        is_self_resolved=local_device_id is not None,
     )

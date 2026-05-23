@@ -25,6 +25,7 @@ from app.models.gateways import Gateway
 from app.models.organization_members import OrganizationMember
 from app.models.organizations import Organization
 from app.models.users import User
+from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 from app.services.organizations import OrganizationContext
 
 
@@ -233,3 +234,74 @@ async def test_list_cross_org_returns_404(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(f"/api/v1/gateways/{uuid4()}/devices")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_rpc_timeout_returns_504(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio as _asyncio
+
+    app, _, gateway = setup
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        await _asyncio.sleep(10)  # exceeds the wait_for
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "_PAIRING_RPC_TIMEOUT_SECONDS", 0.05)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/api/v1/gateways/{gateway.id}/devices")
+    assert resp.status_code == 504
+    assert resp.json()["detail"]["error"] == "gateway_timeout"
+
+
+@pytest.mark.asyncio
+async def test_list_rpc_unavailable_returns_503(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _, gateway = setup
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        raise OpenClawGatewayError("down", details={"code": "UNAVAILABLE"})
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/api/v1/gateways/{gateway.id}/devices")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "gateway_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_list_does_not_cache_rpc_calls(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: don't accidentally reuse _CONFIG_LOOKUP_CACHE for pairings.
+
+    The plan explicitly forbids caching the device list — operators expect
+    post-revoke refresh to reflect reality immediately.
+    """
+
+    app, _, gateway = setup
+    calls = 0
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        nonlocal calls
+        calls += 1
+        return {"pending": [], "paired": []}
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        url = f"/api/v1/gateways/{gateway.id}/devices"
+        r1 = await client.get(url)
+        r2 = await client.get(url)
+    assert r1.status_code == r2.status_code == 200
+    assert calls == 2  # one per request — no cache
