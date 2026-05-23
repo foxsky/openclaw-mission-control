@@ -21,6 +21,7 @@ from app.schemas.common import OkResponse
 from app.schemas.gateway_api import (
     ConfigSchemaLookupResponse,
     GatewayCommandsResponse,
+    GatewayDevice,
     GatewayEvalApprovalResolveRequest,
     GatewayEvalSessionEnsureRequest,
     GatewayResolveQuery,
@@ -79,6 +80,50 @@ def _validate_config_lookup_path(raw: str) -> str:
     if any(ord(ch) < 0x20 for ch in trimmed):
         raise HTTPException(status_code=400, detail={"error": "invalid_path"})
     return trimmed
+
+
+def _project_gateway_device(
+    raw: dict[str, Any],
+    *,
+    local_device_id: str | None,
+) -> GatewayDevice:
+    """Flatten the gateway's per-device dict into the wire shape MC exposes.
+
+    Combines all token-level ``scopes`` into a single union, computes the
+    most-recent ``lastUsedAtMs`` across tokens, and marks ``is_self`` when
+    ``raw.deviceId`` matches the locally persisted Ed25519 identity.
+    """
+
+    tokens = raw.get("tokens") or []
+    if not isinstance(tokens, list):
+        tokens = []
+
+    scopes_union: set[str] = set()
+    for s in raw.get("scopes") or []:
+        if isinstance(s, str):
+            scopes_union.add(s)
+    last_used: int | None = None
+    for t in tokens:
+        if not isinstance(t, dict):
+            continue
+        for s in t.get("scopes") or []:
+            if isinstance(s, str):
+                scopes_union.add(s)
+        ts = t.get("lastUsedAtMs")
+        if isinstance(ts, int) and (last_used is None or ts > last_used):
+            last_used = ts
+
+    device_id = str(raw.get("deviceId") or "")
+    return GatewayDevice.model_validate(
+        {
+            **raw,
+            "scopes": sorted(scopes_union),
+            "tokenCount": len(tokens),
+            "lastUsedAtMs": last_used,
+            "isSelf": bool(local_device_id) and device_id == local_device_id,
+            # tokens[] is not declared on GatewayDevice; Pydantic ignores extras.
+        }
+    )
 
 
 def _gateway_connection_fingerprint(cfg: GatewayConfig) -> str:
