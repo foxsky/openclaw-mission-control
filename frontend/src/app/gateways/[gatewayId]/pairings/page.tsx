@@ -73,14 +73,18 @@ function Inner({ gatewayId }: { gatewayId: string }) {
     remove.mutate(
       { gatewayId, deviceId },
       {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey });
+          setTarget(null);
+        },
         onError: (err: unknown) => {
           const message =
             (err as { message?: string })?.message ?? "Remove failed.";
           setMutationError(message);
-        },
-        onSettled: () => {
+          // Refresh the list so the row reflects reality on 404-already-gone /
+          // any state the gateway moved into during the failure. Dialog stays
+          // open so the operator sees the error message.
           queryClient.invalidateQueries({ queryKey });
-          setTarget(null);
         },
       },
     );

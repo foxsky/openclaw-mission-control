@@ -166,11 +166,11 @@ describe("GatewayPairingsPage", () => {
     }
   });
 
-  it("after a 404 delete the list refetches and a toast is requested", async () => {
-    // Configure the mutation mock to invoke its onSettled with a 404-like error.
+  it("after a successful delete the dialog closes and the list refetches", async () => {
+    // Configure the mutation mock to invoke its onSuccess.
     removeMutateMock.mockImplementationOnce(
-      (_arg: unknown, opts: { onSettled?: () => void } = {}) => {
-        opts.onSettled?.();
+      (_arg: unknown, opts: { onSuccess?: () => void } = {}) => {
+        opts.onSuccess?.();
       },
     );
     const { client } = renderPage();
@@ -182,8 +182,38 @@ describe("GatewayPairingsPage", () => {
     const removeButtons = await screen.findAllByRole("button", { name: "Remove" });
     const dialogConfirm = removeButtons[removeButtons.length - 1];
     await userEvent.click(dialogConfirm);
-    // onSettled fires regardless of success/error — the page calls
-    // queryClient.invalidateQueries with the list query key.
+    // Success path: invalidateQueries called with the list query key, and the
+    // dialog closes (target → null → ConfirmActionDialog open=false).
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: [`/api/v1/gateways/gw-1/devices`],
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  it("after a failed delete the dialog stays open with the error message", async () => {
+    // Configure the mutation mock to invoke its onError with a gateway-style error.
+    removeMutateMock.mockImplementationOnce(
+      (_arg: unknown, opts: { onError?: (err: unknown) => void } = {}) => {
+        opts.onError?.({ message: "Gateway said no." });
+      },
+    );
+    const { client } = renderPage();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+    const enabledButton = screen.getAllByRole("button", { name: /remove/i }).find(
+      (b) => !b.hasAttribute("disabled"),
+    )!;
+    await userEvent.click(enabledButton);
+    const removeButtons = await screen.findAllByRole("button", { name: "Remove" });
+    const dialogConfirm = removeButtons[removeButtons.length - 1];
+    await userEvent.click(dialogConfirm);
+    // Error path: dialog STAYS open, error message is rendered inside it,
+    // and invalidateQueries is still called as a defensive refresh.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Gateway said no.")).toBeInTheDocument();
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith({
         queryKey: [`/api/v1/gateways/gw-1/devices`],
