@@ -22,6 +22,7 @@ from app.schemas.gateway_api import (
     ConfigSchemaLookupResponse,
     GatewayCommandsResponse,
     GatewayDevice,
+    GatewayDeviceListResponse,
     GatewayEvalApprovalResolveRequest,
     GatewayEvalSessionEnsureRequest,
     GatewayResolveQuery,
@@ -39,6 +40,7 @@ from app.services.mc_gateway_subscriber.session_state_repo import (
 )
 from app.services.openclaw.admin_service import GatewayAdminLifecycleService
 from app.services.openclaw.config_lookup_cache import ConfigLookupCache
+from app.services.openclaw.device_identity import load_or_create_device_identity
 from app.services.openclaw.gateway_resolver import gateway_client_config
 from app.services.openclaw.gateway_rpc import (
     GATEWAY_EVENTS,
@@ -149,6 +151,25 @@ def _gateway_connection_fingerprint(cfg: GatewayConfig) -> str:
 
 _CONFIG_LOOKUP_CACHE = ConfigLookupCache(ttl_seconds=30.0)
 _CONFIG_LOOKUP_RPC_TIMEOUT_SECONDS = 5.0
+_PAIRING_RPC_TIMEOUT_SECONDS = 5.0
+
+
+def _resolve_local_device_id() -> str | None:
+    """Return the locally persisted Ed25519 device_id, or None if unreadable.
+
+    Failures (missing identity file, corrupted PEM, key derivation error) MUST
+    NOT block list reads; the response signals ``isSelfResolved=False`` and the
+    UI disables every Remove button. Writes (DELETE) MUST refuse — see Task 5.
+    """
+    try:
+        identity = load_or_create_device_identity()
+    except Exception:  # noqa: BLE001 — opaque to caller; logged at error level
+        logger.error(
+            "gateway.pairing.identity.load_failed",
+            exc_info=True,
+        )
+        return None
+    return identity.device_id
 
 
 def _query_to_resolve_input(
@@ -591,3 +612,76 @@ async def gateway_config_lookup(
             status_code=502,
             detail={"error": "gateway_invalid_payload"},
         ) from exc
+
+
+@router.get(
+    "/{gateway_id}/devices",
+    response_model=GatewayDeviceListResponse,
+    response_model_by_alias=True,
+    operation_id="list_gateway_devices",
+)
+async def list_gateway_devices(
+    gateway_id: UUID,
+    session: AsyncSession = SESSION_DEP,
+    _auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> GatewayDeviceListResponse:
+    """List devices paired with the gateway, with self-protect marking."""
+
+    gateway = await GatewayAdminLifecycleService(session).require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    cfg = gateway_client_config(gateway)
+    local_device_id = _resolve_local_device_id()
+
+    payload = await asyncio.wait_for(
+        openclaw_call("device.pair.list", config=cfg),
+        timeout=_PAIRING_RPC_TIMEOUT_SECONDS,
+    )
+    if not isinstance(payload, dict):
+        logger.error(
+            "gateway.pairing.list.invalid_payload gateway_id=%s type=%s",
+            gateway_id,
+            type(payload).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        )
+    paired = payload.get("paired")
+    if not isinstance(paired, list):
+        logger.error(
+            "gateway.pairing.list.invalid_payload gateway_id=%s paired_type=%s",
+            gateway_id,
+            type(paired).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        )
+
+    try:
+        devices = [
+            _project_gateway_device(raw, local_device_id=local_device_id)
+            for raw in paired
+            if isinstance(raw, dict)
+        ]
+    except ValidationError as exc:
+        logger.error(
+            "gateway.pairing.list.projection_failed gateway_id=%s errors=%s",
+            gateway_id,
+            exc.errors(include_url=False, include_input=False),
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        ) from exc
+
+    return GatewayDeviceListResponse.model_validate(
+        {
+            "gateway_id": gateway_id,
+            "devices": [d.model_dump(by_alias=True) for d in devices],
+            "isSelfResolved": local_device_id is not None,
+        }
+    )
