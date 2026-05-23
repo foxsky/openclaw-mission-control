@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -456,3 +457,65 @@ async def test_remove_timeout_returns_504(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/xx")
     assert resp.status_code == 504
+
+
+@pytest.mark.parametrize(
+    "scenario,expected_outcome,expected_status",
+    [
+        ("happy", "success", 200),
+        ("not_found", "device_not_found", 404),
+        ("self", "cannot_remove_self", 409),
+        ("unavailable", "gateway_unavailable", 503),
+    ],
+)
+@pytest.mark.asyncio
+async def test_remove_emits_audit_log_per_outcome(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    scenario: str,
+    expected_outcome: str,
+    expected_status: int,
+) -> None:
+    app, _, gateway = setup
+
+    if scenario == "happy":
+
+        async def _fake(m: str, p: Any = None, *, config: Any) -> object:
+            return {"ok": True}
+
+        target_id = "other-id"
+    elif scenario == "not_found":
+
+        async def _fake(m: str, p: Any = None, *, config: Any) -> object:
+            raise OpenClawGatewayError(
+                "unknown deviceId",
+                details={"code": "INVALID_REQUEST", "message": "unknown deviceId"},
+            )
+
+        target_id = "missing-x"
+    elif scenario == "self":
+
+        async def _fake(m: str, p: Any = None, *, config: Any) -> object:
+            return {"ok": True}
+
+        target_id = _LOCAL_DEVICE_ID
+    else:  # unavailable
+
+        async def _fake(m: str, p: Any = None, *, config: Any) -> object:
+            raise OpenClawGatewayError("down", details={"code": "UNAVAILABLE"})
+
+        target_id = "down-x"
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+
+    caplog.set_level(logging.INFO, logger="app.api.gateway")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/{target_id}")
+    assert resp.status_code == expected_status
+
+    audit_lines = [r for r in caplog.records if "gateway.pairing.remove.outcome" in r.getMessage()]
+    assert len(audit_lines) == 1
+    assert f"outcome={expected_outcome}" in audit_lines[0].getMessage()
+    assert f"device_id={target_id}" in audit_lines[0].getMessage()

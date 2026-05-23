@@ -34,6 +34,7 @@ from app.schemas.gateway_api import (
     OpenClawRuntimeStatusResponse,
     ProjectedGatewaySession,
     ProjectedGatewaySessionsResponse,
+    RemoveGatewayDeviceResponse,
 )
 from app.services.mc_gateway_subscriber.session_state_repo import (
     list_session_states_for_agent_ids,
@@ -772,16 +773,40 @@ async def list_gateway_devices(
 
 @router.delete(
     "/{gateway_id}/devices/{device_id}",
+    response_model=RemoveGatewayDeviceResponse,
+    response_model_by_alias=True,
     operation_id="remove_gateway_device",
 )
 async def remove_gateway_device(
     gateway_id: UUID,
     device_id: str,
     session: AsyncSession = SESSION_DEP,
-    _auth: AuthContext = AUTH_DEP,
+    auth: AuthContext = AUTH_DEP,
     ctx: OrganizationContext = ORG_ADMIN_DEP,
-) -> dict[str, Any]:
+) -> RemoveGatewayDeviceResponse:
     """Revoke a paired device from the gateway, with self-protect."""
+
+    user_id = auth.user.id if auth.user else None
+
+    logger.info(
+        "gateway.pairing.remove.attempt user_id=%s org_id=%s gateway_id=%s device_id=%s",
+        user_id,
+        ctx.organization.id,
+        gateway_id,
+        device_id,
+    )
+
+    def _audit(outcome: str, request_id: str | None = None) -> None:
+        logger.info(
+            "gateway.pairing.remove.outcome user_id=%s org_id=%s gateway_id=%s "
+            "device_id=%s outcome=%s request_id=%s",
+            user_id,
+            ctx.organization.id,
+            gateway_id,
+            device_id,
+            outcome,
+            request_id or "<none>",
+        )
 
     gateway = await GatewayAdminLifecycleService(session).require_gateway(
         gateway_id=gateway_id,
@@ -791,11 +816,13 @@ async def remove_gateway_device(
     local_device_id = _resolve_local_device_id()
     if local_device_id is None:
         # Refuse writes when self-protect cannot be evaluated.
+        _audit("self_identity_unavailable")
         raise HTTPException(
             status_code=503,
             detail={"error": "self_identity_unavailable"},
         )
     if device_id == local_device_id:
+        _audit("cannot_remove_self")
         raise HTTPException(
             status_code=409,
             detail={"error": "cannot_remove_self", "device_id": device_id},
@@ -803,16 +830,32 @@ async def remove_gateway_device(
 
     cfg = gateway_client_config(gateway)
     try:
+        # Param shape verified by Task 1 probe (2026-05-23): {"deviceId": ...};
+        # {"id": ...} and {"device": ...} both return INVALID_REQUEST.
         await asyncio.wait_for(
             openclaw_call("device.pair.remove", {"deviceId": device_id}, config=cfg),
             timeout=_PAIRING_RPC_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError as exc:
+        _audit("gateway_timeout")
         raise HTTPException(
             status_code=504,
             detail={"error": "gateway_timeout"},
         ) from exc
     except OpenClawGatewayError as exc:
-        raise _map_pairing_error(exc, device_id=device_id) from exc
+        http_exc = _map_pairing_error(exc, device_id=device_id)
+        outcome_map = {
+            "device_not_found": "device_not_found",
+            "gateway_pairing_scope_denied": "scope_denied",
+            "gateway_unavailable": "gateway_unavailable",
+            "gateway_unreachable": "gateway_unreachable",
+            "gateway_rejected_request": "gateway_rejected_request",
+            "method_unsupported": "method_unsupported",
+        }
+        detail_error = http_exc.detail.get("error") if isinstance(http_exc.detail, dict) else None
+        outcome = outcome_map.get(detail_error, "other") if detail_error else "other"
+        _audit(outcome, request_id=exc.request_id)
+        raise http_exc from exc
 
-    return {"ok": True, "device_id": device_id}
+    _audit("success")
+    return RemoveGatewayDeviceResponse(device_id=device_id)

@@ -200,3 +200,12 @@ class GatewayDeviceListResponse(SQLModel):
     is_self_resolved: bool = Field(default=True, alias="isSelfResolved")
 
     model_config = SQLModelConfig(validate_by_name=True)
+
+
+class RemoveGatewayDeviceResponse(SQLModel):
+    """Response body for DELETE /api/v1/gateways/{id}/devices/{device_id}."""
+
+    ok: bool = True
+    device_id: str = Field(alias="deviceId")
+
+    model_config = SQLModelConfig(validate_by_name=True)
