@@ -188,6 +188,14 @@ export default function GatewayDetailPage() {
             ) : null}
             {isAdmin && gatewayId ? (
               <Button
+                variant="outline"
+                onClick={() => router.push(`/gateways/${gatewayId}/pairings`)}
+              >
+                Pairings
+              </Button>
+            ) : null}
+            {isAdmin && gatewayId ? (
+              <Button
                 onClick={() => router.push(`/gateways/${gatewayId}/edit`)}
               >
                 Edit gateway
