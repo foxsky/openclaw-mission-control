@@ -85,4 +85,10 @@ describe("GatewayDetailPage", () => {
     const configEl = screen.getByRole("button", { name: /^config$/i });
     expect(configEl).toBeInTheDocument();
   });
+
+  it("renders a Pairings button that navigates to /gateways/<id>/pairings", () => {
+    renderPage();
+    const link = screen.getByRole("button", { name: /^pairings$/i });
+    expect(link).toBeInTheDocument();
+  });
 });

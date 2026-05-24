@@ -120,6 +120,8 @@ export * from "./ensureEvalGatewaySessionApiV1GatewaysEvalsSessionsSessionIdPost
 export * from "./gatewayCommandsResponse";
 export * from "./gatewayConfigLookupParams";
 export * from "./gatewayCreate";
+export * from "./gatewayDevice";
+export * from "./gatewayDeviceListResponse";
 export * from "./gatewayEvalApprovalResolveRequest";
 export * from "./gatewayEvalSessionEnsureRequest";
 export * from "./gatewayLeadBroadcastBoardResult";
@@ -237,6 +239,7 @@ export * from "./projectedGatewaySession";
 export * from "./projectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams";
 export * from "./projectedGatewaySessionsResponse";
 export * from "./readyzReadyzGet200";
+export * from "./removeGatewayDeviceResponse";
 export * from "./resolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostParams";
 export * from "./reviewBlockerDescriptor";
 export * from "./reviewBlockerDescriptorCategory";

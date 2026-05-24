@@ -27,6 +27,7 @@ import type {
   GatewayCommandsResponse,
   GatewayConfigLookupParams,
   GatewayCreate,
+  GatewayDeviceListResponse,
   GatewayEvalApprovalResolveRequest,
   GatewayEvalSessionEnsureRequest,
   GatewayRead,
@@ -49,6 +50,7 @@ import type {
   OpenClawRuntimeStatusResponse,
   ProjectedGatewaySessionsApiV1GatewaysProjectedSessionsGetParams,
   ProjectedGatewaySessionsResponse,
+  RemoveGatewayDeviceResponse,
   ResolveEvalGatewaySessionApprovalApiV1GatewaysEvalsSessionsSessionIdApprovalsResolvePostParams,
   SendEvalGatewaySessionMessageApiV1GatewaysEvalsSessionsSessionIdMessagePostParams,
   SendGatewaySessionMessageApiV1GatewaysSessionsSessionIdMessagePostParams,
@@ -4112,6 +4114,322 @@ export function useGatewayConfigLookup<
   return { ...query, queryKey: queryOptions.queryKey };
 }
 
+/**
+ * List devices paired with the gateway, with self-protect marking.
+ * @summary List Gateway Devices
+ */
+export type listGatewayDevicesResponse200 = {
+  data: GatewayDeviceListResponse;
+  status: 200;
+};
+
+export type listGatewayDevicesResponse422 = {
+  data: HTTPValidationError;
+  status: 422;
+};
+
+export type listGatewayDevicesResponseSuccess =
+  listGatewayDevicesResponse200 & {
+    headers: Headers;
+  };
+export type listGatewayDevicesResponseError = listGatewayDevicesResponse422 & {
+  headers: Headers;
+};
+
+export type listGatewayDevicesResponse =
+  | listGatewayDevicesResponseSuccess
+  | listGatewayDevicesResponseError;
+
+export const getListGatewayDevicesUrl = (gatewayId: string) => {
+  return `/api/v1/gateways/${gatewayId}/devices`;
+};
+
+export const listGatewayDevices = async (
+  gatewayId: string,
+  options?: RequestInit,
+): Promise<listGatewayDevicesResponse> => {
+  return customFetch<listGatewayDevicesResponse>(
+    getListGatewayDevicesUrl(gatewayId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListGatewayDevicesQueryKey = (gatewayId: string) => {
+  return [`/api/v1/gateways/${gatewayId}/devices`] as const;
+};
+
+export const getListGatewayDevicesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listGatewayDevices>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listGatewayDevices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListGatewayDevicesQueryKey(gatewayId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listGatewayDevices>>
+  > = ({ signal }) =>
+    listGatewayDevices(gatewayId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!gatewayId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listGatewayDevices>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListGatewayDevicesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listGatewayDevices>>
+>;
+export type ListGatewayDevicesQueryError = HTTPValidationError;
+
+export function useListGatewayDevices<
+  TData = Awaited<ReturnType<typeof listGatewayDevices>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listGatewayDevices>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listGatewayDevices>>,
+          TError,
+          Awaited<ReturnType<typeof listGatewayDevices>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListGatewayDevices<
+  TData = Awaited<ReturnType<typeof listGatewayDevices>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listGatewayDevices>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listGatewayDevices>>,
+          TError,
+          Awaited<ReturnType<typeof listGatewayDevices>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListGatewayDevices<
+  TData = Awaited<ReturnType<typeof listGatewayDevices>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listGatewayDevices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List Gateway Devices
+ */
+
+export function useListGatewayDevices<
+  TData = Awaited<ReturnType<typeof listGatewayDevices>>,
+  TError = HTTPValidationError,
+>(
+  gatewayId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listGatewayDevices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListGatewayDevicesQueryOptions(gatewayId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Revoke a paired device from the gateway, with self-protect.
+ * @summary Remove Gateway Device
+ */
+export type removeGatewayDeviceResponse200 = {
+  data: RemoveGatewayDeviceResponse;
+  status: 200;
+};
+
+export type removeGatewayDeviceResponse422 = {
+  data: HTTPValidationError;
+  status: 422;
+};
+
+export type removeGatewayDeviceResponseSuccess =
+  removeGatewayDeviceResponse200 & {
+    headers: Headers;
+  };
+export type removeGatewayDeviceResponseError =
+  removeGatewayDeviceResponse422 & {
+    headers: Headers;
+  };
+
+export type removeGatewayDeviceResponse =
+  | removeGatewayDeviceResponseSuccess
+  | removeGatewayDeviceResponseError;
+
+export const getRemoveGatewayDeviceUrl = (
+  gatewayId: string,
+  deviceId: string,
+) => {
+  return `/api/v1/gateways/${gatewayId}/devices/${deviceId}`;
+};
+
+export const removeGatewayDevice = async (
+  gatewayId: string,
+  deviceId: string,
+  options?: RequestInit,
+): Promise<removeGatewayDeviceResponse> => {
+  return customFetch<removeGatewayDeviceResponse>(
+    getRemoveGatewayDeviceUrl(gatewayId, deviceId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getRemoveGatewayDeviceMutationOptions = <
+  TError = HTTPValidationError,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof removeGatewayDevice>>,
+    TError,
+    { gatewayId: string; deviceId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof removeGatewayDevice>>,
+  TError,
+  { gatewayId: string; deviceId: string },
+  TContext
+> => {
+  const mutationKey = ["removeGatewayDevice"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof removeGatewayDevice>>,
+    { gatewayId: string; deviceId: string }
+  > = (props) => {
+    const { gatewayId, deviceId } = props ?? {};
+
+    return removeGatewayDevice(gatewayId, deviceId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RemoveGatewayDeviceMutationResult = NonNullable<
+  Awaited<ReturnType<typeof removeGatewayDevice>>
+>;
+
+export type RemoveGatewayDeviceMutationError = HTTPValidationError;
+
+/**
+ * @summary Remove Gateway Device
+ */
+export const useRemoveGatewayDevice = <
+  TError = HTTPValidationError,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof removeGatewayDevice>>,
+      TError,
+      { gatewayId: string; deviceId: string },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof removeGatewayDevice>>,
+  TError,
+  { gatewayId: string; deviceId: string },
+  TContext
+> => {
+  return useMutation(
+    getRemoveGatewayDeviceMutationOptions(options),
+    queryClient,
+  );
+};
 /**
  * Sync templates for a gateway and optionally rotate runtime settings.
  * @summary Sync Gateway Templates
