@@ -1874,10 +1874,7 @@ Add a new memory `project_mc_pairings_page.md` recording:
 - Audit log line format: `gateway.pairing.remove.outcome ... outcome=<x>`
 - v2 follow-ups: pending-approval flow, DB-persisted audit table, cross-gateway view
 
-Update `MEMORY.md` index with one line:
-```markdown
-- [project_mc_pairings_page.md](project_mc_pairings_page.md) — MC pairings page at /gateways/<id>/pairings; calls device.pair.list/remove, self-protect via local Ed25519 identity, audit logs in journal.
-```
+Update `MEMORY.md` index with one bullet line that markdown-links the new `project_mc_pairings_page.md`. Body (after the link): "MC pairings page at /gateways/&lt;id&gt;/pairings; calls device.pair.list/remove, self-protect via local Ed25519 identity, audit logs in journal." Match the style of the existing supersede entries in the index so the line reads as a peer of the surrounding bullets.
 
 (Memory file lives at `/Users/macmini/.claude/projects/-Users-macmini-Workspace-Agent-openclaw-mission-control/memory/` — the auto-memory system persists it.)
 
