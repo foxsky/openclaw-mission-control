@@ -1954,4 +1954,3 @@ cd frontend && npx tsc --noEmit && \
 - **Pairing-scope denied:** NOT observed in probe (MC has operator.pairing). DELETE handler tests use the canonical INVALID_REQUEST + "insufficient scope" pattern; if the live shape ever differs, a real-prod failure will surface it.
 
 These verified strings are used by Task 5's substring matchers in `_map_pairing_error` (`"device not found"` / `"unknown device"`) — update those matchers if the real strings don't match either substring. **Note:** the live message is `"unknown deviceId"` (camelCase, not `"unknown device"`), so the `"unknown device"` substring matcher will still match (substring-contains), but the more precise check is `"unknown deviceid"` (case-insensitive) or just `"unknown device"`.
-
