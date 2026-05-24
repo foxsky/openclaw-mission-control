@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,6 +21,8 @@ from app.schemas.common import OkResponse
 from app.schemas.gateway_api import (
     ConfigSchemaLookupResponse,
     GatewayCommandsResponse,
+    GatewayDevice,
+    GatewayDeviceListResponse,
     GatewayEvalApprovalResolveRequest,
     GatewayEvalSessionEnsureRequest,
     GatewayResolveQuery,
@@ -32,12 +34,14 @@ from app.schemas.gateway_api import (
     OpenClawRuntimeStatusResponse,
     ProjectedGatewaySession,
     ProjectedGatewaySessionsResponse,
+    RemoveGatewayDeviceResponse,
 )
 from app.services.mc_gateway_subscriber.session_state_repo import (
     list_session_states_for_agent_ids,
 )
 from app.services.openclaw.admin_service import GatewayAdminLifecycleService
 from app.services.openclaw.config_lookup_cache import ConfigLookupCache
+from app.services.openclaw.device_identity import load_or_create_device_identity
 from app.services.openclaw.gateway_resolver import gateway_client_config
 from app.services.openclaw.gateway_rpc import (
     GATEWAY_EVENTS,
@@ -81,6 +85,50 @@ def _validate_config_lookup_path(raw: str) -> str:
     return trimmed
 
 
+def _project_gateway_device(
+    raw: dict[str, Any],
+    *,
+    local_device_id: str | None,
+) -> GatewayDevice:
+    """Flatten the gateway's per-device dict into the wire shape MC exposes.
+
+    Combines all token-level ``scopes`` into a single union, computes the
+    most-recent ``lastUsedAtMs`` across tokens, and marks ``is_self`` when
+    ``raw.deviceId`` matches the locally persisted Ed25519 identity.
+    """
+
+    tokens = raw.get("tokens") or []
+    if not isinstance(tokens, list):
+        tokens = []
+
+    scopes_union: set[str] = set()
+    for s in raw.get("scopes") or []:
+        if isinstance(s, str):
+            scopes_union.add(s)
+    last_used: int | None = None
+    for t in tokens:
+        if not isinstance(t, dict):
+            continue
+        for s in t.get("scopes") or []:
+            if isinstance(s, str):
+                scopes_union.add(s)
+        ts = t.get("lastUsedAtMs")
+        if isinstance(ts, int) and (last_used is None or ts > last_used):
+            last_used = ts
+
+    device_id = str(raw.get("deviceId") or "")
+    return GatewayDevice.model_validate(
+        {
+            **raw,
+            "scopes": sorted(scopes_union),
+            "tokenCount": len(tokens),
+            "lastUsedAtMs": last_used,
+            "isSelf": bool(local_device_id) and device_id == local_device_id,
+            # tokens[] is not declared on GatewayDevice; Pydantic ignores extras.
+        }
+    )
+
+
 def _gateway_connection_fingerprint(cfg: GatewayConfig) -> str:
     """Stable per-connection fingerprint so the cache invalidates when the
     gateway target changes within the TTL window.
@@ -104,6 +152,25 @@ def _gateway_connection_fingerprint(cfg: GatewayConfig) -> str:
 
 _CONFIG_LOOKUP_CACHE = ConfigLookupCache(ttl_seconds=30.0)
 _CONFIG_LOOKUP_RPC_TIMEOUT_SECONDS = 5.0
+_PAIRING_RPC_TIMEOUT_SECONDS = 5.0
+
+
+def _resolve_local_device_id() -> str | None:
+    """Return the locally persisted Ed25519 device_id, or None if unreadable.
+
+    Failures (missing identity file, corrupted PEM, key derivation error) MUST
+    NOT block list reads; the response signals ``isSelfResolved=False`` and the
+    UI disables every Remove button. Writes (DELETE) MUST refuse — see Task 5.
+    """
+    try:
+        identity = load_or_create_device_identity()
+    except Exception:  # noqa: BLE001 — opaque to caller; logged at error level
+        logger.error(
+            "gateway.pairing.identity.load_failed",
+            exc_info=True,
+        )
+        return None
+    return identity.device_id
 
 
 def _query_to_resolve_input(
@@ -396,19 +463,52 @@ async def projected_gateway_sessions(
 _GATEWAY_METHOD_REQUIRED_VERSION = "2026.5.19"
 
 
-def _map_gateway_error(exc: OpenClawGatewayError, path: str) -> HTTPException:
-    """Translate an OpenClawGatewayError into a structured HTTPException."""
+class _GatewayErrorFields(TypedDict):
+    """Canonical fields extracted from an ``OpenClawGatewayError`` for HTTP mapping."""
+
+    code: str
+    message: str
+    lowered: str
+    request_id: str | None
+    is_method_unsupported: bool
+
+
+def _map_gateway_error_common(exc: OpenClawGatewayError) -> _GatewayErrorFields:
+    """Canonical OpenClawGatewayError -> mapper-fields extraction."""
 
     details: dict[str, Any] = exc.details if isinstance(exc.details, dict) else {}
     code = str(details.get("code") or "").upper()
     message = str(details.get("message") or str(exc) or "")
     lowered = message.lower()
+    is_method_unsupported = (
+        code in {"METHOD_NOT_FOUND", "METHOD_NOT_REGISTERED", "NOT_IMPLEMENTED"}
+        or "method not found" in lowered
+        or "unknown method" in lowered
+    )
+    return {
+        "code": code,
+        "message": message,
+        "lowered": lowered,
+        "request_id": exc.request_id,
+        "is_method_unsupported": is_method_unsupported,
+    }
+
+
+def _map_config_lookup_error(
+    exc: OpenClawGatewayError,
+    path: str,
+) -> HTTPException:
+    """Translate an OpenClawGatewayError from config.schema.lookup into HTTP."""
+
+    fields = _map_gateway_error_common(exc)
+    code = fields["code"]
+    message = fields["message"]
 
     logger.warning(
         "gateway.config_lookup.failed path=%r code=%s request_id=%s message=%s",
         path,
         code or "<none>",
-        exc.request_id or "<none>",
+        fields["request_id"] or "<none>",
         message or "<none>",
     )
 
@@ -422,11 +522,61 @@ def _map_gateway_error(exc: OpenClawGatewayError, path: str) -> HTTPException:
             status_code=422,
             detail={"error": "gateway_rejected_request", "detail": message},
         )
-    if (
-        code in {"METHOD_NOT_FOUND", "METHOD_NOT_REGISTERED", "NOT_IMPLEMENTED"}
-        or "method not found" in lowered
-        or "unknown method" in lowered
-    ):
+    if fields["is_method_unsupported"]:
+        return HTTPException(
+            status_code=501,
+            detail={
+                "error": "method_unsupported",
+                "requires_gateway_version": _GATEWAY_METHOD_REQUIRED_VERSION,
+            },
+        )
+    if code == "UNAVAILABLE":
+        return HTTPException(
+            status_code=503,
+            detail={"error": "gateway_unavailable", "detail": message},
+        )
+    return HTTPException(
+        status_code=503,
+        detail={"error": "gateway_unreachable", "detail": message},
+    )
+
+
+def _map_pairing_error(
+    exc: OpenClawGatewayError,
+    *,
+    device_id: str,
+) -> HTTPException:
+    """Translate an OpenClawGatewayError from a device.pair.* RPC into HTTP."""
+
+    fields = _map_gateway_error_common(exc)
+    code = fields["code"]
+    message = fields["message"]
+    lowered = fields["lowered"]
+
+    logger.warning(
+        "gateway.pairing.failed device_id=%s code=%s request_id=%s message=%s",
+        device_id,
+        code or "<none>",
+        fields["request_id"] or "<none>",
+        message or "<none>",
+    )
+
+    if code == "INVALID_REQUEST":
+        if "device not found" in lowered or "unknown device" in lowered:
+            return HTTPException(
+                status_code=404,
+                detail={"error": "device_not_found", "device_id": device_id},
+            )
+        if "insufficient scope" in lowered or "missing scope" in lowered:
+            return HTTPException(
+                status_code=403,
+                detail={"error": "gateway_pairing_scope_denied"},
+            )
+        return HTTPException(
+            status_code=422,
+            detail={"error": "gateway_rejected_request", "detail": message},
+        )
+    if fields["is_method_unsupported"]:
         return HTTPException(
             status_code=501,
             detail={
@@ -490,7 +640,7 @@ async def gateway_config_lookup(
             detail={"error": "gateway_timeout"},
         ) from exc
     except OpenClawGatewayError as exc:
-        raise _map_gateway_error(exc, trimmed_path) from exc
+        raise _map_config_lookup_error(exc, trimmed_path) from exc
     if not isinstance(payload, dict):
         logger.error(
             "gateway.config_lookup.invalid_payload gateway_id=%s path=%r type=%s",
@@ -517,3 +667,195 @@ async def gateway_config_lookup(
             status_code=502,
             detail={"error": "gateway_invalid_payload"},
         ) from exc
+
+
+@router.get(
+    "/{gateway_id}/devices",
+    response_model=GatewayDeviceListResponse,
+    response_model_by_alias=True,
+    operation_id="list_gateway_devices",
+)
+async def list_gateway_devices(
+    gateway_id: UUID,
+    session: AsyncSession = SESSION_DEP,
+    _auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> GatewayDeviceListResponse:
+    """List devices paired with the gateway, with self-protect marking."""
+
+    gateway = await GatewayAdminLifecycleService(session).require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    cfg = gateway_client_config(gateway)
+    local_device_id = _resolve_local_device_id()
+
+    try:
+        payload = await asyncio.wait_for(
+            openclaw_call("device.pair.list", config=cfg),
+            timeout=_PAIRING_RPC_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={"error": "gateway_timeout"},
+        ) from exc
+    except OpenClawGatewayError as exc:
+        fields = _map_gateway_error_common(exc)
+        logger.warning(
+            "gateway.pairing.list.failed code=%s request_id=%s message=%s",
+            fields["code"] or "<none>",
+            fields["request_id"] or "<none>",
+            fields["message"] or "<none>",
+        )
+        if fields["is_method_unsupported"]:
+            raise HTTPException(
+                status_code=501,
+                detail={
+                    "error": "method_unsupported",
+                    "requires_gateway_version": _GATEWAY_METHOD_REQUIRED_VERSION,
+                },
+            ) from exc
+        if fields["code"] == "UNAVAILABLE":
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "gateway_unavailable", "detail": fields["message"]},
+            ) from exc
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "gateway_unreachable", "detail": fields["message"]},
+        ) from exc
+    if not isinstance(payload, dict):
+        logger.error(
+            "gateway.pairing.list.invalid_payload gateway_id=%s type=%s",
+            gateway_id,
+            type(payload).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        )
+    paired = payload.get("paired")
+    if not isinstance(paired, list):
+        logger.error(
+            "gateway.pairing.list.invalid_payload gateway_id=%s paired_type=%s",
+            gateway_id,
+            type(paired).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        )
+
+    try:
+        devices = [
+            _project_gateway_device(raw, local_device_id=local_device_id)
+            for raw in paired
+            if isinstance(raw, dict)
+        ]
+    except ValidationError as exc:
+        logger.error(
+            "gateway.pairing.list.projection_failed gateway_id=%s errors=%s",
+            gateway_id,
+            exc.errors(include_url=False, include_input=False),
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        ) from exc
+
+    return GatewayDeviceListResponse(
+        gateway_id=gateway_id,
+        devices=devices,
+        is_self_resolved=local_device_id is not None,
+    )
+
+
+@router.delete(
+    "/{gateway_id}/devices/{device_id}",
+    response_model=RemoveGatewayDeviceResponse,
+    response_model_by_alias=True,
+    operation_id="remove_gateway_device",
+)
+async def remove_gateway_device(
+    gateway_id: UUID,
+    device_id: str,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> RemoveGatewayDeviceResponse:
+    """Revoke a paired device from the gateway, with self-protect."""
+
+    user_id = auth.user.id if auth.user else None
+
+    logger.info(
+        "gateway.pairing.remove.attempt user_id=%s org_id=%s gateway_id=%s device_id=%s",
+        user_id,
+        ctx.organization.id,
+        gateway_id,
+        device_id,
+    )
+
+    def _audit(outcome: str, request_id: str | None = None) -> None:
+        logger.info(
+            "gateway.pairing.remove.outcome user_id=%s org_id=%s gateway_id=%s "
+            "device_id=%s outcome=%s request_id=%s",
+            user_id,
+            ctx.organization.id,
+            gateway_id,
+            device_id,
+            outcome,
+            request_id or "<none>",
+        )
+
+    gateway = await GatewayAdminLifecycleService(session).require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+
+    local_device_id = _resolve_local_device_id()
+    if local_device_id is None:
+        # Refuse writes when self-protect cannot be evaluated.
+        _audit("self_identity_unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "self_identity_unavailable"},
+        )
+    if device_id == local_device_id:
+        _audit("cannot_remove_self")
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "cannot_remove_self", "device_id": device_id},
+        )
+
+    cfg = gateway_client_config(gateway)
+    try:
+        # Param shape verified by Task 1 probe (2026-05-23): {"deviceId": ...};
+        # {"id": ...} and {"device": ...} both return INVALID_REQUEST.
+        await asyncio.wait_for(
+            openclaw_call("device.pair.remove", {"deviceId": device_id}, config=cfg),
+            timeout=_PAIRING_RPC_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        _audit("gateway_timeout")
+        raise HTTPException(
+            status_code=504,
+            detail={"error": "gateway_timeout"},
+        ) from exc
+    except OpenClawGatewayError as exc:
+        http_exc = _map_pairing_error(exc, device_id=device_id)
+        outcome_map = {
+            "device_not_found": "device_not_found",
+            "gateway_pairing_scope_denied": "scope_denied",
+            "gateway_unavailable": "gateway_unavailable",
+            "gateway_unreachable": "gateway_unreachable",
+            "gateway_rejected_request": "gateway_rejected_request",
+            "method_unsupported": "method_unsupported",
+        }
+        detail_error = http_exc.detail.get("error") if isinstance(http_exc.detail, dict) else None
+        outcome = outcome_map.get(detail_error, "other") if detail_error else "other"
+        _audit(outcome, request_id=exc.request_id)
+        raise http_exc from exc
+
+    _audit("success")
+    return RemoveGatewayDeviceResponse(device_id=device_id)

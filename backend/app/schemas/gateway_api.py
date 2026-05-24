@@ -173,3 +173,39 @@ class ConfigSchemaLookupResponse(SQLModel):
     children: list[ConfigSchemaLookupChild] = Field(default_factory=list)
 
     model_config = SQLModelConfig(validate_by_name=True)
+
+
+class GatewayDevice(SQLModel):
+    """One device paired with the gateway (server-flattened from the wire shape)."""
+
+    device_id: str = Field(alias="deviceId")
+    public_key: str = Field(alias="publicKey")
+    platform: str | None = None
+    client_id: str | None = Field(default=None, alias="clientId")
+    client_mode: str | None = Field(default=None, alias="clientMode")
+    role: str | None = None
+    scopes: list[str] = Field(default_factory=list)
+    token_count: int = Field(default=0, alias="tokenCount")
+    last_used_at_ms: int | None = Field(default=None, alias="lastUsedAtMs")
+    remote_ip: str | None = Field(default=None, alias="remoteIp")
+    approved_at_ms: int | None = Field(default=None, alias="approvedAtMs")
+    is_self: bool = Field(default=False, alias="isSelf")
+
+    model_config = SQLModelConfig(validate_by_name=True)
+
+
+class GatewayDeviceListResponse(SQLModel):
+    gateway_id: UUID
+    devices: list[GatewayDevice] = Field(default_factory=list)
+    is_self_resolved: bool = Field(default=True, alias="isSelfResolved")
+
+    model_config = SQLModelConfig(validate_by_name=True)
+
+
+class RemoveGatewayDeviceResponse(SQLModel):
+    """Response body for DELETE /api/v1/gateways/{id}/devices/{device_id}."""
+
+    ok: bool = True
+    device_id: str = Field(alias="deviceId")
+
+    model_config = SQLModelConfig(validate_by_name=True)
