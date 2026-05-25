@@ -94,6 +94,14 @@ class Settings(BaseSettings):
     # OpenClaw gateway runtime compatibility
     gateway_min_version: str = "2026.02.9"
 
+    # MC's source IP when connecting outbound to the gateway URL. Used for
+    # pairings page self-protect: a paired device is considered MC's own when
+    # clientId="gateway-client", clientMode="backend", and remoteIp matches.
+    # Empty string (default) enables autodetect via socket connect to the
+    # resolved gateway host. Override only when behind NAT or split-horizon
+    # routing.
+    gateway_client_outbound_ip: str = ""
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "text"

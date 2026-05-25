@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import socket
 from typing import TYPE_CHECKING, Any, TypedDict
+from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,6 +15,7 @@ from sqlmodel import col, select
 
 from app.api.deps import require_org_admin
 from app.core.auth import AuthContext, get_auth_context
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.session import get_session
 from app.models.agents import Agent
@@ -41,7 +44,6 @@ from app.services.mc_gateway_subscriber.session_state_repo import (
 )
 from app.services.openclaw.admin_service import GatewayAdminLifecycleService
 from app.services.openclaw.config_lookup_cache import ConfigLookupCache
-from app.services.openclaw.device_identity import load_or_create_device_identity
 from app.services.openclaw.gateway_resolver import gateway_client_config
 from app.services.openclaw.gateway_rpc import (
     GATEWAY_EVENTS,
@@ -88,13 +90,14 @@ def _validate_config_lookup_path(raw: str) -> str:
 def _project_gateway_device(
     raw: dict[str, Any],
     *,
-    local_device_id: str | None,
+    self_device_ids: set[str],
 ) -> GatewayDevice:
     """Flatten the gateway's per-device dict into the wire shape MC exposes.
 
     Combines all token-level ``scopes`` into a single union, computes the
     most-recent ``lastUsedAtMs`` across tokens, and marks ``is_self`` when
-    ``raw.deviceId`` matches the locally persisted Ed25519 identity.
+    ``raw.deviceId`` is in ``self_device_ids`` (the precomputed set of
+    MC-owned devices identified by IP+clientId+clientMode heuristic).
     """
 
     tokens = raw.get("tokens") or []
@@ -123,7 +126,7 @@ def _project_gateway_device(
             "scopes": sorted(scopes_union),
             "tokenCount": len(tokens),
             "lastUsedAtMs": last_used,
-            "isSelf": bool(local_device_id) and device_id == local_device_id,
+            "isSelf": device_id in self_device_ids,
             # tokens[] is not declared on GatewayDevice; Pydantic ignores extras.
         }
     )
@@ -154,23 +157,87 @@ _CONFIG_LOOKUP_CACHE = ConfigLookupCache(ttl_seconds=30.0)
 _CONFIG_LOOKUP_RPC_TIMEOUT_SECONDS = 5.0
 _PAIRING_RPC_TIMEOUT_SECONDS = 5.0
 
+# Shared by the two DELETE error-mapping paths (self-protect list + remove)
+# so a translation added in one stays consistent with the other.
+_PAIRING_OUTCOME_MAP = {
+    "device_not_found": "device_not_found",
+    "gateway_pairing_scope_denied": "scope_denied",
+    "gateway_unavailable": "gateway_unavailable",
+    "gateway_unreachable": "gateway_unreachable",
+    "gateway_rejected_request": "gateway_rejected_request",
+    "method_unsupported": "method_unsupported",
+}
 
-def _resolve_local_device_id() -> str | None:
-    """Return the locally persisted Ed25519 device_id, or None if unreadable.
 
-    Failures (missing identity file, corrupted PEM, key derivation error) MUST
-    NOT block list reads; the response signals ``isSelfResolved=False`` and the
-    UI disables every Remove button. Writes (DELETE) MUST refuse — see Task 5.
+def _detect_outbound_ip_to(host: str, port: int) -> str | None:
+    """Detect MC's kernel-chosen source IP for connections to (host, port).
+
+    Uses a DGRAM socket connect (which sets routing context but sends nothing)
+    so getsockname() returns the source IP the kernel would pick. Returns None
+    on any OSError (DNS failure, no route, etc.).
     """
+
     try:
-        identity = load_or_create_device_identity()
-    except Exception:  # noqa: BLE001 — opaque to caller; logged at error level
-        logger.error(
-            "gateway.pairing.identity.load_failed",
-            exc_info=True,
-        )
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(2.0)
+            sock.connect((host, port))
+            # getsockname() is typed as Any (depends on family); narrow to str.
+            return str(sock.getsockname()[0])
+    except OSError:
         return None
-    return identity.device_id
+
+
+def _select_self_device_ids(paired: list[Any], self_match_ip: str | None) -> set[str]:
+    """Pick the deviceIds whose IP+clientId+clientMode signal MC's own device.
+
+    Returns an empty set if ``self_match_ip`` is None (autodetect failed and
+    no override). Multiple matches are intentionally retained — the DELETE
+    handler refuses all of them, which is conservative against ambiguity.
+    """
+
+    if self_match_ip is None:
+        return set()
+    matched: set[str] = set()
+    for raw_device in paired:
+        if not isinstance(raw_device, dict):
+            continue
+        if (
+            raw_device.get("clientId") == "gateway-client"
+            and raw_device.get("clientMode") == "backend"
+            and raw_device.get("remoteIp") == self_match_ip
+        ):
+            did = str(raw_device.get("deviceId") or "")
+            if did:
+                matched.add(did)
+    return matched
+
+
+def _resolve_self_match_ip(cfg: GatewayConfig) -> str | None:
+    """Return MC's outbound source IP for the gateway, or None if undetectable.
+
+    Used by the pairings page to mark a paired device as ``isSelf`` when its
+    ``remoteIp`` matches and clientId/clientMode are MC-shaped.
+
+    Resolution order:
+    1. Explicit override via ``settings.gateway_client_outbound_ip`` (env
+       ``GATEWAY_CLIENT_OUTBOUND_IP``).
+    2. Autodetect via DGRAM socket connect to the gateway host:port.
+    3. None — caller surfaces ``isSelfResolved: false`` and refuses writes.
+
+    This replaces the earlier ``load_or_create_device_identity`` approach,
+    which read a stable local Ed25519 keypair that turned out not to match the
+    gateway's view of MC's paired device — see
+    ``project_mc_pairings_page.md`` memory for the 2026-05-25 incident.
+    """
+
+    if settings.gateway_client_outbound_ip:
+        return settings.gateway_client_outbound_ip
+    parsed = urlparse(cfg.url)
+    host = parsed.hostname
+    if not host:
+        return None
+    port = parsed.port or (443 if parsed.scheme in {"https", "wss"} else 80)
+    return _detect_outbound_ip_to(host, port)
 
 
 def _query_to_resolve_input(
@@ -688,7 +755,7 @@ async def list_gateway_devices(
         organization_id=ctx.organization.id,
     )
     cfg = gateway_client_config(gateway)
-    local_device_id = _resolve_local_device_id()
+    self_match_ip = _resolve_self_match_ip(cfg)
 
     try:
         payload = await asyncio.wait_for(
@@ -747,9 +814,11 @@ async def list_gateway_devices(
             detail={"error": "gateway_invalid_payload"},
         )
 
+    self_device_ids = _select_self_device_ids(paired, self_match_ip)
+
     try:
         devices = [
-            _project_gateway_device(raw, local_device_id=local_device_id)
+            _project_gateway_device(raw, self_device_ids=self_device_ids)
             for raw in paired
             if isinstance(raw, dict)
         ]
@@ -767,7 +836,7 @@ async def list_gateway_devices(
     return GatewayDeviceListResponse(
         gateway_id=gateway_id,
         devices=devices,
-        is_self_resolved=local_device_id is not None,
+        is_self_resolved=self_match_ip is not None,
     )
 
 
@@ -812,23 +881,60 @@ async def remove_gateway_device(
         gateway_id=gateway_id,
         organization_id=ctx.organization.id,
     )
+    cfg = gateway_client_config(gateway)
 
-    local_device_id = _resolve_local_device_id()
-    if local_device_id is None:
-        # Refuse writes when self-protect cannot be evaluated.
+    # Self-protect: identify MC's own paired devices by the heuristic
+    # IP+clientId+clientMode match. We must enumerate the gateway's view first
+    # (two RPC round-trips for one DELETE) because no whoami RPC exposes the
+    # current connection's deviceId — see project_mc_pairings_page memory.
+    self_match_ip = _resolve_self_match_ip(cfg)
+    if self_match_ip is None:
         _audit("self_identity_unavailable")
         raise HTTPException(
             status_code=503,
             detail={"error": "self_identity_unavailable"},
         )
-    if device_id == local_device_id:
+
+    try:
+        list_payload = await asyncio.wait_for(
+            openclaw_call("device.pair.list", config=cfg),
+            timeout=_PAIRING_RPC_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        _audit("gateway_timeout")
+        raise HTTPException(
+            status_code=504,
+            detail={"error": "gateway_timeout"},
+        ) from exc
+    except OpenClawGatewayError as exc:
+        http_exc = _map_pairing_error(exc, device_id=device_id)
+        detail_error = http_exc.detail.get("error") if isinstance(http_exc.detail, dict) else None
+        outcome = _PAIRING_OUTCOME_MAP.get(detail_error, "other") if detail_error else "other"
+        _audit(outcome, request_id=exc.request_id)
+        raise http_exc from exc
+
+    if not isinstance(list_payload, dict):
+        _audit("gateway_invalid_payload")
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        )
+    paired = list_payload.get("paired") or []
+    if not isinstance(paired, list):
+        _audit("gateway_invalid_payload")
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "gateway_invalid_payload"},
+        )
+
+    self_device_ids = _select_self_device_ids(paired, self_match_ip)
+    if device_id in self_device_ids:
         _audit("cannot_remove_self")
         raise HTTPException(
             status_code=409,
             detail={"error": "cannot_remove_self", "device_id": device_id},
         )
 
-    cfg = gateway_client_config(gateway)
     try:
         # Param shape verified by Task 1 probe (2026-05-23): {"deviceId": ...};
         # {"id": ...} and {"device": ...} both return INVALID_REQUEST.
@@ -844,16 +950,8 @@ async def remove_gateway_device(
         ) from exc
     except OpenClawGatewayError as exc:
         http_exc = _map_pairing_error(exc, device_id=device_id)
-        outcome_map = {
-            "device_not_found": "device_not_found",
-            "gateway_pairing_scope_denied": "scope_denied",
-            "gateway_unavailable": "gateway_unavailable",
-            "gateway_unreachable": "gateway_unreachable",
-            "gateway_rejected_request": "gateway_rejected_request",
-            "method_unsupported": "method_unsupported",
-        }
         detail_error = http_exc.detail.get("error") if isinstance(http_exc.detail, dict) else None
-        outcome = outcome_map.get(detail_error, "other") if detail_error else "other"
+        outcome = _PAIRING_OUTCOME_MAP.get(detail_error, "other") if detail_error else "other"
         _audit(outcome, request_id=exc.request_id)
         raise http_exc from exc
 

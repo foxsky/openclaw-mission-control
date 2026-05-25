@@ -35,7 +35,7 @@ def test_project_flattens_tokens_into_scopes_union_and_last_used() -> None:
             },
         ],
     }
-    out = _project_gateway_device(raw, local_device_id="other-device")
+    out = _project_gateway_device(raw, self_device_ids={"other-device"})
     assert out.device_id == "abc123"
     assert out.token_count == 2
     assert sorted(out.scopes) == ["operator.admin", "operator.read", "operator.write"]
@@ -43,15 +43,15 @@ def test_project_flattens_tokens_into_scopes_union_and_last_used() -> None:
     assert out.is_self is False
 
 
-def test_project_marks_is_self_when_device_id_matches_local() -> None:
+def test_project_marks_is_self_when_device_id_in_self_set() -> None:
     raw = {"deviceId": "ME", "publicKey": "K", "tokens": []}
-    out = _project_gateway_device(raw, local_device_id="ME")
+    out = _project_gateway_device(raw, self_device_ids={"ME"})
     assert out.is_self is True
 
 
 def test_project_handles_missing_tokens_and_missing_last_used() -> None:
     raw = {"deviceId": "x", "publicKey": "K"}
-    out = _project_gateway_device(raw, local_device_id=None)
+    out = _project_gateway_device(raw, self_device_ids=set())
     assert out.token_count == 0
     assert out.scopes == []
     assert out.last_used_at_ms is None

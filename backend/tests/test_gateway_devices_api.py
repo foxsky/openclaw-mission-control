@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -29,15 +28,11 @@ from app.models.users import User
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 from app.services.organizations import OrganizationContext
 
-
-@dataclass
-class _FakeIdentity:
-    device_id: str
-    public_key_pem: str = ""
-    private_key_pem: str = ""
-
-
-_LOCAL_DEVICE_ID = "abc-mc-self-device-id"
+# Stand-in for MC's outbound source IP to the gateway. The self-protect
+# heuristic marks a paired device as ``isSelf`` when its ``remoteIp`` equals
+# this value AND clientId="gateway-client" AND clientMode="backend".
+_LOCAL_BACKEND_IP = "192.168.2.64"
+_LOCAL_DEVICE_ID = "mc-self-device-id"
 
 
 def _build_app(
@@ -103,12 +98,73 @@ async def setup() -> AsyncIterator[tuple[FastAPI, Organization, Gateway]]:
         await engine.dispose()
 
 
-def _identity_self() -> _FakeIdentity:
-    return _FakeIdentity(device_id=_LOCAL_DEVICE_ID)
+def _mock_self_ip_ok(_cfg: object) -> str | None:
+    return _LOCAL_BACKEND_IP
 
 
-def _identity_raises() -> _FakeIdentity:
-    raise RuntimeError("identity file corrupted")
+def _mock_self_ip_none(_cfg: object) -> str | None:
+    return None
+
+
+def _self_device(device_id: str = _LOCAL_DEVICE_ID) -> dict[str, Any]:
+    """Build a paired-device dict that matches the self-protect heuristic."""
+    return {
+        "deviceId": device_id,
+        "publicKey": "K1",
+        "clientId": "gateway-client",
+        "clientMode": "backend",
+        "remoteIp": _LOCAL_BACKEND_IP,
+        "tokens": [
+            {
+                "role": "operator",
+                "scopes": ["operator.read"],
+                "lastUsedAtMs": 1500,
+            }
+        ],
+    }
+
+
+def _other_device(device_id: str = "other") -> dict[str, Any]:
+    """Build a non-self paired-device dict (cli client)."""
+    return {
+        "deviceId": device_id,
+        "publicKey": "K2",
+        "clientId": "cli",
+        "clientMode": "cli",
+        "remoteIp": "10.0.0.99",
+        "tokens": [{"role": "operator", "scopes": ["operator.admin"]}],
+    }
+
+
+def _make_dispatch(
+    *,
+    paired: list[dict[str, Any]] | None = None,
+    remove_result: object | None = None,
+    remove_exc: BaseException | None = None,
+    list_exc: BaseException | None = None,
+) -> tuple[Any, list[tuple[str, Any]]]:
+    """Dispatch mock for ``openclaw_call`` covering both list+remove RPCs.
+
+    DELETE now fetches device.pair.list FIRST (for self-protect), then
+    device.pair.remove — every DELETE test needs both branches.
+    """
+
+    captured: list[tuple[str, Any]] = []
+    paired_list = paired if paired is not None else []
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        captured.append((method, params))
+        if method == "device.pair.list":
+            if list_exc is not None:
+                raise list_exc
+            return {"pending": [], "paired": paired_list}
+        if method == "device.pair.remove":
+            if remove_exc is not None:
+                raise remove_exc
+            return remove_result if remove_result is not None else {"ok": True}
+        raise AssertionError(f"unexpected method: {method}")
+
+    return _fake, captured
 
 
 @pytest.mark.asyncio
@@ -122,32 +178,11 @@ async def test_list_happy_marks_one_device_as_self(
         assert method == "device.pair.list"
         return {
             "pending": [],
-            "paired": [
-                {
-                    "deviceId": _LOCAL_DEVICE_ID,
-                    "publicKey": "K1",
-                    "clientId": "gateway-client",
-                    "clientMode": "backend",
-                    "tokens": [
-                        {
-                            "role": "operator",
-                            "scopes": ["operator.read"],
-                            "lastUsedAtMs": 1500,
-                        }
-                    ],
-                },
-                {
-                    "deviceId": "other",
-                    "publicKey": "K2",
-                    "clientId": "cli",
-                    "clientMode": "cli",
-                    "tokens": [{"role": "operator", "scopes": ["operator.admin"]}],
-                },
-            ],
+            "paired": [_self_device(), _other_device()],
         }
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(f"/api/v1/gateways/{gateway.id}/devices")
@@ -171,26 +206,32 @@ async def test_list_empty(
         return {"pending": [], "paired": []}
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(f"/api/v1/gateways/{gateway.id}/devices")
     assert resp.status_code == 200
-    assert resp.json()["devices"] == []
+    body = resp.json()
+    # Empty paired + valid IP must still report isSelfResolved=True (no anomaly).
+    assert body["isSelfResolved"] is True
+    assert body["devices"] == []
 
 
 @pytest.mark.asyncio
-async def test_list_self_identity_unavailable(
+async def test_list_self_match_ip_unavailable_returns_isSelfResolved_false(
     setup: tuple[FastAPI, Organization, Gateway],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """When autodetect fails AND no override, GET still succeeds but signals
+    isSelfResolved=False so the UI disables every Remove button."""
+
     app, _, gateway = setup
 
     async def _fake(method: str, params: Any = None, *, config: Any) -> object:
-        return {"pending": [], "paired": [{"deviceId": "x", "publicKey": "K", "tokens": []}]}
+        return {"pending": [], "paired": [_self_device()]}
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_raises)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_none)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(f"/api/v1/gateways/{gateway.id}/devices")
@@ -198,6 +239,37 @@ async def test_list_self_identity_unavailable(
     body = resp.json()
     assert body["isSelfResolved"] is False
     assert all(d["isSelf"] is False for d in body["devices"])
+
+
+@pytest.mark.asyncio
+async def test_list_marks_multiple_matching_backend_devices_as_self(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two paired devices both match the heuristic → both flagged isSelf=True."""
+
+    app, _, gateway = setup
+
+    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
+        return {
+            "pending": [],
+            "paired": [
+                _self_device(device_id="mc-self-1"),
+                _self_device(device_id="mc-self-2"),
+                _other_device(),
+            ],
+        }
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/api/v1/gateways/{gateway.id}/devices")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["isSelfResolved"] is True
+    selfs = {d["deviceId"] for d in body["devices"] if d["isSelf"]}
+    assert selfs == {"mc-self-1", "mc-self-2"}
 
 
 @pytest.mark.asyncio
@@ -211,7 +283,7 @@ async def test_list_malformed_payload_returns_502(
         return {"paired": "not-a-list"}  # malformed
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(f"/api/v1/gateways/{gateway.id}/devices")
@@ -230,7 +302,7 @@ async def test_list_cross_org_returns_404(
         return {"pending": [], "paired": []}
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(f"/api/v1/gateways/{uuid4()}/devices")
@@ -250,7 +322,7 @@ async def test_list_rpc_timeout_returns_504(
         await _asyncio.sleep(10)  # exceeds the wait_for
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
     monkeypatch.setattr(gateway_api, "_PAIRING_RPC_TIMEOUT_SECONDS", 0.05)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -270,7 +342,7 @@ async def test_list_rpc_unavailable_returns_503(
         raise OpenClawGatewayError("down", details={"code": "UNAVAILABLE"})
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(f"/api/v1/gateways/{gateway.id}/devices")
@@ -298,7 +370,7 @@ async def test_list_does_not_cache_rpc_calls(
         return {"pending": [], "paired": []}
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         url = f"/api/v1/gateways/{gateway.id}/devices"
@@ -314,19 +386,20 @@ async def test_remove_happy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, _, gateway = setup
-    captured: list[tuple[str, Any]] = []
+    # paired list contains only non-matching devices, so the target is safe.
+    fake, captured = _make_dispatch(paired=[_other_device(device_id="some-other-device")])
 
-    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
-        captured.append((method, params))
-        return {"ok": True}
-
-    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "openclaw_call", fake)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/some-other-device")
     assert resp.status_code == 200
-    assert captured == [("device.pair.remove", {"deviceId": "some-other-device"})]
+    # list first, then remove
+    assert captured == [
+        ("device.pair.list", None),
+        ("device.pair.remove", {"deviceId": "some-other-device"}),
+    ]
 
 
 @pytest.mark.asyncio
@@ -335,21 +408,43 @@ async def test_remove_self_protect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, _, gateway = setup
-    called = False
+    fake, captured = _make_dispatch(paired=[_self_device()])
 
-    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
-        nonlocal called
-        called = True
-        return {"ok": True}
-
-    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "openclaw_call", fake)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/{_LOCAL_DEVICE_ID}")
     assert resp.status_code == 409
     assert resp.json()["detail"]["error"] == "cannot_remove_self"
-    assert called is False
+    # list called, but remove must NOT be called
+    assert [m for m, _ in captured] == ["device.pair.list"]
+
+
+@pytest.mark.asyncio
+async def test_remove_self_protect_blocks_any_matching_device(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When two devices both match the heuristic, DELETE on either returns 409."""
+
+    app, _, gateway = setup
+    paired = [
+        _self_device(device_id="mc-self-1"),
+        _self_device(device_id="mc-self-2"),
+        _other_device(),
+    ]
+
+    for target in ("mc-self-1", "mc-self-2"):
+        fake, captured = _make_dispatch(paired=paired)
+        monkeypatch.setattr(gateway_api, "openclaw_call", fake)
+        monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/{target}")
+        assert resp.status_code == 409, target
+        assert resp.json()["detail"]["error"] == "cannot_remove_self"
+        assert [m for m, _ in captured] == ["device.pair.list"]
 
 
 @pytest.mark.asyncio
@@ -357,6 +452,8 @@ async def test_remove_self_identity_unavailable_refuses(
     setup: tuple[FastAPI, Organization, Gateway],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """When self IP can't be resolved, refuse 503 BEFORE any RPC call."""
+
     app, _, gateway = setup
     called = False
 
@@ -366,7 +463,7 @@ async def test_remove_self_identity_unavailable_refuses(
         return {}
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_raises)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_none)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/anything")
@@ -381,16 +478,17 @@ async def test_remove_device_not_found_returns_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, _, gateway = setup
-
-    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
-        # Verified live shape from Task 1 probe — gateway emits "unknown deviceId" (camelCase).
-        raise OpenClawGatewayError(
+    # Verified live shape from Task 1 probe — gateway emits "unknown deviceId" (camelCase).
+    fake, _ = _make_dispatch(
+        paired=[],
+        remove_exc=OpenClawGatewayError(
             "unknown deviceId",
             details={"code": "INVALID_REQUEST", "message": "unknown deviceId"},
-        )
+        ),
+    )
 
-    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "openclaw_call", fake)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/xx")
@@ -404,15 +502,16 @@ async def test_remove_pairing_scope_denied_returns_403(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, _, gateway = setup
-
-    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
-        raise OpenClawGatewayError(
+    fake, _ = _make_dispatch(
+        paired=[],
+        remove_exc=OpenClawGatewayError(
             "insufficient scope",
             details={"code": "INVALID_REQUEST", "message": "insufficient scope: operator.pairing"},
-        )
+        ),
+    )
 
-    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "openclaw_call", fake)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/xx")
@@ -426,12 +525,13 @@ async def test_remove_gateway_unavailable_returns_503(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, _, gateway = setup
+    fake, _ = _make_dispatch(
+        paired=[],
+        remove_exc=OpenClawGatewayError("down", details={"code": "UNAVAILABLE"}),
+    )
 
-    async def _fake(method: str, params: Any = None, *, config: Any) -> object:
-        raise OpenClawGatewayError("down", details={"code": "UNAVAILABLE"})
-
-    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "openclaw_call", fake)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/xx")
@@ -451,7 +551,7 @@ async def test_remove_timeout_returns_504(
         await _asyncio.sleep(10)
 
     monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
     monkeypatch.setattr(gateway_api, "_PAIRING_RPC_TIMEOUT_SECONDS", 0.05)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -480,35 +580,29 @@ async def test_remove_emits_audit_log_per_outcome(
     app, _, gateway = setup
 
     if scenario == "happy":
-
-        async def _fake(m: str, p: Any = None, *, config: Any) -> object:
-            return {"ok": True}
-
+        fake, _ = _make_dispatch(paired=[])
         target_id = "other-id"
     elif scenario == "not_found":
-
-        async def _fake(m: str, p: Any = None, *, config: Any) -> object:
-            raise OpenClawGatewayError(
+        fake, _ = _make_dispatch(
+            paired=[],
+            remove_exc=OpenClawGatewayError(
                 "unknown deviceId",
                 details={"code": "INVALID_REQUEST", "message": "unknown deviceId"},
-            )
-
+            ),
+        )
         target_id = "missing-x"
     elif scenario == "self":
-
-        async def _fake(m: str, p: Any = None, *, config: Any) -> object:
-            return {"ok": True}
-
+        fake, _ = _make_dispatch(paired=[_self_device()])
         target_id = _LOCAL_DEVICE_ID
     else:  # unavailable
-
-        async def _fake(m: str, p: Any = None, *, config: Any) -> object:
-            raise OpenClawGatewayError("down", details={"code": "UNAVAILABLE"})
-
+        fake, _ = _make_dispatch(
+            paired=[],
+            remove_exc=OpenClawGatewayError("down", details={"code": "UNAVAILABLE"}),
+        )
         target_id = "down-x"
 
-    monkeypatch.setattr(gateway_api, "openclaw_call", _fake)
-    monkeypatch.setattr(gateway_api, "load_or_create_device_identity", _identity_self)
+    monkeypatch.setattr(gateway_api, "openclaw_call", fake)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
 
     caplog.set_level(logging.INFO, logger="app.api.gateway")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
