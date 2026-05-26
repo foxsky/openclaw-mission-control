@@ -1951,3 +1951,11 @@ cd frontend && npx tsc --noEmit && \
 - **Pairing-scope denied:** NOT observed in probe (MC has operator.pairing). DELETE handler tests use the canonical INVALID_REQUEST + "insufficient scope" pattern; if the live shape ever differs, a real-prod failure will surface it.
 
 These verified strings are used by Task 5's substring matchers in `_map_pairing_error` (`"device not found"` / `"unknown device"`) — update those matchers if the real strings don't match either substring. **Note:** the live message is `"unknown deviceId"` (camelCase, not `"unknown device"`), so the `"unknown device"` substring matcher will still match (substring-contains), but the more precise check is `"unknown deviceid"` (case-insensitive) or just `"unknown device"`.
+
+## Hotfix amendment — 2026-05-25 — self-protect anchor changed (PR #9, hotfix)
+
+The original design anchored self-protect on `load_or_create_device_identity().device_id`. Production smoke on `.64` against the live `.60` gateway showed every device returned `isSelf: false` — MC's local Ed25519 identity (`f569c3b9a5…`) does not match the gateway's view of MC's paired device (`e6bdd3ea61…`). The pairing handshake from April 2026 used a different keypair; MC currently authenticates via `cfg.token`, not the local identity file.
+
+PR #9 switched the anchor to an IP+clientId+clientMode heuristic match against the projected device list, with a new `GATEWAY_CLIENT_OUTBOUND_IP` config override and autodetect via DGRAM `connect` + `getsockname`. The 5.25 follow-up batch (`fix/pairings-followup-batch`) added a fail-closed branch when the heuristic resolves to an empty self-set, plus renamed the audit log's `request_id` field to `gateway_request_id` to disambiguate from the HTTP-level request_id.
+
+See memory `project_mc_pairings_page.md` for the post-hotfix live state.
