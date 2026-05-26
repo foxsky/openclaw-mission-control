@@ -636,7 +636,7 @@ async def test_remove_self_set_empty_refuses_503(
     app, _, gateway = setup
 
     # IP resolves, but the paired list contains no backend rows from that IP.
-    fake, _ = _make_dispatch(paired=[_other_device(device_id="stranger")])
+    fake, captured = _make_dispatch(paired=[_other_device(device_id="stranger")])
 
     monkeypatch.setattr(gateway_api, "openclaw_call", fake)
     monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
@@ -645,6 +645,11 @@ async def test_remove_self_set_empty_refuses_503(
         resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/stranger")
     assert resp.status_code == 503
     assert resp.json()["detail"]["error"] == "self_identity_unavailable"
+
+    methods_called = [m for m, _ in captured]
+    assert methods_called == [
+        "device.pair.list"
+    ], f"expected only device.pair.list, got {methods_called}"
 
 
 @pytest.mark.asyncio
