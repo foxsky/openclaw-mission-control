@@ -634,7 +634,11 @@ def _map_pairing_error(
                 status_code=404,
                 detail={"error": "device_not_found", "device_id": device_id},
             )
-        if "insufficient scope" in lowered or "missing scope" in lowered:
+        if (
+            "insufficient scope" in lowered
+            or "missing scope" in lowered
+            or "removal denied" in lowered
+        ):
             return HTTPException(
                 status_code=403,
                 detail={"error": "gateway_pairing_scope_denied"},
@@ -865,16 +869,16 @@ async def remove_gateway_device(
         device_id,
     )
 
-    def _audit(outcome: str, request_id: str | None = None) -> None:
+    def _audit(outcome: str, gateway_request_id: str | None = None) -> None:
         logger.info(
             "gateway.pairing.remove.outcome user_id=%s org_id=%s gateway_id=%s "
-            "device_id=%s outcome=%s request_id=%s",
+            "device_id=%s outcome=%s gateway_request_id=%s",
             user_id,
             ctx.organization.id,
             gateway_id,
             device_id,
             outcome,
-            request_id or "<none>",
+            gateway_request_id or "<none>",
         )
 
     gateway = await GatewayAdminLifecycleService(session).require_gateway(
@@ -910,7 +914,7 @@ async def remove_gateway_device(
         http_exc = _map_pairing_error(exc, device_id=device_id)
         detail_error = http_exc.detail.get("error") if isinstance(http_exc.detail, dict) else None
         outcome = _PAIRING_OUTCOME_MAP.get(detail_error, "other") if detail_error else "other"
-        _audit(outcome, request_id=exc.request_id)
+        _audit(outcome, gateway_request_id=exc.request_id)
         raise http_exc from exc
 
     if not isinstance(list_payload, dict):
@@ -928,6 +932,17 @@ async def remove_gateway_device(
         )
 
     self_device_ids = _select_self_device_ids(paired, self_match_ip)
+    if not self_device_ids:
+        # Heuristic resolved an outbound IP but no paired device matched
+        # clientId=gateway-client + clientMode=backend + remoteIp=<our IP>.
+        # Could be NAT, remoteIp=null on MC's row, or MC not currently a paired
+        # backend client. Refuse writes — operator must opt-in via
+        # GATEWAY_CLIENT_OUTBOUND_IP override or accept the risk explicitly.
+        _audit("self_identity_unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "self_identity_unavailable"},
+        )
     if device_id in self_device_ids:
         _audit("cannot_remove_self")
         raise HTTPException(
@@ -952,7 +967,7 @@ async def remove_gateway_device(
         http_exc = _map_pairing_error(exc, device_id=device_id)
         detail_error = http_exc.detail.get("error") if isinstance(http_exc.detail, dict) else None
         outcome = _PAIRING_OUTCOME_MAP.get(detail_error, "other") if detail_error else "other"
-        _audit(outcome, request_id=exc.request_id)
+        _audit(outcome, gateway_request_id=exc.request_id)
         raise http_exc from exc
 
     _audit("success")

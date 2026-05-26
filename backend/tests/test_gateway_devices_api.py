@@ -386,8 +386,11 @@ async def test_remove_happy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, _, gateway = setup
-    # paired list contains only non-matching devices, so the target is safe.
-    fake, captured = _make_dispatch(paired=[_other_device(device_id="some-other-device")])
+    # paired list must include a self device so the empty-self-set fail-closed
+    # gate (Fix A) doesn't refuse the call — plus a non-matching target.
+    fake, captured = _make_dispatch(
+        paired=[_self_device(), _other_device(device_id="some-other-device")],
+    )
 
     monkeypatch.setattr(gateway_api, "openclaw_call", fake)
     monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
@@ -479,8 +482,9 @@ async def test_remove_device_not_found_returns_404(
 ) -> None:
     app, _, gateway = setup
     # Verified live shape from Task 1 probe — gateway emits "unknown deviceId" (camelCase).
+    # Paired list includes a self device so Fix A's empty-self-set gate passes.
     fake, _ = _make_dispatch(
-        paired=[],
+        paired=[_self_device()],
         remove_exc=OpenClawGatewayError(
             "unknown deviceId",
             details={"code": "INVALID_REQUEST", "message": "unknown deviceId"},
@@ -503,7 +507,7 @@ async def test_remove_pairing_scope_denied_returns_403(
 ) -> None:
     app, _, gateway = setup
     fake, _ = _make_dispatch(
-        paired=[],
+        paired=[_self_device()],
         remove_exc=OpenClawGatewayError(
             "insufficient scope",
             details={"code": "INVALID_REQUEST", "message": "insufficient scope: operator.pairing"},
@@ -526,7 +530,7 @@ async def test_remove_gateway_unavailable_returns_503(
 ) -> None:
     app, _, gateway = setup
     fake, _ = _make_dispatch(
-        paired=[],
+        paired=[_self_device()],
         remove_exc=OpenClawGatewayError("down", details={"code": "UNAVAILABLE"}),
     )
 
@@ -579,12 +583,14 @@ async def test_remove_emits_audit_log_per_outcome(
 ) -> None:
     app, _, gateway = setup
 
+    # All non-self scenarios must seed a self device so Fix A's
+    # empty-self-set fail-closed gate doesn't intercept the call.
     if scenario == "happy":
-        fake, _ = _make_dispatch(paired=[])
+        fake, _ = _make_dispatch(paired=[_self_device()])
         target_id = "other-id"
     elif scenario == "not_found":
         fake, _ = _make_dispatch(
-            paired=[],
+            paired=[_self_device()],
             remove_exc=OpenClawGatewayError(
                 "unknown deviceId",
                 details={"code": "INVALID_REQUEST", "message": "unknown deviceId"},
@@ -596,7 +602,7 @@ async def test_remove_emits_audit_log_per_outcome(
         target_id = _LOCAL_DEVICE_ID
     else:  # unavailable
         fake, _ = _make_dispatch(
-            paired=[],
+            paired=[_self_device()],
             remove_exc=OpenClawGatewayError("down", details={"code": "UNAVAILABLE"}),
         )
         target_id = "down-x"
@@ -611,5 +617,58 @@ async def test_remove_emits_audit_log_per_outcome(
 
     audit_lines = [r for r in caplog.records if "gateway.pairing.remove.outcome" in r.getMessage()]
     assert len(audit_lines) == 1
-    assert f"outcome={expected_outcome}" in audit_lines[0].getMessage()
-    assert f"device_id={target_id}" in audit_lines[0].getMessage()
+    message = audit_lines[0].getMessage()
+    assert f"outcome={expected_outcome}" in message
+    assert f"device_id={target_id}" in message
+    # Renamed from request_id → gateway_request_id to disambiguate from the
+    # HTTP-level request_id that the logging middleware also stamps.
+    assert "gateway_request_id=" in message
+    assert "request_id=" not in message.replace("gateway_request_id=", "")
+
+
+@pytest.mark.asyncio
+async def test_remove_self_set_empty_refuses_503(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If self_match_ip resolves but no device matches the heuristic
+    (NAT / remoteIp=null), DELETE must fail closed."""
+    app, _, gateway = setup
+
+    # IP resolves, but the paired list contains no backend rows from that IP.
+    fake, _ = _make_dispatch(paired=[_other_device(device_id="stranger")])
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", fake)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/stranger")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "self_identity_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_remove_removal_denied_maps_to_403(
+    setup: tuple[FastAPI, Organization, Gateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Upstream gateway 'device pairing removal denied' maps to 403."""
+    app, _, gateway = setup
+    fake, _ = _make_dispatch(
+        paired=[_self_device()],
+        remove_exc=OpenClawGatewayError(
+            "device pairing removal denied",
+            details={
+                "code": "INVALID_REQUEST",
+                "message": "device pairing removal denied",
+            },
+        ),
+    )
+
+    monkeypatch.setattr(gateway_api, "openclaw_call", fake)
+    monkeypatch.setattr(gateway_api, "_resolve_self_match_ip", _mock_self_ip_ok)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.delete(f"/api/v1/gateways/{gateway.id}/devices/xx")
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "gateway_pairing_scope_denied"
