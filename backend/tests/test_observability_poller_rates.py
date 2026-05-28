@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from app.services.openclaw.observability_poller import (
     ERROR_METRIC_NAMES,
-    DeltaRow,
     PriorSample,
     compute_rate_deltas,
     filter_error_samples,
