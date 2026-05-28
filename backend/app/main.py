@@ -59,6 +59,10 @@ from app.services.openclaw.lead_scoring_sweep import (
     lead_scoring_sweep_loop,
     stop_lead_scoring_sweep,
 )
+from app.services.openclaw.observability_poller import (
+    observability_poller_loop,
+    stop_observability_poller,
+)
 from app.services.openclaw.provisioning import reconcile_agent_heartbeat_enabled_flags
 from app.services.retention import retention_purge_loop, stop_retention_purge
 
@@ -494,10 +498,16 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         lead_scoring_sweep_loop(lead_scoring_stop_event),
         name="lead-scoring-sweep-loop",
     )
+    observability_stop_event = asyncio.Event()
+    observability_task = asyncio.create_task(
+        observability_poller_loop(observability_stop_event),
+        name="observability-poller-loop",
+    )
     logger.info("app.lifecycle.started")
     try:
         yield
     finally:
+        await stop_observability_poller(observability_task, observability_stop_event)
         await stop_lead_scoring_sweep(lead_scoring_task, lead_scoring_stop_event)
         await stop_retention_purge(retention_task, retention_stop_event)
         await stop_heartbeat_watchdog(watchdog_task, watchdog_stop_event)

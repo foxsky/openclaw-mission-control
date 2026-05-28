@@ -28,6 +28,8 @@ from app.schemas.gateway_api import (
     GatewayDeviceListResponse,
     GatewayEvalApprovalResolveRequest,
     GatewayEvalSessionEnsureRequest,
+    GatewayObservabilityErrorRatesResponse,
+    GatewayObservabilitySamplePoint,
     GatewayResolveQuery,
     GatewaySessionHistoryResponse,
     GatewaySessionMessageRequest,
@@ -972,3 +974,80 @@ async def remove_gateway_device(
 
     _audit("success")
     return RemoveGatewayDeviceResponse(device_id=device_id)
+
+
+_OBSERVABILITY_WINDOW_PATTERN = {
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "6h": 21600,
+    "24h": 86400,
+    "7d": 604800,
+}
+
+
+def _parse_observability_window(raw: str) -> int:
+    """Map a window string (``1h``/``24h``/etc) to seconds; raise 400 otherwise."""
+
+    seconds = _OBSERVABILITY_WINDOW_PATTERN.get(raw)
+    if seconds is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_window", "allowed": sorted(_OBSERVABILITY_WINDOW_PATTERN)},
+        )
+    return seconds
+
+
+@router.get(
+    "/{gateway_id}/observability/error-rates",
+    response_model=GatewayObservabilityErrorRatesResponse,
+    response_model_by_alias=True,
+    operation_id="get_gateway_observability_error_rates",
+)
+async def get_gateway_observability_error_rates(
+    gateway_id: UUID,
+    window: str = Query(default="1h"),
+    session: AsyncSession = SESSION_DEP,
+    _auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> GatewayObservabilityErrorRatesResponse:
+    """Return persisted error-rate samples written by the gateway
+    observability poller, filtered to a recent time window."""
+
+    from datetime import timedelta
+
+    from app.core.time import utcnow
+    from app.models.gateway_observability_samples import GatewayObservabilitySample
+
+    window_seconds = _parse_observability_window(window)
+
+    # Validate gateway scope (404 if not in the caller's org).
+    await GatewayAdminLifecycleService(session).require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+
+    cutoff = utcnow() - timedelta(seconds=window_seconds)
+    statement = (
+        select(GatewayObservabilitySample)
+        .where(GatewayObservabilitySample.gateway_id == gateway_id)
+        .where(GatewayObservabilitySample.scraped_at >= cutoff)
+        .order_by(GatewayObservabilitySample.scraped_at.desc())  # type: ignore[arg-type]
+    )
+    rows = (await session.exec(statement)).all()
+    points = [
+        GatewayObservabilitySamplePoint(
+            metric_name=row.metric_name,
+            labels=row.labels,
+            counter_value=row.counter_value,
+            rate_per_second=row.rate_per_second,
+            elapsed_seconds=row.elapsed_seconds,
+            scraped_at_ms=int(row.scraped_at.timestamp() * 1000),
+        )
+        for row in rows
+    ]
+    return GatewayObservabilityErrorRatesResponse(
+        gateway_id=gateway_id,
+        window_seconds=window_seconds,
+        samples=points,
+    )

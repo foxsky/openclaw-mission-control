@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     # no-op sweeps (≈10 min of inactivity) triggers the operator alert.
     lead_scoring_sweep_interval_seconds: int = 300
 
+    # Gateway observability poller. Scrapes the diagnostics-prometheus
+    # endpoint on each configured gateway, projects the three error
+    # counters (model_call/harness_run/run_completed failures) into
+    # gateway_observability_samples. 60s pairs with Prometheus's typical
+    # scrape interval. Set to 0 to disable.
+    gateway_observability_poll_interval_seconds: int = 60
+
     # RQ queueing / dispatch
     rq_redis_url: str = "redis://localhost:6379/0"
     rq_queue_name: str = "default"
