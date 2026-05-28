@@ -209,3 +209,26 @@ class RemoveGatewayDeviceResponse(SQLModel):
     device_id: str = Field(alias="deviceId")
 
     model_config = SQLModelConfig(validate_by_name=True)
+
+
+class GatewayObservabilitySamplePoint(SQLModel):
+    """One persisted error-rate sample, projected for the API response."""
+
+    metric_name: str
+    labels: dict[str, str] = Field(default_factory=dict)
+    counter_value: float
+    rate_per_second: float | None = Field(default=None, alias="ratePerSecond")
+    elapsed_seconds: float | None = Field(default=None, alias="elapsedSeconds")
+    scraped_at_ms: int = Field(alias="scrapedAtMs")
+
+    model_config = SQLModelConfig(validate_by_name=True)
+
+
+class GatewayObservabilityErrorRatesResponse(SQLModel):
+    """Response body for GET /api/v1/gateways/{id}/observability/error-rates."""
+
+    gateway_id: UUID
+    window_seconds: int = Field(alias="windowSeconds")
+    samples: list[GatewayObservabilitySamplePoint] = Field(default_factory=list)
+
+    model_config = SQLModelConfig(validate_by_name=True)
