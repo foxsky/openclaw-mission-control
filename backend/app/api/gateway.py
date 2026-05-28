@@ -1032,7 +1032,7 @@ async def get_gateway_observability_error_rates(
         select(GatewayObservabilitySample)
         .where(GatewayObservabilitySample.gateway_id == gateway_id)
         .where(GatewayObservabilitySample.scraped_at >= cutoff)
-        .order_by(GatewayObservabilitySample.scraped_at.desc())  # type: ignore[arg-type]
+        .order_by(col(GatewayObservabilitySample.scraped_at).desc())
     )
     rows = (await session.exec(statement)).all()
     points = [

@@ -286,6 +286,16 @@ async def poll_gateway_once(
     from app.core.time import utcnow
     from app.models.gateway_observability_samples import GatewayObservabilitySample
 
+    if not gateway.token:
+        # Gateway.token is Optional in the model but the diagnostics
+        # endpoint requires operator-scope auth. A null token means
+        # this gateway row is misconfigured; skip rather than 401-loop.
+        logger.warning(
+            "observability_poller.skipping_unauthenticated_gateway gateway_id=%s",
+            gateway.id,
+        )
+        return PollResult(rows_inserted=0, error="missing_gateway_token")
+
     try:
         raw_samples = await scrape_gateway_metrics(
             gateway_url=gateway.url,
@@ -359,7 +369,7 @@ async def _load_latest_prior_samples(
 
     from datetime import timedelta
 
-    from sqlmodel import select
+    from sqlmodel import col, select
 
     from app.core.config import settings
     from app.core.time import utcnow
@@ -371,7 +381,7 @@ async def _load_latest_prior_samples(
         select(GatewayObservabilitySample)
         .where(GatewayObservabilitySample.gateway_id == gateway_id)
         .where(GatewayObservabilitySample.scraped_at >= cutoff)
-        .order_by(GatewayObservabilitySample.scraped_at.desc())  # type: ignore[arg-type]
+        .order_by(col(GatewayObservabilitySample.scraped_at).desc())
     )
     result = await session.exec(statement)
     out: dict[tuple[str, frozenset[tuple[str, str]]], PriorSample] = {}
