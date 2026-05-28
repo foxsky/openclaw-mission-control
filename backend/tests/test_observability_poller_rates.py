@@ -54,16 +54,30 @@ def test_filter_keeps_harness_run_total_when_outcome_error() -> None:
     assert len(out) == 1
 
 
-def test_filter_keeps_run_completed_total_when_state_failed() -> None:
+def test_filter_keeps_run_completed_total_when_outcome_error() -> None:
+    """The catalog uses ``outcome`` here, not ``state`` (which belongs
+    to the orthogonal ``session_state_total`` family). A filter mismatch
+    here would silently drop every run-failure signal."""
+
     samples = _make_samples(
-        ("openclaw_run_completed_total", {"state": "failed"}, 2.0),
-        ("openclaw_run_completed_total", {"state": "idle"}, 9.0),
+        ("openclaw_run_completed_total", {"outcome": "error"}, 2.0),
+        ("openclaw_run_completed_total", {"outcome": "completed"}, 9.0),
     )
     out = filter_error_samples(samples)
     assert len(out) == 1
     [(key, value)] = out.items()
-    assert ("state", "failed") in key[1]
+    assert ("outcome", "error") in key[1]
     assert value == 2.0
+
+
+def test_filter_drops_run_completed_total_when_only_state_label() -> None:
+    """Defense against regressions: the old (wrong) ``state=failed``
+    label must NOT match — the catalog never emits this combination."""
+
+    samples = _make_samples(
+        ("openclaw_run_completed_total", {"state": "failed"}, 2.0),
+    )
+    assert filter_error_samples(samples) == {}
 
 
 def test_filter_ignores_error_metric_without_outcome_label() -> None:

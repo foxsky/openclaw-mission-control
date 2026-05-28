@@ -61,7 +61,7 @@ def test_parser_handles_multi_family_mixed_block() -> None:
         "# HELP openclaw_a Bar\n"
         "# TYPE openclaw_a counter\n"
         "openclaw_a 1\n"
-        "openclaw_b{x=\"y\"} 2.5\n"
+        'openclaw_b{x="y"} 2.5\n'
         "\n"
         '# HELP openclaw_c\nopenclaw_c{x="y",z="w"} 3\n'
     )
@@ -77,7 +77,7 @@ def test_parser_silently_skips_malformed_lines() -> None:
     text = (
         "openclaw_good 1\n"
         "this is not a metric\n"
-        "openclaw_also_good{x=\"y\"} 2\n"
+        'openclaw_also_good{x="y"} 2\n'
         "openclaw_no_value\n"
     )
     out = parse_prometheus_text(text)
@@ -101,6 +101,4 @@ def test_parser_handles_histogram_bucket_lines() -> None:
         out[("openclaw_h_bucket", frozenset({("le", "+Inf"), ("reason", "event_loop_delay")}))]
         == 1.0
     )
-    assert (
-        out[("openclaw_h_sum", frozenset({("reason", "event_loop_delay")}))] == 1.9755
-    )
+    assert out[("openclaw_h_sum", frozenset({("reason", "event_loop_delay")}))] == 1.9755

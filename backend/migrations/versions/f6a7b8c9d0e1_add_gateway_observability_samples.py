@@ -36,9 +36,13 @@ def upgrade() -> None:
         "gateway_observability_samples",
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column("gateway_id", sa.UUID(), nullable=False),
+        # Naive UTC to match project convention (``app.core.time.utcnow``
+        # returns naive). ``server_default=now()`` is naive on SQLite and
+        # ``timestamp without time zone`` on Postgres, so the wire shape
+        # is consistent across both backends used by tests vs prod.
         sa.Column(
             "scraped_at",
-            sa.DateTime(timezone=True),
+            sa.DateTime(),
             nullable=False,
             server_default=sa.func.now(),
         ),

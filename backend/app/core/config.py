@@ -89,6 +89,16 @@ class Settings(BaseSettings):
     # gateway_observability_samples. 60s pairs with Prometheus's typical
     # scrape interval. Set to 0 to disable.
     gateway_observability_poll_interval_seconds: int = 60
+    # Per-scrape HTTP timeout. 5s is fine on LAN but operators reaching
+    # remote gateways over the public internet may want headroom.
+    gateway_observability_scrape_timeout_seconds: float = 5.0
+    # Bound for ``_load_latest_prior_samples``: a series whose last
+    # sample is older than this window is treated as a first
+    # observation (null rate). Should be a small multiple of
+    # ``gateway_observability_poll_interval_seconds`` so a one-cycle
+    # blip doesn't reset the rate. Defaults to 10 minutes — covers
+    # 10 missed scrape cycles at the default 60s interval.
+    gateway_observability_prior_lookback_seconds: int = 600
 
     # RQ queueing / dispatch
     rq_redis_url: str = "redis://localhost:6379/0"

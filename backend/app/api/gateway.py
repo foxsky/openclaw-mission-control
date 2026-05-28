@@ -1014,9 +1014,9 @@ async def get_gateway_observability_error_rates(
     """Return persisted error-rate samples written by the gateway
     observability poller, filtered to a recent time window."""
 
-    from datetime import timedelta
+    from datetime import UTC, timedelta
 
-    from app.core.time import utcnow
+    from app.core.time import as_naive_utc, utcnow
     from app.models.gateway_observability_samples import GatewayObservabilitySample
 
     window_seconds = _parse_observability_window(window)
@@ -1042,7 +1042,11 @@ async def get_gateway_observability_error_rates(
             counter_value=row.counter_value,
             rate_per_second=row.rate_per_second,
             elapsed_seconds=row.elapsed_seconds,
-            scraped_at_ms=int(row.scraped_at.timestamp() * 1000),
+            # ``scraped_at`` is naive UTC by project convention
+            # (see app/core/time.utcnow). Plain ``.timestamp()`` on a
+            # naive datetime assumes local timezone, which would shift
+            # epoch ms by the host's UTC offset. Re-tag as UTC first.
+            scraped_at_ms=int(as_naive_utc(row.scraped_at).replace(tzinfo=UTC).timestamp() * 1000),
         )
         for row in rows
     ]

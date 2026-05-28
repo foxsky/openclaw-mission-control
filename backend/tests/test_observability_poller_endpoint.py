@@ -92,11 +92,7 @@ async def test_endpoint_returns_samples_within_window(
         session.add(org)
         session.add(user)
         await session.flush()
-        session.add(
-            OrganizationMember(
-                organization_id=org_id, user_id=user.id, role="admin"
-            )
-        )
+        session.add(OrganizationMember(organization_id=org_id, user_id=user.id, role="admin"))
         gateway = Gateway(
             id=gateway_id,
             organization_id=org_id,
@@ -164,11 +160,7 @@ async def test_endpoint_400s_on_invalid_window(
         session.add(org)
         session.add(user)
         await session.flush()
-        session.add(
-            OrganizationMember(
-                organization_id=org_id, user_id=user.id, role="admin"
-            )
-        )
+        session.add(OrganizationMember(organization_id=org_id, user_id=user.id, role="admin"))
         session.add(
             Gateway(
                 id=gateway_id,

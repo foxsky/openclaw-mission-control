@@ -60,13 +60,18 @@ async def gateway(session: AsyncSession) -> Gateway:
 
 
 def _prom_body(model_call_error: int, harness_error: int, run_failed: int) -> str:
-    """Produce a Prometheus scrape body containing only error series."""
+    """Produce a Prometheus scrape body containing only error series.
+
+    Per the OpenClaw Prometheus catalog (docs/gateway/prometheus.md),
+    ``run_completed_total`` is labelled ``outcome`` (NOT ``state`` —
+    that belongs to ``session_state_total``).
+    """
     return (
         f'openclaw_model_call_total{{model="gpt-5.5",outcome="error",'
         f'provider="openai-codex"}} {model_call_error}\n'
         f'openclaw_harness_run_total{{harness="codex",outcome="error"}} '
-        f'{harness_error}\n'
-        f'openclaw_run_completed_total{{state="failed"}} {run_failed}\n'
+        f"{harness_error}\n"
+        f'openclaw_run_completed_total{{outcome="error"}} {run_failed}\n'
         f'openclaw_memory_bytes{{kind="rss"}} 500000\n'  # not stored
     )
 
@@ -116,8 +121,7 @@ async def test_poll_once_computes_rate_against_prior_sample(
     await session.commit()
 
     body = (
-        'openclaw_model_call_total{model="gpt-5.5",outcome="error",'
-        'provider="openai-codex"} 16\n'
+        'openclaw_model_call_total{model="gpt-5.5",outcome="error",' 'provider="openai-codex"} 16\n'
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -130,29 +134,21 @@ async def test_poll_once_computes_rate_against_prior_sample(
     new_rows = (
         await session.exec(
             select(GatewayObservabilitySample)
-            .where(
-                GatewayObservabilitySample.scraped_at > sixty_seconds_ago
-            )
+            .where(GatewayObservabilitySample.scraped_at > sixty_seconds_ago)
             .order_by(GatewayObservabilitySample.scraped_at.desc())  # type: ignore[arg-type]
         )
     ).all()
-    fresh = next(
-        r for r in new_rows if r.scraped_at != sixty_seconds_ago
-    )
+    fresh = next(r for r in new_rows if r.scraped_at != sixty_seconds_ago)
     assert fresh.counter_value == 16.0
     assert fresh.rate_per_second is not None
     # Allow a bit of slack — the elapsed seconds is computed from
     # actual wall-clock difference, not the prior's faked timestamp.
     assert 55.0 <= (fresh.elapsed_seconds or 0) <= 65.0
-    assert fresh.rate_per_second == pytest.approx(
-        6.0 / (fresh.elapsed_seconds or 60.0), rel=0.05
-    )
+    assert fresh.rate_per_second == pytest.approx(6.0 / (fresh.elapsed_seconds or 60.0), rel=0.05)
 
 
 @pytest.mark.asyncio
-async def test_poll_once_skips_non_error_metrics(
-    session: AsyncSession, gateway: Gateway
-) -> None:
+async def test_poll_once_skips_non_error_metrics(session: AsyncSession, gateway: Gateway) -> None:
     """Only the 3 error-rate metrics should produce rows."""
 
     body = (
@@ -191,3 +187,52 @@ async def test_poll_once_scrape_failure_inserts_no_rows_and_does_not_raise(
     assert result.error is not None
     rows = (await session.exec(select(GatewayObservabilitySample))).all()
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_poll_once_ignores_prior_samples_outside_lookback_window(
+    session: AsyncSession, gateway: Gateway
+) -> None:
+    """A prior sample older than ``gateway_observability_prior_lookback_seconds``
+    must be ignored (treated as first observation) — otherwise the
+    lookup degrades into a full-history scan and rate computation
+    bridges over arbitrarily long gaps."""
+
+    from app.core.config import settings
+
+    far_past = utcnow() - timedelta(
+        seconds=settings.gateway_observability_prior_lookback_seconds + 60
+    )
+    stale = GatewayObservabilitySample(
+        gateway_id=gateway.id,
+        scraped_at=far_past,
+        metric_name="openclaw_model_call_total",
+        labels={"outcome": "error", "model": "gpt-5.5", "provider": "openai-codex"},
+        counter_value=100.0,
+    )
+    session.add(stale)
+    await session.commit()
+
+    body = _prom_body(model_call_error=200, harness_error=0, run_failed=0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        await poll_gateway_once(session, gateway, client=client)
+
+    fresh_rows = (
+        await session.exec(
+            select(GatewayObservabilitySample).where(
+                GatewayObservabilitySample.scraped_at > far_past
+            )
+        )
+    ).all()
+    # Exactly 3 fresh rows. The model_call_total row should have a null
+    # rate (stale prior beyond lookback → first-observation behavior),
+    # NOT a rate inferred from the ancient 100 → 200 delta.
+    assert len(fresh_rows) == 3
+    model_call = next(r for r in fresh_rows if r.metric_name == "openclaw_model_call_total")
+    assert model_call.rate_per_second is None
+    assert model_call.elapsed_seconds is None

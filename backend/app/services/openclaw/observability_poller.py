@@ -7,7 +7,7 @@ See ``docs/plans/2026-05-28-gateway-observability-poller-design.md`` for
 the design rationale. The poller intentionally projects only the three
 error metrics that fire under our Codex-stdio fleet (``model_call_total``
 with ``outcome=error``, ``harness_run_total`` with ``outcome=error``,
-``run_completed_total`` with ``state=failed``) — ``model_failover_total``
+``run_completed_total`` with ``outcome=error``) — ``model_failover_total``
 is silent for Codex-harness 404 aborts (see ``project_openclaw_v526_state``
 memory) so we do not rely on it.
 """
@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -42,7 +43,13 @@ _SCRAPE_TIMEOUT_SECONDS = 5.0
 ERROR_METRIC_NAMES: dict[str, tuple[str, str]] = {
     "openclaw_model_call_total": ("outcome", "error"),
     "openclaw_harness_run_total": ("outcome", "error"),
-    "openclaw_run_completed_total": ("state", "failed"),
+    # Per OpenClaw Prometheus catalog (docs/gateway/prometheus.md), the
+    # ``run_completed_total`` family is labelled ``outcome`` — NOT
+    # ``state`` (that label belongs to the orthogonal
+    # ``session_state_total`` family). Using the wrong key silently
+    # drops every failure on this metric, which is why we cite the
+    # docs explicitly here.
+    "openclaw_run_completed_total": ("outcome", "error"),
 }
 
 
@@ -124,14 +131,22 @@ def parse_prometheus_text(
 
 
 def gateway_http_base(gateway_url: str) -> str:
-    """Convert a gateway URL (typically ``ws(s)://...``) into the matching
-    HTTP base used to reach diagnostics endpoints."""
+    """Convert a gateway URL (typically ``ws(s)://...``) into the
+    HTTP scheme+netloc used to reach diagnostics endpoints.
 
-    if gateway_url.startswith("ws://"):
-        return "http://" + gateway_url[len("ws://") :]
-    if gateway_url.startswith("wss://"):
-        return "https://" + gateway_url[len("wss://") :]
-    return gateway_url
+    Any path/query/fragment in the WebSocket URL (e.g. ``/ws``) is
+    intentionally dropped — the diagnostics-prometheus endpoint is
+    rooted at ``/api/diagnostics/prometheus``, not under the WS path.
+    """
+
+    parsed = urlparse(gateway_url)
+    scheme_map = {"ws": "http", "wss": "https"}
+    http_scheme = scheme_map.get(parsed.scheme, parsed.scheme)
+    if not parsed.netloc:
+        # Fallback for malformed inputs — preserve old behavior so
+        # we don't regress on bare-host URLs.
+        return gateway_url
+    return urlunparse((http_scheme, parsed.netloc, "", "", "", ""))
 
 
 async def scrape_gateway_metrics(
@@ -140,8 +155,15 @@ async def scrape_gateway_metrics(
     gateway_token: str,
     client: httpx.AsyncClient | None = None,
     timeout: float = _SCRAPE_TIMEOUT_SECONDS,
+    allow_insecure_tls: bool = False,
 ) -> dict[tuple[str, frozenset[tuple[str, str]]], float]:
-    """Fetch and parse the gateway's Prometheus diagnostics endpoint."""
+    """Fetch and parse the gateway's Prometheus diagnostics endpoint.
+
+    ``allow_insecure_tls`` matches the same-named flag on the Gateway
+    record — gateways using self-signed certs on the WS path will also
+    serve diagnostics with the same cert; disabling cert verification
+    there keeps the scraper aligned with the WS RPC layer.
+    """
 
     base = gateway_http_base(gateway_url).rstrip("/")
     url = base + _PROMETHEUS_PATH
@@ -149,7 +171,10 @@ async def scrape_gateway_metrics(
 
     owns_client = client is None
     if client is None:
-        client = httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=timeout))
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout, connect=timeout),
+            verify=not allow_insecure_tls,
+        )
     try:
         response = await client.get(url, headers=headers)
         response.raise_for_status()
@@ -224,6 +249,26 @@ class PollResult:
     error: str | None = None
 
 
+def _rate_from_counter_delta(
+    *,
+    current: float,
+    prior: float,
+    elapsed_seconds: float,
+) -> tuple[float | None, float | None]:
+    """Pure rate-math helper used by both ``compute_rate_deltas`` (tests)
+    and ``poll_gateway_once`` (production). Returns ``(rate, elapsed)``
+    or ``(None, None)`` when the sample isn't safe to attribute as a
+    rate (counter regression, zero elapsed)."""
+
+    if elapsed_seconds <= 0:
+        return None, None
+    if current < prior:
+        # Counter regression — gateway restart suspected. Surface null
+        # so consumers can distinguish "no signal" from a real zero.
+        return None, None
+    return (current - prior) / elapsed_seconds, elapsed_seconds
+
+
 async def poll_gateway_once(
     session: "AsyncSession",
     gateway: "Gateway",
@@ -237,6 +282,7 @@ async def poll_gateway_once(
     one scrape attempt; retry policy belongs to the caller.
     """
 
+    from app.core.config import settings
     from app.core.time import utcnow
     from app.models.gateway_observability_samples import GatewayObservabilitySample
 
@@ -245,6 +291,8 @@ async def poll_gateway_once(
             gateway_url=gateway.url,
             gateway_token=gateway.token,
             client=client,
+            timeout=settings.gateway_observability_scrape_timeout_seconds,
+            allow_insecure_tls=gateway.allow_insecure_tls,
         )
     except Exception as exc:
         logger.warning(
@@ -267,17 +315,13 @@ async def poll_gateway_once(
         if prior_sample is None or prior_sample.scraped_at is None:
             rate: float | None = None
             elapsed: float | None = None
-        elif counter_value < prior_sample.counter_value:
-            # Counter regression — gateway restart suspected.
-            rate = None
-            elapsed = None
         else:
-            elapsed = (now - prior_sample.scraped_at).total_seconds()
-            if elapsed <= 0:
-                rate = None
-                elapsed = None
-            else:
-                rate = (counter_value - prior_sample.counter_value) / elapsed
+            elapsed_seconds = (now - prior_sample.scraped_at).total_seconds()
+            rate, elapsed = _rate_from_counter_delta(
+                current=counter_value,
+                prior=prior_sample.counter_value,
+                elapsed_seconds=elapsed_seconds,
+            )
         rows.append(
             GatewayObservabilitySample(
                 gateway_id=gateway.id,
@@ -309,20 +353,24 @@ async def _load_latest_prior_samples(
     session: "AsyncSession",
     gateway_id: "UUID",
 ) -> dict[tuple[str, frozenset[tuple[str, str]]], PriorSample]:
-    """Load the most recent sample per ``(metric_name, labels)`` for one gateway.
+    """Load the most recent sample per ``(metric_name, labels)`` for
+    one gateway. Bounded by ``gateway_observability_prior_lookback_seconds``
+    so historical retention doesn't make this a full-table scan."""
 
-    Returns an empty dict when no rows exist yet. Each PriorSample
-    carries ``scraped_at`` so the poll loop can compute per-series
-    elapsed time.
-    """
+    from datetime import timedelta
 
     from sqlmodel import select
 
+    from app.core.config import settings
+    from app.core.time import utcnow
     from app.models.gateway_observability_samples import GatewayObservabilitySample
 
+    lookback = timedelta(seconds=settings.gateway_observability_prior_lookback_seconds)
+    cutoff = utcnow() - lookback
     statement = (
         select(GatewayObservabilitySample)
         .where(GatewayObservabilitySample.gateway_id == gateway_id)
+        .where(GatewayObservabilitySample.scraped_at >= cutoff)
         .order_by(GatewayObservabilitySample.scraped_at.desc())  # type: ignore[arg-type]
     )
     result = await session.exec(statement)
@@ -344,7 +392,13 @@ async def _load_latest_prior_samples(
 
 async def observability_poller_loop(stop_event: "asyncio.Event") -> None:
     """Long-running task: poll every configured gateway at the
-    configured interval until stopped."""
+    configured interval until stopped.
+
+    Uses one DB session to enumerate gateways into plain rows, closes
+    it, then opens a FRESH session per gateway for the actual
+    scrape+persist. This keeps an unrelated failure in one gateway
+    from poisoning the next iteration's session state.
+    """
 
     import asyncio
 
@@ -363,10 +417,20 @@ async def observability_poller_loop(stop_event: "asyncio.Event") -> None:
     try:
         while not stop_event.is_set():
             try:
-                async with async_session_maker() as session:
-                    gateways = (await session.exec(select(Gateway))).all()
-                    for gateway in gateways:
-                        await poll_gateway_once(session, gateway)
+                async with async_session_maker() as enum_session:
+                    gateways = (await enum_session.exec(select(Gateway))).all()
+                # Snapshot to a list of detached references — each
+                # gateway gets its own session below so a failure or
+                # slow scrape doesn't hold the enum session open.
+                for gateway in list(gateways):
+                    try:
+                        async with async_session_maker() as gw_session:
+                            await poll_gateway_once(gw_session, gateway)
+                    except Exception:
+                        logger.exception(
+                            "observability_poller.gateway_iteration_failed gateway_id=%s",
+                            gateway.id,
+                        )
             except Exception:
                 logger.exception("observability_poller.iteration_failed")
             try:
