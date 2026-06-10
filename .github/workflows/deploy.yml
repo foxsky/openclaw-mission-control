@@ -47,15 +47,18 @@ jobs:
 
           backend=false; backend_deps=false
           frontend=false; frontend_deps=false
+          skills=false
           echo "$CHANGED" | grep -qE '^backend/' && backend=true
           echo "$CHANGED" | grep -qE '^backend/(uv\.lock|pyproject\.toml)$' && backend_deps=true
           echo "$CHANGED" | grep -qE '^frontend/' && frontend=true
           echo "$CHANGED" | grep -qE '^frontend/(package(-lock)?\.json)$' && frontend_deps=true
+          echo "$CHANGED" | grep -qE '^backend/skills/' && skills=true
 
           echo "backend=$backend" >> "$GITHUB_OUTPUT"
           echo "backend_deps=$backend_deps" >> "$GITHUB_OUTPUT"
           echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
           echo "frontend_deps=$frontend_deps" >> "$GITHUB_OUTPUT"
+          echo "skills=$skills" >> "$GITHUB_OUTPUT"
 
       - name: Update working tree
         if: steps.shas.outputs.needed == 'true'
@@ -107,6 +110,18 @@ jobs:
           sleep 5
           sudo /usr/bin/systemctl is-active mission-control
 
+      - name: Deploy skills to gateway (.60)
+        if: steps.shas.outputs.needed == 'true' && steps.surfaces.outputs.skills == 'true'
+        # The gateway auto-discovers skills via skills.load.watch=true
+        # (~250ms filesystem watch) — no reload or Sync API call needed.
+        # The runner's dedicated ed25519 key (mc-prod-64-runner-skills-deploy)
+        # is authorized on .60. No --prune: prod-only skills are left alone;
+        # pruning stays a deliberate manual operation.
+        run: |
+          set -euo pipefail
+          cd /home/mcontrol/openclaw-mission-control/backend/skills
+          ./deploy-skills.sh
+
       - name: Smoke test
         if: steps.shas.outputs.needed == 'true'
         run: |
@@ -146,6 +161,7 @@ jobs:
             echo "- needed: \`${{ steps.shas.outputs.needed }}\`"
             echo "- backend changed: \`${{ steps.surfaces.outputs.backend }}\` (deps: \`${{ steps.surfaces.outputs.backend_deps }}\`)"
             echo "- frontend changed: \`${{ steps.surfaces.outputs.frontend }}\` (deps: \`${{ steps.surfaces.outputs.frontend_deps }}\`)"
+            echo "- skills changed: \`${{ steps.surfaces.outputs.skills }}\` (deployed to .60 when true)"
             echo ""
-            echo "_.60 deploy is out of CI/CD scope — sync skills via local \`./deploy-skills.sh\` rsync, templates via MC Sync Templates API._"
+            echo "_.60 plugins and templates remain out of CI/CD scope — plugins via manual rsync (plugins/README.md), templates via MC Sync Templates API. Skills deploy automatically (step above)._"
           } >> "$GITHUB_STEP_SUMMARY"
