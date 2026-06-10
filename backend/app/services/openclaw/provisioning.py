@@ -11,6 +11,7 @@ import asyncio
 import json
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -941,6 +942,8 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
             logger.debug("patch_agent_heartbeats: no changes detected, skipping config.patch")
             return
 
+        _warn_unconfigured_heartbeat_model_providers(new_list, config_data)
+
         patch: dict[str, Any] = {"agents": {"list": new_list}}
         if runtime_patch is not None:
             for key, value in runtime_patch.items():
@@ -964,6 +967,44 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
         if base_hash:
             params["baseHash"] = base_hash
         await openclaw_call("config.patch", params, config=self._config)
+
+
+def _warn_unconfigured_heartbeat_model_providers(
+    new_list: Sequence[object],
+    config_data: dict[str, Any],
+) -> None:
+    """Warn when an outgoing heartbeat model targets an unconfigured provider.
+
+    Gateway-side migrations can retire provider keys (2026.6.5 renamed
+    ``openai-codex`` -> ``openai``); a heartbeat model against a missing
+    provider fails closed on the gateway. Log-only — the sync must not
+    block on gateway catalog drift.
+    """
+    models_section = config_data.get("models")
+    providers = models_section.get("providers") if isinstance(models_section, dict) else None
+    if not isinstance(providers, dict):
+        return
+    for entry in new_list:
+        if not isinstance(entry, dict):
+            continue
+        heartbeat = entry.get("heartbeat")
+        if not isinstance(heartbeat, dict):
+            continue
+        model = heartbeat.get("model")
+        # Bare model names (no provider/ prefix) may be gateway aliases —
+        # only unambiguous provider/model refs are checked.
+        if not isinstance(model, str) or "/" not in model:
+            continue
+        provider = model.split("/", 1)[0]
+        if provider not in providers:
+            logger.warning(
+                "patch_agent_heartbeats: heartbeat model %r for agent %s "
+                "references provider %r which is not configured on the "
+                "gateway — that heartbeat will fail closed",
+                model,
+                entry.get("id"),
+                provider,
+            )
 
 
 async def _gateway_config_agent_list(
