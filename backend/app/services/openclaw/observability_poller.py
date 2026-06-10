@@ -60,7 +60,7 @@ _auth_alert_log_state: dict[tuple[str, str, str, str], float] = {}
 _auth_last_checked: dict[str, float] = {}
 
 
-def evaluate_auth_alerts(snapshot: object, *, warn_below_ms: float) -> list[dict]:
+def evaluate_auth_alerts(snapshot: object, *, warn_below_ms: float) -> list[dict[str, object]]:
     """Evaluate a ``models.authStatus`` snapshot into alert dicts.
 
     Only OAuth profiles carry expiry semantics — ``type: token`` /
@@ -75,7 +75,7 @@ def evaluate_auth_alerts(snapshot: object, *, warn_below_ms: float) -> list[dict
     providers = snapshot.get("providers")
     if not isinstance(providers, list):
         return []
-    alerts: list[dict] = []
+    alerts: list[dict[str, object]] = []
     for provider_entry in providers:
         if not isinstance(provider_entry, dict):
             continue
@@ -128,7 +128,7 @@ def _should_log_auth_alert(
     return True
 
 
-async def check_gateway_auth_once(gateway: "Gateway") -> list[dict]:
+async def check_gateway_auth_once(gateway: "Gateway") -> list[dict[str, object]]:
     """Fetch ``models.authStatus`` and log throttled expiry warnings.
 
     Failures (older gateway, transport error) return an empty list —
@@ -156,7 +156,7 @@ async def check_gateway_auth_once(gateway: "Gateway") -> list[dict]:
             str(gateway.id),
             str(alert["provider"]),
             str(alert["profile_id"]),
-            alert["severity"],
+            str(alert["severity"]),
         )
         if _should_log_auth_alert(
             key,
