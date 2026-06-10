@@ -10,10 +10,6 @@ from a 429/error storm).
 
 from __future__ import annotations
 
-import logging
-
-import pytest
-
 from app.services.openclaw.observability_poller import (
     _should_log_auth_alert,
     evaluate_auth_alerts,
