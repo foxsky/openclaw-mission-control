@@ -23,9 +23,16 @@ from app.models.tasks import Task
 from app.services.openclaw.constants import MAX_WAKE_ATTEMPTS_WITHOUT_CHECKIN
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
-from app.services.openclaw.gateway_rpc import OpenClawGatewayError, openclaw_call
+from app.services.openclaw.gateway_rpc import (
+    OpenClawGatewayError,
+    get_tools_effective,
+    openclaw_call,
+)
 from app.services.openclaw.lifecycle_orchestrator import AgentLifecycleOrchestrator
-from app.services.openclaw.provisioning import reconcile_agent_heartbeat_enabled_flags
+from app.services.openclaw.provisioning import (
+    _gateway_config_for_board_id,
+    reconcile_agent_heartbeat_enabled_flags,
+)
 from app.services.task_dependencies import blocked_by_for_task
 
 logger = get_logger(__name__)
@@ -413,6 +420,83 @@ async def sweep_stuck_tasks() -> dict[str, int]:
     return {"scanned": scanned, "nudged": nudged}
 
 
+def _collect_effective_tool_ids(payload: object) -> set[str] | None:
+    """Extract tool ids from a ``tools.effective`` payload.
+
+    Returns ``None`` when the payload shape is unrecognized (older
+    gateway, changed contract) — callers must treat that as
+    indeterminate, not as "tool missing".
+    """
+    if not isinstance(payload, dict):
+        return None
+    groups = payload.get("groups")
+    if not isinstance(groups, list):
+        return None
+    ids: set[str] = set()
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        tools = group.get("tools")
+        if not isinstance(tools, list):
+            continue
+        for tool in tools:
+            if isinstance(tool, dict) and isinstance(tool.get("id"), str):
+                ids.add(tool["id"])
+    return ids
+
+
+async def _fetch_board_ids_for_lead_check() -> list[UUID]:
+    async with async_session_maker() as session:
+        return list((await session.exec(select(Board.id))).all())
+
+
+async def check_lead_message_tools_once() -> dict[str, int]:
+    """Assert each board lead still has the ``message`` tool.
+
+    MC seeds ``tools.alsoAllow: ["message"]`` on lead-* agents so the
+    Supervisor can reply on chat channels; losing the grant makes the
+    Supervisor silently mute (invisible until an operator notices).
+    Checks the lead's stable heartbeat session via ``tools.effective``.
+    RPC failures (archived session, older gateway) and unrecognized
+    payload shapes are skipped — this is a smoke alarm, not a gate.
+    """
+    checked = 0
+    missing = 0
+    for board_id in await _fetch_board_ids_for_lead_check():
+        config = await _gateway_config_for_board_id(board_id)
+        if config is None:
+            continue
+        session_key = f"agent:lead-{board_id}:main:heartbeat"
+        try:
+            payload = await get_tools_effective(session_key, config=config)
+        except OpenClawGatewayError as exc:
+            logger.debug(
+                "lead_message_tool_check.skip board_id=%s error=%s",
+                board_id,
+                str(exc),
+            )
+            continue
+        tool_ids = _collect_effective_tool_ids(payload)
+        if tool_ids is None:
+            logger.debug(
+                "lead_message_tool_check.indeterminate_payload board_id=%s",
+                board_id,
+            )
+            continue
+        checked += 1
+        if "message" not in tool_ids:
+            missing += 1
+            logger.warning(
+                "lead_message_tool_check.message_tool_missing board_id=%s "
+                "session_key=%s effective_tools=%s — Supervisor cannot reply "
+                "on chat channels; re-seed tools.alsoAllow via heartbeat sync",
+                board_id,
+                session_key,
+                len(tool_ids),
+            )
+    return {"checked": checked, "missing": missing}
+
+
 async def heartbeat_sweep_loop(stop_event: asyncio.Event) -> None:
     logger.info("heartbeat_sweep.loop_started interval_seconds=%s", SWEEP_INTERVAL_SECONDS)
     try:
@@ -427,6 +511,7 @@ async def heartbeat_sweep_loop(stop_event: asyncio.Event) -> None:
                 )
                 await sweep_once()
                 await sweep_stuck_tasks()
+                await check_lead_message_tools_once()
             except Exception:
                 logger.exception("heartbeat_sweep.iteration_failed")
             try:

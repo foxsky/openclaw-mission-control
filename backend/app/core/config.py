@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     # blip doesn't reset the rate. Defaults to 10 minutes — covers
     # 10 missed scrape cycles at the default 60s interval.
     gateway_observability_prior_lookback_seconds: int = 600
+    # Auth-expiry early warning: the poller calls ``models.authStatus``
+    # at this cadence (slower than the metrics poll — OAuth expiry moves
+    # in hours, not seconds) and logs throttled WARNINGs for expired or
+    # soon-to-expire OAuth profiles. Set to 0 to disable.
+    gateway_auth_status_check_interval_seconds: int = 900
+    # Warn when an OAuth profile has less than this many hours left.
+    # OpenAI OAuth profiles observed on this deployment run ~7-9 day
+    # lifetimes, so 48h gives ~2 days of actionable lead time.
+    gateway_auth_expiry_warn_hours: int = 48
 
     # RQ queueing / dispatch
     rq_redis_url: str = "redis://localhost:6379/0"

@@ -52,6 +52,130 @@ ERROR_METRIC_NAMES: dict[str, tuple[str, str]] = {
     "openclaw_run_completed_total": ("outcome", "error"),
 }
 
+# Auth-expiry alerts repeat at most once per (gateway, provider, profile,
+# severity) within this window. Process-local state — resets on restart,
+# which just means one extra warning, never a missed one.
+AUTH_ALERT_REWARN_SECONDS = 1800
+_auth_alert_log_state: dict[tuple[str, str, str, str], float] = {}
+_auth_last_checked: dict[str, float] = {}
+
+
+def evaluate_auth_alerts(snapshot: object, *, warn_below_ms: float) -> list[dict]:
+    """Evaluate a ``models.authStatus`` snapshot into alert dicts.
+
+    Only OAuth profiles carry expiry semantics — ``type: token`` /
+    ``status: static`` profiles never alert. The provider-level
+    ``status`` field is a worst-profile rollup (a provider with one
+    expired and one healthy profile reports ``expired`` while calls
+    still succeed), so provider-level alerts fire only when EVERY
+    OAuth profile is expired.
+    """
+    if not isinstance(snapshot, dict):
+        return []
+    providers = snapshot.get("providers")
+    if not isinstance(providers, list):
+        return []
+    alerts: list[dict] = []
+    for provider_entry in providers:
+        if not isinstance(provider_entry, dict):
+            continue
+        provider = provider_entry.get("provider")
+        profiles = provider_entry.get("profiles")
+        oauth_profiles = [
+            p
+            for p in (profiles if isinstance(profiles, list) else [])
+            if isinstance(p, dict) and p.get("type") == "oauth"
+        ]
+        expired_count = 0
+        for profile in oauth_profiles:
+            expiry = profile.get("expiry")
+            remaining = expiry.get("remainingMs") if isinstance(expiry, dict) else None
+            if not isinstance(remaining, (int, float)):
+                continue
+            base = {
+                "provider": provider,
+                "profile_id": profile.get("profileId"),
+                "remaining_ms": remaining,
+            }
+            if profile.get("status") == "expired" or remaining <= 0:
+                expired_count += 1
+                alerts.append({**base, "severity": "expired"})
+            elif remaining < warn_below_ms:
+                alerts.append({**base, "severity": "expiring"})
+        if oauth_profiles and expired_count == len(oauth_profiles):
+            alerts.append(
+                {
+                    "provider": provider,
+                    "profile_id": None,
+                    "remaining_ms": None,
+                    "severity": "provider_expired",
+                }
+            )
+    return alerts
+
+
+def _should_log_auth_alert(
+    key: tuple[str, str, str, str],
+    *,
+    now: float,
+    rewarn_seconds: float,
+    state: dict[tuple[str, str, str, str], float],
+) -> bool:
+    last = state.get(key)
+    if last is not None and (now - last) < rewarn_seconds:
+        return False
+    state[key] = now
+    return True
+
+
+async def check_gateway_auth_once(gateway: "Gateway") -> list[dict]:
+    """Fetch ``models.authStatus`` and log throttled expiry warnings.
+
+    Failures (older gateway, transport error) return an empty list —
+    this check must never disturb the metrics poll it rides along with.
+    """
+    import time
+
+    from app.core.config import settings
+    from app.services.openclaw.gateway_rpc import GatewayConfig, models_auth_status
+
+    config = GatewayConfig(
+        url=gateway.url,
+        token=gateway.token,
+        allow_insecure_tls=gateway.allow_insecure_tls,
+        disable_device_pairing=gateway.disable_device_pairing,
+    )
+    snapshot = await models_auth_status(config=config)
+    if snapshot is None:
+        return []
+    warn_below_ms = settings.gateway_auth_expiry_warn_hours * 3_600_000
+    alerts = evaluate_auth_alerts(snapshot, warn_below_ms=warn_below_ms)
+    now = time.monotonic()
+    for alert in alerts:
+        key = (
+            str(gateway.id),
+            str(alert["provider"]),
+            str(alert["profile_id"]),
+            alert["severity"],
+        )
+        if _should_log_auth_alert(
+            key,
+            now=now,
+            rewarn_seconds=AUTH_ALERT_REWARN_SECONDS,
+            state=_auth_alert_log_state,
+        ):
+            remaining = alert["remaining_ms"]
+            logger.warning(
+                "observability_poller.auth_alert gateway_id=%s provider=%s "
+                "profile=%s severity=%s remaining_hours=%s",
+                gateway.id,
+                alert["provider"],
+                alert["profile_id"],
+                alert["severity"],
+                round(remaining / 3_600_000, 1) if isinstance(remaining, (int, float)) else None,
+            )
+    return alerts
+
 
 @dataclass(frozen=True)
 class PriorSample:
@@ -400,6 +524,23 @@ async def _load_latest_prior_samples(
     return out
 
 
+async def _maybe_check_gateway_auth(gateway: "Gateway") -> None:
+    """Run the auth check at its own (slower) cadence than the metrics poll."""
+    import time
+
+    from app.core.config import settings
+
+    interval = settings.gateway_auth_status_check_interval_seconds
+    if interval <= 0 or not gateway.token:
+        return
+    now = time.monotonic()
+    last = _auth_last_checked.get(str(gateway.id))
+    if last is not None and (now - last) < interval:
+        return
+    _auth_last_checked[str(gateway.id)] = now
+    await check_gateway_auth_once(gateway)
+
+
 async def observability_poller_loop(stop_event: "asyncio.Event") -> None:
     """Long-running task: poll every configured gateway at the
     configured interval until stopped.
@@ -439,6 +580,13 @@ async def observability_poller_loop(stop_event: "asyncio.Event") -> None:
                     except Exception:
                         logger.exception(
                             "observability_poller.gateway_iteration_failed gateway_id=%s",
+                            gateway.id,
+                        )
+                    try:
+                        await _maybe_check_gateway_auth(gateway)
+                    except Exception:
+                        logger.exception(
+                            "observability_poller.auth_check_failed gateway_id=%s",
                             gateway.id,
                         )
             except Exception:
