@@ -6,9 +6,13 @@ watch, ~250ms debounce). No registry, no allow-list, no Sync API call.
 
 ## Source of truth
 
-This directory is authoritative. Skills landed here propagate to the gateway
-via `./deploy-skills.sh`. Any skill that exists on `.60` but not here is
-considered drift; pass `--prune` to rsync to remove it.
+This directory is authoritative. Since 2026-06-10, skills deploy
+automatically: the Deploy workflow runs `./deploy-skills.sh` on the
+self-hosted runner whenever a master push touches `backend/skills/**`
+(see `.github/workflows/deploy.yml`, "Deploy skills to gateway"). Manual
+runs remain for previews and pruning. Any skill that exists on `.60` but
+not here is considered drift; pass `--prune` to rsync to remove it —
+pruning is deliberately manual, CI never deletes.
 
 ## Layout
 

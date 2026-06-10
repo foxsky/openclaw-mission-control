@@ -15,9 +15,9 @@ control + visible diffs.
 
 ## Deploy
 
-Per `project_cicd_architecture.md`, `.60` is **out of CI/CD scope** —
-plugins are deployed manually via rsync, same pattern as the OpenClaw
-skills tree. Workflow:
+Plugins on `.60` are deployed manually via rsync. (Skills are no longer in
+this bucket: since 2026-06-10 the Deploy workflow ships `backend/skills/**`
+to `.60` automatically — see `.github/workflows/deploy.yml`.) Workflow:
 
 ```bash
 # from this directory on the operator's Mac:

@@ -10,6 +10,10 @@
 #   ./deploy-skills.sh --prune   # also delete prod-only skills not in local
 #   ./deploy-skills.sh --dry     # show what would change, do not write
 #
+# CI runs the no-flag form from the self-hosted runner on every master push
+# touching backend/skills/** (.github/workflows/deploy.yml). --prune and
+# --dry remain manual-only.
+#
 # Source of truth: this directory. Anything under here syncs upward.
 # Anything on .60 not under here is left alone unless --prune is passed.
 
