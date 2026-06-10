@@ -54,8 +54,18 @@ DEFAULT_HEARTBEAT_CONFIG: dict[str, Any] = {
     "skipWhenBusy": True,
 }
 # Note: gateway-only fields (model, ackMaxChars, prompt) are not included
-# here. They are preserved during config.patch merges because the merge
-# starts from the existing gateway config and only overwrites MC-managed keys.
+# here. They survive heartbeat syncs because MC merges client-side: the
+# overlay starts from the existing gateway heartbeat dict and only
+# overwrites MC-managed keys (see _updated_agent_list in provisioning.py).
+
+# Providers retired by gateway-side config migrations. The OpenClaw 2026.6.5
+# updater renamed ``openai-codex`` -> ``openai`` on the gateway; a heartbeat
+# model ref against a retired provider would be pushed back by the next sync
+# and fail closed (silent dead heartbeat for that agent). Maps retired
+# provider -> current replacement, used by the agents schema validator.
+RETIRED_MODEL_PROVIDERS: dict[str, str] = {
+    "openai-codex": "openai",
+}
 
 # Worker heartbeats disabled (0m) — workers wake via deliver=True only.
 # Supervisor heartbeat is 10m. OFFLINE_AFTER must exceed Supervisor interval + grace.

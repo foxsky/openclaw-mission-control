@@ -10,7 +10,7 @@ Companion to ``mc_client.py``. Talks to the OpenClaw gateway (default
 Usage::
 
     mc_hooks.py wake --text "external trigger fired"
-    mc_hooks.py agent --message "summarize today's PRs" --model openai-codex/gpt-5.4
+    mc_hooks.py agent --message "summarize today's PRs" --model openai/gpt-5.5
     cat body.md | mc_hooks.py agent --message - --name nightly-pr-summary
 
 Token resolution order:

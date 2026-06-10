@@ -162,8 +162,8 @@ function resolveLookup(
 /**
  * Split a config schema path into segments while preserving bracket-quoted keys.
  *
- * `agents.defaults.models["openai-codex/gpt-5.5"].params`
- *   → ["agents", "defaults", "models[\"openai-codex/gpt-5.5\"]", "params"]
+ * `agents.defaults.models["openai/gpt-5.5"].params`
+ *   → ["agents", "defaults", "models[\"openai/gpt-5.5\"]", "params"]
  */
 function splitPath(path: string): string[] {
   if (path === "." || path === "") return [];

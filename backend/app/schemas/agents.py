@@ -12,8 +12,32 @@ from sqlmodel import SQLModel
 from sqlmodel._compat import SQLModelConfig
 
 from app.schemas.common import NonEmptyStr
+from app.services.openclaw.constants import RETIRED_MODEL_PROVIDERS
 
 _RUNTIME_TYPE_REFERENCES = (datetime, UUID, NonEmptyStr)
+
+
+def _reject_retired_heartbeat_model(value: object) -> object:
+    """Reject heartbeat model refs against providers retired on the gateway.
+
+    A retired ref (e.g. ``openai-codex/gpt-5.5`` after the 2026.6.5 rename)
+    would be pushed back into the gateway config by the next heartbeat sync
+    and fail closed there — a silent dead heartbeat for that agent.
+    """
+    if not isinstance(value, Mapping):
+        return value
+    model = value.get("model")
+    if not isinstance(model, str):
+        return value
+    provider = model.split("/", 1)[0]
+    replacement = RETIRED_MODEL_PROVIDERS.get(provider)
+    if replacement is not None:
+        msg = (
+            f"heartbeat_config.model references retired provider "
+            f"'{provider}' ({model!r}); use '{replacement}/...' instead"
+        )
+        raise ValueError(msg)
+    return value
 
 
 def _normalize_identity_profile(
@@ -122,6 +146,12 @@ class AgentBase(SQLModel):
         """Normalize identity-profile values into trimmed string mappings."""
         return _normalize_identity_profile(value)
 
+    @field_validator("heartbeat_config", mode="before")
+    @classmethod
+    def reject_retired_heartbeat_model(cls, value: object) -> object:
+        """Reject heartbeat model refs against retired gateway providers."""
+        return _reject_retired_heartbeat_model(value)
+
 
 class AgentCreate(AgentBase):
     """Payload for creating a new agent."""
@@ -210,6 +240,12 @@ class AgentUpdate(SQLModel):
     ) -> dict[str, str] | None:
         """Normalize identity-profile values into trimmed string mappings."""
         return _normalize_identity_profile(value)
+
+    @field_validator("heartbeat_config", mode="before")
+    @classmethod
+    def reject_retired_heartbeat_model(cls, value: object) -> object:
+        """Reject heartbeat model refs against retired gateway providers."""
+        return _reject_retired_heartbeat_model(value)
 
 
 class AgentRead(AgentBase):

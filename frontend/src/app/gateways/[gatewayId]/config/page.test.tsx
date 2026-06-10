@@ -137,7 +137,7 @@ describe("GatewayConfigPage", () => {
         status: 200,
         data: {
           gateway_id: "gw-1",
-          path: 'agents.defaults.models["openai-codex/gpt-5.5"].params',
+          path: 'agents.defaults.models["openai/gpt-5.5"].params',
           schema: {},
           reloadKind: "restart",
           children: [],
@@ -151,7 +151,7 @@ describe("GatewayConfigPage", () => {
     renderPage();
     // The model-with-dotted-key segment is rendered verbatim, not split on the inner dot
     expect(
-      screen.getByRole("button", { name: 'models["openai-codex/gpt-5.5"]' }),
+      screen.getByRole("button", { name: 'models["openai/gpt-5.5"]' }),
     ).toBeInTheDocument();
   });
 
