@@ -4,6 +4,8 @@
 >
 > **v2 changelog (2026-06-17):** Rewritten after a four-agent review — INPACTA + INOVATEC-JP reference analysis, a Mission Control frontend architecture audit, and an adversarial plan review. **Major change:** InovaTHE is now an *independent standalone project*, NOT built inside the OpenClaw Mission Control Next.js app. This removes the auth-boundary, global `lang`/metadata, and shared-CSS risks that dominated v1. Governance guardrails, the test strategy, and the IA were also hardened.
 >
+> **v3.2 changelog (2026-06-17):** Operator provided the deploy target — production host `root@192.168.2.62:~/inovathe` (static `out/` served from there). Recorded in Tech Stack, Decided Assumptions, and the handoff; deploy remains a post-approval step, not the implementing agent's job.
+>
 > **v3.1 changelog (2026-06-17):** Non-interactive-readiness pass (second Codex re-review). Replaced "Open Questions" with a **Decided Assumptions** table (every unknown resolved to a baked-in default); pinned the exact non-interactive scaffold command, target-directory behavior, and one-commit lifecycle; added the required **utility/accessibility strings** to the Copy deck; resolved the stale Editais conflict (single Transparência block, no separate section/nav/footer link); pinned a plain text-only wordmark; dropped the optional `/acessibilidade` page; made the axe pass optional (structural checklist is the gate); and fixed the misleading hero CTA (`Ver informações de contato`).
 >
 > **v3 changelog (2026-06-17):** Hardened after an independent Codex (gpt-5.5/xhigh) spec review. Added a single **Copy Source-of-Truth** deck (no invented copy); made the contact section **non-collecting** (LGPD liability for a body with no data controller); promoted **static export, `robots: noindex`, and an a11y/SEO baseline** to hard requirements; reframed the negative test as a **best-effort tripwire, not proof**; banned photographic/representational imagery and all data-collection/third-party scripts; softened partner/PMO wording; and replaced MC-specific cleanup steps with a single "stay inside the InovaTHE repo" rule.
@@ -38,7 +40,7 @@ InovaTHE lives in its **own repository**, scaffolded fresh. It shares nothing wi
 - **Styling:** Tailwind CSS (project-scoped; no shared design tokens)
 - **Tests:** Vitest + Testing Library (jsdom)
 - **Static export is a hard constraint, not just a capability.** Set `output: "export"` in `next.config.ts`; the build MUST produce `out/index.html`. Because the first pass is static + non-collecting, these are **banned**: Server Actions, route handlers reading `Request`, cookies/headers, `rewrites`/`redirects`/`headers` config, and default `next/image` optimization (use `images: { unoptimized: true }` or plain `<img>`).
-- **Deploy:** the agent does NOT deploy. It produces the static `out/` build and stops at the Task 6 review handoff. Hosting, domain, and dropping `noindex` are later operator actions, out of scope for this build.
+- **Deploy target (known):** the production host is `root@192.168.2.62:~/inovathe` — the static `out/` is served from there. The implementing agent still does NOT deploy: it produces the `out/` build and stops at the Task 6 review handoff. Copying `out/` to `192.168.2.62:~/inovathe` (and dropping `noindex`) is a **post-approval** step (operator or a DevOps-agent task), never automatic.
 - **Verification:** browser screenshot at 1440px and 390px
 
 (Recorded rationale, not a decision to revisit: a tiny static institutional placeholder does not strictly *need* a React framework; plain HTML/CSS or Astro would also work. Next 16 is chosen because the Supervisor's programmer agents already work in the Next/React ecosystem. The stack is **decided** — the agent uses Next 16; it does not weigh alternatives.)
@@ -403,6 +405,7 @@ The Supervisor agent is non-interactive, so these are **decisions, not questions
 | Repo / package manager / Node / stack | `~/Workspace/Agent/inovathe-site`, npm, Node 20.9+ (22 LTS), Next 16 + TS + Tailwind + Vitest, static export. |
 | INPACTA reference identity (Maringá consultancy vs Mossoró tech park) | Use the captured structural patterns regardless; the identity flag does not change this build. |
 | Indexing | `robots: noindex` — stays noindex; the agent never un-blocks indexing. |
+| Deploy target | Production host `root@192.168.2.62:~/inovathe` (static `out/` served from there). Build only; deploy is a post-approval step, not the implementing agent's job. |
 
 These remain real open facts for a **future operator-reviewed revision** (once InovaTHE's legal arrangement, authority, projects, and channels are confirmed). They are recorded here for that future pass — not as work for, or questions during, this build.
 
@@ -413,7 +416,7 @@ These remain real open facts for a **future operator-reviewed revision** (once I
 Use this when unpausing the MC task after operator approval:
 
 ```text
-Approved plan: build a first-pass InovaTHE institutional landing page as an INDEPENDENT standalone project. Execute end-to-end, NON-INTERACTIVELY — every decision is in the plan; do not stop to ask anyone. Decided stack: repo ~/Workspace/Agent/inovathe-site, npm, Node 20.9+ (Node 22 LTS), Next 16 + TypeScript + Tailwind + Vitest, static export (output:"export"). The agent does NOT deploy — produce the static out/ build and stop at the Task 6 review handoff. Do NOT read, edit, or touch the OpenClaw Mission Control repo or any file outside the new InovaTHE repo.
+Approved plan: build a first-pass InovaTHE institutional landing page as an INDEPENDENT standalone project. Execute end-to-end, NON-INTERACTIVELY — every decision is in the plan; do not stop to ask anyone. Decided stack: repo ~/Workspace/Agent/inovathe-site, npm, Node 20.9+ (Node 22 LTS), Next 16 + TypeScript + Tailwind + Vitest, static export (output:"export"). The agent does NOT deploy — produce the static out/ build and stop at the Task 6 review handoff. (Known deploy target for the post-approval step: root@192.168.2.62:~/inovathe.) Do NOT read, edit, or touch the OpenClaw Mission Control repo or any file outside the new InovaTHE repo.
 
 Positioning: civic-innovation + governance blend (INOVATEC-JP project model + InPACTA transparency/governance structure). Treat both reference sites as IA/positioning references only — do not copy their text, design, logos, or claims. Specifically banned copy: "ponte entre academia, governo" (copied from INOVATEC-JP) and "seja pesquisador".
 
