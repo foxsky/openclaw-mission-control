@@ -521,6 +521,44 @@ async def _validate_parent_task_id(
         )
 
 
+async def _inherit_delivery_contract_from_parent(
+    session: AsyncSession,
+    *,
+    task: Task,
+) -> None:
+    """Fill unset delivery-contract fields on a child task from its parent.
+
+    Decomposed child tasks (created with a ``parent_task_id``) routinely
+    omit the delivery contract because the squad agents that will execute
+    them are API-forbidden from setting those lead-only fields. Without
+    inheritance the child is born without a contract and silently
+    deadlocks the first time anyone moves it to ``in_progress``: the move
+    422s on the missing ``review_packet_type`` / ``validation_target``
+    triplet (see ``_require_delivery_contract_for_task_state``) and the
+    assigned agent cannot set them. Inheriting from the parent — whose
+    contract an operator/lead set once — keeps the whole decomposed
+    subtree actionable.
+
+    Only fills fields the child left ``None``; an explicit child value
+    always wins. No-op when the task has no parent or the parent row is
+    missing (``_validate_parent_task_id`` raises the proper error for a
+    genuinely invalid parent reference).
+    """
+    if task.parent_task_id is None:
+        return
+    parent = await Task.objects.by_id(task.parent_task_id).first(session)
+    if parent is None:
+        return
+    if task.review_packet_type is None:
+        task.review_packet_type = parent.review_packet_type
+    if task.validation_target is None:
+        task.validation_target = parent.validation_target
+    if task.validation_target_kind is None:
+        task.validation_target_kind = parent.validation_target_kind
+    if task.validation_target_scope is None:
+        task.validation_target_scope = parent.validation_target_scope
+
+
 def _operator_decision_block_error(summary: str | None = None) -> HTTPException:
     message = "Task is blocked pending operator decision."
     if summary:
@@ -2867,6 +2905,10 @@ async def create_task(
 
     task = Task.model_validate(data)
     task.board_id = board.id
+    # Decomposed children inherit the parent's delivery contract so they
+    # don't deadlock on a missing review_packet_type / validation_target
+    # triplet that the executing squad agent is API-forbidden from setting.
+    await _inherit_delivery_contract_from_parent(session, task=task)
     # ``task.status`` is non-None on the model (default 'inbox'); the
     # normaliser declares ``str | None`` for callers that pass payloads
     # with optional status, but here the input is always concrete.
