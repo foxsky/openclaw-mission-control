@@ -98,6 +98,25 @@ def test_name_based_reviewer_verdict_rejected_on_inbox() -> None:
     assert exc.value.status_code == 409
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "**Architect review** — `abc` · **Verdict: FAIL**",  # bold wraps label+value
+        "**Architect review** — `abc` · **Verdict:** FAIL",  # bold label, plain value
+        "**Architect review** — `abc` · Verdict: **FAIL**",  # plain label, bold value
+        "VERDICT:  `INCONCLUSIVE`  — target unreachable",  # backtick-wrapped value
+    ],
+)
+def test_markdown_verdict_variants_rejected_on_inbox(message: str) -> None:
+    # An Architect/review-only reviewer has no VERDICT-prefix format gate, so the
+    # declaration regex must tolerate markdown emphasis around the verdict token.
+    with pytest.raises(HTTPException) as exc:
+        _require_verdict_comment_in_review_flow(
+            task_status="inbox", message=message, actor=_architect()
+        )
+    assert exc.value.status_code == 409
+
+
 @pytest.mark.parametrize("status", ["review", "rework"])
 def test_verdict_comment_allowed_in_review_flow(status: str) -> None:
     # No raise on review/rework — the legitimate verdict path.

@@ -238,12 +238,15 @@ REVIEW_PASS_VERDICT_RE = re.compile(
     r"^\s*(?:VERDICT|Verdict|Corrected verdict):\s*PASS\b",
     re.IGNORECASE | re.MULTILINE,
 )
-# Any verdict declaration anywhere in a comment — matches both the QA
-# `VERDICT: …` prefix and the Architect `**Verdict: …**` inline shape. Used to
-# keep a validator's free-text verdict comment out of the inbox column,
-# mirroring the structured review-event gate.
+# Any verdict declaration anywhere in a comment — matches the QA `VERDICT: …`
+# prefix and the Architect inline shapes (`**Verdict: FAIL**`, `**Verdict:**
+# FAIL`, `Verdict: **FAIL**`). The `[\s*_`]*` run tolerates markdown emphasis /
+# backticks between the colon and the verdict token so a review-only/Architect
+# reviewer — who has no VERDICT-prefix format requirement — can't dodge the gate
+# with bold markers. Used to keep a validator's free-text verdict comment out of
+# the inbox column, mirroring the structured review-event gate.
 VERDICT_DECLARATION_RE = re.compile(
-    r"\bVERDICT:\s*(?:PASS|FAIL|INCONCLUSIVE|INFRA BLOCKED)\b",
+    r"\bVERDICT:[\s*_`]*(?:PASS|FAIL|INCONCLUSIVE|INFRA BLOCKED)\b",
     re.IGNORECASE,
 )
 SOURCE_OR_BUNDLE_EVIDENCE_RE = re.compile(
