@@ -436,6 +436,12 @@ def _actor_is_verdict_posting_reviewer(actor: ActorContext) -> bool:
     qa, devops) that ``record_task_review_event`` also authorizes via
     ``_allowed_reviewer_roles_for_agent``. Excludes the board lead, who
     legitimately quotes verdicts in routing comments.
+
+    The two flow-field checks are kept as explicit disjuncts (not folded into
+    the role-set check): ``_allowed_reviewer_roles_for_agent`` only assigns a
+    qa role when the agent's name/role carries an ``e2e``/``unit`` keyword, so a
+    ``validation_flow=qa_validation`` agent with a bare name would be missed by
+    the role set alone. See ``test_bare_named_qa_validation_agent_is_gated``.
     """
     if actor.actor_type != "agent" or actor.agent is None:
         return False
@@ -469,7 +475,7 @@ def _require_verdict_comment_in_review_flow(
     """
     if not _actor_is_verdict_posting_reviewer(actor):
         return
-    if task_status in ("review", "rework"):
+    if task_status in _REVIEW_VERDICT_STATUSES:
         return
     if not VERDICT_DECLARATION_RE.search(message):
         return
@@ -942,6 +948,8 @@ def _require_delivery_contract_with_metric(
 
 
 _DEPLOY_TRUTH_REQUIRED_STATUSES = STATUS_GATES["deploy_truth"]
+# Statuses on which a reviewer verdict (structured event or comment) is valid.
+_REVIEW_VERDICT_STATUSES = STATUS_GATES["review_verdict"]
 
 _DEPLOY_TRUTH_PROJECTED_FIELDS = (
     "status",
@@ -3702,7 +3710,7 @@ async def record_task_review_event(
     # fires its FAIL/PASS/lead wakes downstream. Agents do not reliably obey the
     # skill's "verify status is review" rule (a QA-E2E agent looped INCONCLUSIVE
     # on an inbox task), so enforce the allowlist at write time.
-    if task.status not in ("review", "rework"):
+    if task.status not in _REVIEW_VERDICT_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={

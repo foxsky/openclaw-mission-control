@@ -23,7 +23,10 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.api.tasks import _require_verdict_comment_in_review_flow
+from app.api.tasks import (
+    _allowed_reviewer_roles_for_agent,
+    _require_verdict_comment_in_review_flow,
+)
 from app.models.agents import Agent
 
 
@@ -143,3 +146,19 @@ def test_non_validator_not_gated() -> None:
     _require_verdict_comment_in_review_flow(
         task_status="inbox", message=QA_VERDICT, actor=_implementer()
     )
+
+
+def test_bare_named_qa_validation_agent_is_gated() -> None:
+    """A `validation_flow=qa_validation` agent whose name carries no `e2e`/`unit`
+    keyword gets NO reviewer role from `_allowed_reviewer_roles_for_agent`, so a
+    role-set-only reviewer check would miss it. The explicit flow-field disjunct
+    in `_actor_is_verdict_posting_reviewer` is what keeps it gated — this guards
+    against a future collapse of that union into the role set alone.
+    """
+    actor = _qa()  # name="agent" — carries no e2e/unit keyword
+    assert _allowed_reviewer_roles_for_agent(actor.agent) == set()
+    with pytest.raises(HTTPException) as exc:
+        _require_verdict_comment_in_review_flow(
+            task_status="inbox", message=QA_VERDICT, actor=actor
+        )
+    assert exc.value.status_code == 409
