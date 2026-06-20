@@ -72,6 +72,7 @@ async def _seed_agent_task(
     with_comment: bool = False,
     agent_name: str = "Worker Agent",
     agent_identity_profile: dict[str, Any] | None = None,
+    task_status: str = "in_progress",
 ) -> tuple[str, Board, Agent, Task]:
     token = "test-agent-token-" + uuid4().hex
     org_id = uuid4()
@@ -115,7 +116,7 @@ async def _seed_agent_task(
         board_id=board_id,
         title="Live task",
         description="",
-        status="in_progress",
+        status=task_status,
         assigned_agent_id=agent_id,
     )
     session.add(task)
@@ -268,6 +269,9 @@ async def test_qa_validation_comment_accepts_verdict_first() -> None:
             session,
             agent_name="QA-E2E",
             agent_identity_profile={"validation_flow": "qa_validation"},
+            # A QA verdict belongs on a task in `review`; the verdict-comment
+            # status gate rejects verdicts posted off the review flow.
+            task_status="review",
         )
 
     try:

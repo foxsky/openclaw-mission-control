@@ -238,6 +238,14 @@ REVIEW_PASS_VERDICT_RE = re.compile(
     r"^\s*(?:VERDICT|Verdict|Corrected verdict):\s*PASS\b",
     re.IGNORECASE | re.MULTILINE,
 )
+# Any verdict declaration anywhere in a comment — matches both the QA
+# `VERDICT: …` prefix and the Architect `**Verdict: …**` inline shape. Used to
+# keep a validator's free-text verdict comment out of the inbox column,
+# mirroring the structured review-event gate.
+VERDICT_DECLARATION_RE = re.compile(
+    r"\bVERDICT:\s*(?:PASS|FAIL|INCONCLUSIVE|INFRA BLOCKED)\b",
+    re.IGNORECASE,
+)
 SOURCE_OR_BUNDLE_EVIDENCE_RE = re.compile(
     r"\b(?:bundle[- ]grep|source[- ]grep|source[- ]level|grep found|"
     r"found in (?:the )?(?:deployed )?bundle|bundle contains|source contains|"
@@ -417,6 +425,39 @@ def _require_rendered_live_pass_has_browser_evidence(message: str, actor: ActorC
     if BROWSER_RENDERED_EVIDENCE_RE.search(message):
         return
     raise _rendered_live_evidence_error()
+
+
+def _require_verdict_comment_in_review_flow(
+    *,
+    task: Task,
+    message: str,
+    actor: ActorContext,
+) -> None:
+    """Companion to the ``record_task_review_event`` status gate: a validator
+    can also express a verdict as a free-text comment, and that comment must
+    not land on a task outside the review flow (``review``/``rework``) either —
+    otherwise the structured-event gate is trivially bypassed by posting the
+    same verdict as prose. Scoped to validator actors + verdict-shaped messages
+    so a non-verdict routing note ("@lead this task is not in review") on a
+    non-review task is still allowed.
+    """
+    if not (_actor_is_qa_validation_agent(actor) or _actor_is_review_only_agent(actor)):
+        return
+    if task.status in ("review", "rework"):
+        return
+    if not VERDICT_DECLARATION_RE.search(message):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": (
+                f"Cannot post a review verdict comment on a `{task.status}` task "
+                "— verdicts belong on a task in `review` (or `rework`). Route the "
+                "task into review first, or post a non-verdict routing note."
+            ),
+            "code": "verdict_comment_task_not_in_review",
+        },
+    )
 
 
 def _require_comment_not_claim_unapplied_rework_routing(
@@ -5937,6 +5978,11 @@ async def create_task_comment(
     await _validate_task_comment_access(session, task=task, actor=actor)
     _validate_task_comment_format_for_actor(payload.message, actor)
     _require_rendered_live_pass_has_browser_evidence(payload.message, actor)
+    _require_verdict_comment_in_review_flow(
+        task=task,
+        message=payload.message,
+        actor=actor,
+    )
     _require_comment_not_claim_unapplied_rework_routing(
         task=task,
         message=payload.message,
