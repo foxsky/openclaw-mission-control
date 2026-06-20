@@ -238,6 +238,17 @@ REVIEW_PASS_VERDICT_RE = re.compile(
     r"^\s*(?:VERDICT|Verdict|Corrected verdict):\s*PASS\b",
     re.IGNORECASE | re.MULTILINE,
 )
+# Any verdict declaration anywhere in a comment — matches the QA `VERDICT: …`
+# prefix and the Architect inline shapes (`**Verdict: FAIL**`, `**Verdict:**
+# FAIL`, `Verdict: **FAIL**`). The `[\s*_`]*` run tolerates markdown emphasis /
+# backticks between the colon and the verdict token so a review-only/Architect
+# reviewer — who has no VERDICT-prefix format requirement — can't dodge the gate
+# with bold markers. Used to keep a validator's free-text verdict comment out of
+# the inbox column, mirroring the structured review-event gate.
+VERDICT_DECLARATION_RE = re.compile(
+    r"\bVERDICT:[\s*_`]*(?:PASS|FAIL|INCONCLUSIVE|INFRA BLOCKED)\b",
+    re.IGNORECASE,
+)
 SOURCE_OR_BUNDLE_EVIDENCE_RE = re.compile(
     r"\b(?:bundle[- ]grep|source[- ]grep|source[- ]level|grep found|"
     r"found in (?:the )?(?:deployed )?bundle|bundle contains|source contains|"
@@ -417,6 +428,68 @@ def _require_rendered_live_pass_has_browser_evidence(message: str, actor: ActorC
     if BROWSER_RENDERED_EVIDENCE_RE.search(message):
         return
     raise _rendered_live_evidence_error()
+
+
+def _actor_is_verdict_posting_reviewer(actor: ActorContext) -> bool:
+    """Any agent that can author a reviewer verdict — the flow-flagged QA /
+    review-only validators, plus the role/name-recognised reviewers (architect,
+    qa, devops) that ``record_task_review_event`` also authorizes via
+    ``_allowed_reviewer_roles_for_agent``. Excludes the board lead, who
+    legitimately quotes verdicts in routing comments.
+
+    The two flow-field checks are kept as explicit disjuncts (not folded into
+    the role-set check): ``_allowed_reviewer_roles_for_agent`` only assigns a
+    qa role when the agent's name/role carries an ``e2e``/``unit`` keyword, so a
+    ``validation_flow=qa_validation`` agent with a bare name would be missed by
+    the role set alone. See ``test_bare_named_qa_validation_agent_is_gated``.
+    """
+    if actor.actor_type != "agent" or actor.agent is None:
+        return False
+    if actor.agent.is_board_lead:
+        return False
+    return (
+        _actor_is_qa_validation_agent(actor)
+        or _actor_is_review_only_agent(actor)
+        or bool(_allowed_reviewer_roles_for_agent(actor.agent) - {"lead"})
+    )
+
+
+def _require_verdict_comment_in_review_flow(
+    *,
+    task_status: str,
+    message: str,
+    actor: ActorContext,
+) -> None:
+    """Companion to the ``record_task_review_event`` status gate: a validator
+    can also express a verdict as a free-text comment, and that comment must
+    not land on a task outside the review flow (``review``/``rework``) either —
+    otherwise the structured-event gate is trivially bypassed by posting the
+    same verdict as prose. Scoped to verdict-posting reviewers + verdict-shaped
+    messages so a non-verdict routing note ("@lead this task is not in review")
+    or a lead's verdict-quoting routing comment is still allowed.
+
+    ``task_status`` is the *resulting* status: the comment endpoint passes the
+    task's current status, while the ``PATCH``/``update_task`` inline-comment
+    path passes the projected status so a single PATCH that moves a task to
+    ``review`` *and* posts the verdict is allowed.
+    """
+    if not _actor_is_verdict_posting_reviewer(actor):
+        return
+    if task_status in _REVIEW_VERDICT_STATUSES:
+        return
+    if not VERDICT_DECLARATION_RE.search(message):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": (
+                f"Cannot post a review verdict comment on a `{task_status}` task "
+                "— verdicts belong on a task in `review` (or `rework`). Route the "
+                "task into review first, or post a non-verdict routing note."
+            ),
+            "code": "verdict_comment_task_not_in_review",
+        },
+    )
 
 
 def _require_comment_not_claim_unapplied_rework_routing(
@@ -875,6 +948,8 @@ def _require_delivery_contract_with_metric(
 
 
 _DEPLOY_TRUTH_REQUIRED_STATUSES = STATUS_GATES["deploy_truth"]
+# Statuses on which a reviewer verdict (structured event or comment) is valid.
+_REVIEW_VERDICT_STATUSES = STATUS_GATES["review_verdict"]
 
 _DEPLOY_TRUTH_PROJECTED_FIELDS = (
     "status",
@@ -3625,6 +3700,28 @@ async def record_task_review_event(
         actor=actor,
     )
     _require_reviewer_role_allowed(actor=actor, reviewer_role=payload.reviewer_role)
+    # Deterministic "no work on the inbox column" gate (placed AFTER write-access
+    # and reviewer-role checks so an unauthorized / wrong-role actor still gets
+    # its 403, not this 409). A reviewer verdict only makes sense once a task has
+    # entered the review flow: `review` is the canonical path and `rework` takes
+    # a re-verdict on a returned task. Every other status — `inbox` (the lead's
+    # unrouted / dependency-blocked backlog), `in_progress`, `done`, `cancelled`
+    # — has no legitimate verdict, and recording one still commits the event and
+    # fires its FAIL/PASS/lead wakes downstream. Agents do not reliably obey the
+    # skill's "verify status is review" rule (a QA-E2E agent looped INCONCLUSIVE
+    # on an inbox task), so enforce the allowlist at write time.
+    if task.status not in _REVIEW_VERDICT_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": (
+                    f"Cannot record a review verdict on a `{task.status}` task — "
+                    "verdicts are only valid on tasks in `review` (or `rework` "
+                    "for a re-verdict). Route the task into review first."
+                ),
+                "code": "review_event_task_not_in_review",
+            },
+        )
     await _require_review_event_artifact_completeness(payload, task, session)
     await _require_supervisor_citation_in_verdict_comment(
         payload,
@@ -5756,6 +5853,15 @@ async def _finalize_updated_task(
     if update.comment is not None and update.comment.strip():
         _validate_task_comment_format_for_actor(update.comment, update.actor)
         _require_rendered_live_pass_has_browser_evidence(update.comment, update.actor)
+        # Same verdict-status gate as the POST /comments path. Use the projected
+        # status so a single PATCH that moves a task into review AND posts the
+        # verdict is allowed; an inline VERDICT comment on a task that stays off
+        # the review flow is rejected.
+        _require_verdict_comment_in_review_flow(
+            task_status=str(update.updates.get("status") or update.task.status),
+            message=update.comment,
+            actor=update.actor,
+        )
         if update.updates.get("status") != "rework":
             _require_comment_not_claim_unapplied_rework_routing(
                 task=update.task,
@@ -5915,6 +6021,11 @@ async def create_task_comment(
     await _validate_task_comment_access(session, task=task, actor=actor)
     _validate_task_comment_format_for_actor(payload.message, actor)
     _require_rendered_live_pass_has_browser_evidence(payload.message, actor)
+    _require_verdict_comment_in_review_flow(
+        task_status=task.status,
+        message=payload.message,
+        actor=actor,
+    )
     _require_comment_not_claim_unapplied_rework_routing(
         task=task,
         message=payload.message,

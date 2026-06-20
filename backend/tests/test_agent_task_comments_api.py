@@ -72,6 +72,7 @@ async def _seed_agent_task(
     with_comment: bool = False,
     agent_name: str = "Worker Agent",
     agent_identity_profile: dict[str, Any] | None = None,
+    task_status: str = "in_progress",
 ) -> tuple[str, Board, Agent, Task]:
     token = "test-agent-token-" + uuid4().hex
     org_id = uuid4()
@@ -115,7 +116,7 @@ async def _seed_agent_task(
         board_id=board_id,
         title="Live task",
         description="",
-        status="in_progress",
+        status=task_status,
         assigned_agent_id=agent_id,
     )
     session.add(task)
@@ -268,6 +269,9 @@ async def test_qa_validation_comment_accepts_verdict_first() -> None:
             session,
             agent_name="QA-E2E",
             agent_identity_profile={"validation_flow": "qa_validation"},
+            # A QA verdict belongs on a task in `review`; the verdict-comment
+            # status gate rejects verdicts posted off the review flow.
+            task_status="review",
         )
 
     try:
@@ -286,6 +290,65 @@ async def test_qa_validation_comment_accepts_verdict_first() -> None:
 
         assert response.status_code == 200
         assert response.json()["message"].startswith("VERDICT: FAIL")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_qa_verdict_comment_rejected_on_inbox() -> None:
+    """POST /comments: a QA verdict must not land on an inbox task."""
+    engine = await _make_engine()
+    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    app = _build_test_app(session_maker)
+
+    async with session_maker() as session:
+        token, board, _agent, task = await _seed_agent_task(
+            session,
+            agent_name="QA-E2E",
+            agent_identity_profile={"validation_flow": "qa_validation"},
+            task_status="inbox",
+        )
+
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/comments",
+                headers={"X-Agent-Token": token},
+                json={"message": "VERDICT: FAIL\nBlocking ACs: org switcher"},
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "verdict_comment_task_not_in_review"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_qa_verdict_inline_patch_comment_rejected_on_inbox() -> None:
+    """PATCH /tasks/{id} inline comment: the same verdict must also be rejected
+    on an inbox task — the second write path Codex flagged as a bypass."""
+    engine = await _make_engine()
+    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    app = _build_test_app(session_maker)
+
+    async with session_maker() as session:
+        token, board, _agent, task = await _seed_agent_task(
+            session,
+            agent_name="QA-E2E",
+            agent_identity_profile={"validation_flow": "qa_validation"},
+            task_status="inbox",
+        )
+
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.patch(
+                f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+                headers={"X-Agent-Token": token},
+                json={"comment": "VERDICT: FAIL\nBlocking ACs: org switcher"},
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "verdict_comment_task_not_in_review"
     finally:
         await engine.dispose()
 

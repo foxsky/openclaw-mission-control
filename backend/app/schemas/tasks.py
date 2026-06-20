@@ -172,6 +172,11 @@ STATUS_GATES: dict[str, frozenset[str]] = {
     # from scope; QA-ing it is unambiguously wrong). Other non-active
     # statuses (inbox/rework) are accepted with an audit row.
     "deploy_notify_rejected": frozenset({"cancelled"}),
+    # Statuses on which a reviewer verdict is valid — `review` is the
+    # canonical path and `rework` takes a re-verdict on a returned task.
+    # Both the structured review-event gate and the verdict-comment gate
+    # read this allowlist so they cannot drift from each other.
+    "review_verdict": frozenset({"review", "rework"}),
 }
 
 DELIVERY_CONTRACT_REQUIRED_STATUSES = STATUS_GATES["delivery_contract"]
