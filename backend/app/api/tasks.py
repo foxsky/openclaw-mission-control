@@ -3619,6 +3619,26 @@ async def record_task_review_event(
     """Record an append-only structured reviewer verdict for a task."""
     if task.board_id is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+    # Deterministic "no work on the inbox column" gate: a reviewer verdict only
+    # makes sense once the task has entered the review flow. `inbox` is the
+    # lead's unrouted backlog (or an assigned-but-dependency-blocked task) — a
+    # validator that records a verdict there is working a task that was never
+    # routed to it. The QA/Architect skills already say "verify status is
+    # review, else stop", but agents do not reliably obey prompts (a QA-E2E
+    # agent looped INCONCLUSIVE on an inbox task), so enforce it at write time.
+    # Scoped to `inbox` only: `rework` re-verdicts are legitimate.
+    if task.status == "inbox":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": (
+                    "Cannot record a review verdict on an `inbox` task — inbox "
+                    "is the lead's unrouted backlog, not the review queue. The "
+                    "task must be routed into review before it can be validated."
+                ),
+                "code": "review_event_task_in_inbox",
+            },
+        )
     agent_id = await _require_task_pipeline_write_access(
         session,
         task=task,
