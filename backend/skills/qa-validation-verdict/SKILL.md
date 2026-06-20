@@ -84,18 +84,26 @@ allows variation (`or measured equivalent`, `or above`, `at least`).
 
 ## Comment Format
 
-Post one task comment:
+Post one task comment. **The dashboard renders comments as Markdown**, so the
+validation matrix MUST be a real Markdown table with a **blank line before and
+after it** — without those blank lines the table renders as literal pipe-text
+instead of a matrix. Use bold labels for the other fields. Post the content
+itself, not the surrounding code fence; keep the final `@lead` and `Lead wake:`
+lines exactly as shown.
 
-```text
-VERDICT: PASS/FAIL/INCONCLUSIVE/INFRA BLOCKED
-$AGENT_NAME validation for $TASK_ID
-Target: <url/command/contract target>
-Build/source: <source commit SHA matching live /__build.sha; do NOT cite the asset filename hash>
+```markdown
+**$AGENT_NAME validation** — `$TASK_ID` · **VERDICT: PASS / FAIL / INCONCLUSIVE / INFRA BLOCKED**
+
+- **Target:** <url/command/contract target>
+- **Build/source:** <source commit SHA matching live /__build.sha; do NOT cite the asset filename hash>
+
 | # | AC | Result | Category | Evidence |
-|---|-----|--------|----------|----------|
+|---|----|--------|----------|----------|
 | 1 | <criterion> | PASS/FAIL | unit/contract/api/auth/persist/regression/edge/infra | <literal command/API/readback/browser output> |
-Verdict basis: PASS means all AC rows PASS; FAIL means any code/AC FAIL; INCONCLUSIVE means missing evidence/source drift; INFRA BLOCKED means target/tool unavailable.
-Infra issues (not code bugs): <list or "none">
+
+- **Verdict basis:** PASS = all AC rows PASS; FAIL = any code/AC FAIL; INCONCLUSIVE = missing evidence/source drift; INFRA BLOCKED = target/tool unavailable.
+- **Infra issues (not code bugs):** <list or `none`>
+
 @lead <one-line routing intent — see "Required @ citation" below>
 Lead wake: structured-review-verdict review event
 ```

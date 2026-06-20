@@ -96,24 +96,28 @@ turns a deviation into a description.
 
 ## Comment Format
 
-Post one task comment:
+Post one task comment. **The dashboard renders comments as Markdown** — emit
+the shape below (bold labels, bullets, blank lines) so the fields don't
+collapse into one unreadable paragraph. Post the content itself, not the
+surrounding code fence. Keep the final `@lead` line and `Lead wake:` line
+exactly as shown — they carry the human-facing routing signal.
 
-```text
-$AGENT_NAME review for $TASK_ID
-Verdict: PASS/FAIL/INCONCLUSIVE
-Target: <review target, validation_target*, commit/build>
-Scope: cross-cutting | per-AC
-AC coverage: <e.g., 1, 3, 5 (architecture); ALL (freshness)>
-Evidence reviewed: <worker packet, browser/runtime output, tests, diff>
-Blocking findings:
-- <file:line or verbatim AC quote> <finding> <required evidence/fix>
-Non-blocking findings:
-- <item or none>
-Evidence gaps:
-- <missing packet/output or none>
-Verdict basis: PASS means no blocking findings AND every spec-value/AC quoted
-verbatim matched the live observation; FAIL means any blocking finding or
-verbatim deviation; INCONCLUSIVE means missing evidence packet or source drift.
+```markdown
+**$AGENT_NAME review** — `$TASK_ID` · **Verdict: PASS / FAIL / INCONCLUSIVE**
+
+- **Target:** <review target, validation_target*, commit/build>
+- **Scope:** cross-cutting | per-AC
+- **AC coverage:** <e.g., 1, 3, 5 (architecture); ALL (freshness)>
+- **Evidence reviewed:**
+  - <one bullet per item — worker packet, browser/runtime output, tests, diff>
+- **Blocking findings:**
+  - <file:line or verbatim AC quote> — <finding> — <required evidence/fix>  *(or `none`)*
+- **Non-blocking findings:**
+  - <item>  *(or `none`)*
+- **Evidence gaps:**
+  - <missing packet/output>  *(or `none`)*
+- **Verdict basis:** PASS = no blocking findings AND every spec-value/AC quoted verbatim matched the live observation; FAIL = any blocking finding or verbatim deviation; INCONCLUSIVE = missing evidence packet or source drift.
+
 @lead <one-line routing intent — see "Required @ citation" below>
 Lead wake: structured-review-verdict review event
 ```
