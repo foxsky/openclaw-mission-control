@@ -3619,32 +3619,34 @@ async def record_task_review_event(
     """Record an append-only structured reviewer verdict for a task."""
     if task.board_id is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
-    # Deterministic "no work on the inbox column" gate: a reviewer verdict only
-    # makes sense once the task has entered the review flow. `inbox` is the
-    # lead's unrouted backlog (or an assigned-but-dependency-blocked task) — a
-    # validator that records a verdict there is working a task that was never
-    # routed to it. The QA/Architect skills already say "verify status is
-    # review, else stop", but agents do not reliably obey prompts (a QA-E2E
-    # agent looped INCONCLUSIVE on an inbox task), so enforce it at write time.
-    # Scoped to `inbox` only: `rework` re-verdicts are legitimate.
-    if task.status == "inbox":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": (
-                    "Cannot record a review verdict on an `inbox` task — inbox "
-                    "is the lead's unrouted backlog, not the review queue. The "
-                    "task must be routed into review before it can be validated."
-                ),
-                "code": "review_event_task_in_inbox",
-            },
-        )
     agent_id = await _require_task_pipeline_write_access(
         session,
         task=task,
         actor=actor,
     )
     _require_reviewer_role_allowed(actor=actor, reviewer_role=payload.reviewer_role)
+    # Deterministic "no work on the inbox column" gate (placed AFTER write-access
+    # and reviewer-role checks so an unauthorized / wrong-role actor still gets
+    # its 403, not this 409). A reviewer verdict only makes sense once a task has
+    # entered the review flow: `review` is the canonical path and `rework` takes
+    # a re-verdict on a returned task. Every other status — `inbox` (the lead's
+    # unrouted / dependency-blocked backlog), `in_progress`, `done`, `cancelled`
+    # — has no legitimate verdict, and recording one still commits the event and
+    # fires its FAIL/PASS/lead wakes downstream. Agents do not reliably obey the
+    # skill's "verify status is review" rule (a QA-E2E agent looped INCONCLUSIVE
+    # on an inbox task), so enforce the allowlist at write time.
+    if task.status not in ("review", "rework"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": (
+                    f"Cannot record a review verdict on a `{task.status}` task — "
+                    "verdicts are only valid on tasks in `review` (or `rework` "
+                    "for a re-verdict). Route the task into review first."
+                ),
+                "code": "review_event_task_not_in_review",
+            },
+        )
     await _require_review_event_artifact_completeness(payload, task, session)
     await _require_supervisor_citation_in_verdict_comment(
         payload,
