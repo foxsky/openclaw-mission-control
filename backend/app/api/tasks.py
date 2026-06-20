@@ -427,9 +427,27 @@ def _require_rendered_live_pass_has_browser_evidence(message: str, actor: ActorC
     raise _rendered_live_evidence_error()
 
 
+def _actor_is_verdict_posting_reviewer(actor: ActorContext) -> bool:
+    """Any agent that can author a reviewer verdict — the flow-flagged QA /
+    review-only validators, plus the role/name-recognised reviewers (architect,
+    qa, devops) that ``record_task_review_event`` also authorizes via
+    ``_allowed_reviewer_roles_for_agent``. Excludes the board lead, who
+    legitimately quotes verdicts in routing comments.
+    """
+    if actor.actor_type != "agent" or actor.agent is None:
+        return False
+    if actor.agent.is_board_lead:
+        return False
+    return (
+        _actor_is_qa_validation_agent(actor)
+        or _actor_is_review_only_agent(actor)
+        or bool(_allowed_reviewer_roles_for_agent(actor.agent) - {"lead"})
+    )
+
+
 def _require_verdict_comment_in_review_flow(
     *,
-    task: Task,
+    task_status: str,
     message: str,
     actor: ActorContext,
 ) -> None:
@@ -437,13 +455,18 @@ def _require_verdict_comment_in_review_flow(
     can also express a verdict as a free-text comment, and that comment must
     not land on a task outside the review flow (``review``/``rework``) either —
     otherwise the structured-event gate is trivially bypassed by posting the
-    same verdict as prose. Scoped to validator actors + verdict-shaped messages
-    so a non-verdict routing note ("@lead this task is not in review") on a
-    non-review task is still allowed.
+    same verdict as prose. Scoped to verdict-posting reviewers + verdict-shaped
+    messages so a non-verdict routing note ("@lead this task is not in review")
+    or a lead's verdict-quoting routing comment is still allowed.
+
+    ``task_status`` is the *resulting* status: the comment endpoint passes the
+    task's current status, while the ``PATCH``/``update_task`` inline-comment
+    path passes the projected status so a single PATCH that moves a task to
+    ``review`` *and* posts the verdict is allowed.
     """
-    if not (_actor_is_qa_validation_agent(actor) or _actor_is_review_only_agent(actor)):
+    if not _actor_is_verdict_posting_reviewer(actor):
         return
-    if task.status in ("review", "rework"):
+    if task_status in ("review", "rework"):
         return
     if not VERDICT_DECLARATION_RE.search(message):
         return
@@ -451,7 +474,7 @@ def _require_verdict_comment_in_review_flow(
         status_code=status.HTTP_409_CONFLICT,
         detail={
             "message": (
-                f"Cannot post a review verdict comment on a `{task.status}` task "
+                f"Cannot post a review verdict comment on a `{task_status}` task "
                 "— verdicts belong on a task in `review` (or `rework`). Route the "
                 "task into review first, or post a non-verdict routing note."
             ),
@@ -5819,6 +5842,15 @@ async def _finalize_updated_task(
     if update.comment is not None and update.comment.strip():
         _validate_task_comment_format_for_actor(update.comment, update.actor)
         _require_rendered_live_pass_has_browser_evidence(update.comment, update.actor)
+        # Same verdict-status gate as the POST /comments path. Use the projected
+        # status so a single PATCH that moves a task into review AND posts the
+        # verdict is allowed; an inline VERDICT comment on a task that stays off
+        # the review flow is rejected.
+        _require_verdict_comment_in_review_flow(
+            task_status=str(update.updates.get("status") or update.task.status),
+            message=update.comment,
+            actor=update.actor,
+        )
         if update.updates.get("status") != "rework":
             _require_comment_not_claim_unapplied_rework_routing(
                 task=update.task,
@@ -5979,7 +6011,7 @@ async def create_task_comment(
     _validate_task_comment_format_for_actor(payload.message, actor)
     _require_rendered_live_pass_has_browser_evidence(payload.message, actor)
     _require_verdict_comment_in_review_flow(
-        task=task,
+        task_status=task.status,
         message=payload.message,
         actor=actor,
     )

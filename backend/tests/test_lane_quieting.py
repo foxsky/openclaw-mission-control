@@ -213,6 +213,7 @@ async def test_patch_lane_gate_runs_before_task_mutation_commits(
         id: object
         identity_profile: dict[str, object] | None = None
         is_board_lead: bool = False
+        name: str = "stub-agent"
 
     # Non-owner agent (the lane quieting is directed at them).
     other_agent_id = uuid4()
