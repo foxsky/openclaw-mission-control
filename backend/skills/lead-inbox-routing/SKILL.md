@@ -8,16 +8,35 @@ description: Use when a board lead must route inbox work, decide whether decompo
 Use this only as a board lead for `inbox` tasks or for
 `lead-next-action-gate` actions that return `route_inbox`.
 
+## Inbox Invariant — no agent work on the `inbox` column
+
+`inbox` is the lead's **unassigned** triage backlog. **A task in `inbox` must
+never carry an `assigned_agent_id`.** Agents begin working any task assigned to
+them, so an assigned-but-`inbox` task makes a worker or validator run against
+the inbox column — which is forbidden. Enforce on both create and route:
+
+- **Not yet ready to start** (e.g. waiting on `depends_on_task_ids`): create it
+  **UNASSIGNED**. It sits as inbox backlog with no owner until you route it.
+- **Ready to start now**: assign and activate in the **same** PATCH —
+  `{"assigned_agent_id":"UUID","status":"in_progress"}` (the backend
+  auto-converts the target to `review` for validators). Never assign without
+  the status move.
+
+If you ever see a task that is both `inbox` and assigned, fix it immediately —
+route it (assign + activate) or clear the assignment. Do not leave an agent
+working the inbox column.
+
 ## Subtask Creation
 
 Before creating a task, check the current task list for similar titles. Do not
-create duplicates.
+create duplicates. Create it **UNASSIGNED** (inbox backlog); assign + activate
+when you route it (see Inbox Invariant).
 
 ```bash
 curl -fsS -X POST "$BASE_URL/api/v1/agent/boards/$BOARD_ID/tasks" \
   -H "X-Agent-Token: $AUTH_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"title":"T","description":"D","assigned_agent_id":"UUID","priority":"high"}'
+  -d '{"title":"T","description":"D","priority":"high"}'
 ```
 
 ## Decomposition Gate
@@ -59,7 +78,8 @@ If Architect already posted a plan, skip the route and run umbrella lifecycle.
 
 ## Umbrella Lifecycle
 
-1. Create each subtask from Architect's plan with `assigned_agent_id`,
+1. Create each subtask from Architect's plan **UNASSIGNED** (no
+   `assigned_agent_id` — inbox is backlog; see Inbox Invariant), with
    `depends_on_task_ids`, copied acceptance criteria, **and `parent_task_id`
    pointing at the umbrella**. The `parent_task_id` link is what lets the
    backend cascade: when the umbrella moves to `done`/`cancelled`, the
@@ -83,14 +103,16 @@ Subtask create payload shape:
 {
   "title": "<subtask title>",
   "description": "<copied AC>",
-  "assigned_agent_id": "<UUID>",
   "parent_task_id": "<umbrella UUID>",
   "depends_on_task_ids": ["<sibling UUID>"]
 }
 ```
 
-`parent_task_id` is rejected by the backend if it points at a task on a
-different board or at the subtask itself.
+Subtasks are created **unassigned in `inbox`** (backlog). Step 4 ("Route
+subtasks as normal tasks") is where you assign an owner AND move the task out
+of `inbox` in one PATCH — one subtask at a time as its dependencies clear, per
+the Inbox Invariant. `parent_task_id` is rejected by the backend if it points
+at a task on a different board or at the subtask itself.
 
 ## Normal Task Routing
 
