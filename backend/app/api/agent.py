@@ -1226,6 +1226,10 @@ async def create_task(
 
     task = Task.model_validate(data)
     task.board_id = board.id
+    # Decomposed children inherit the parent's delivery contract so they
+    # don't deadlock on a missing review_packet_type / validation_target
+    # triplet that the executing squad agent is API-forbidden from setting.
+    await tasks_api._inherit_delivery_contract_from_parent(session, task=task)
     # ``task.status`` is non-None on the model (default 'inbox'); the
     # normaliser declares ``str | None`` for callers passing optional
     # status, but here the input is always concrete.
