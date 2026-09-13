@@ -12,12 +12,17 @@ Use these templates to control what an agent sees in workspace files like:
 
 - `AGENTS.md`
 - `HEARTBEAT.md`
-- `TOOLS.md`
 - `IDENTITY.md`
 - `USER.md`
 - `MEMORY.md`
 
 When a gateway template sync runs, these templates are rendered with agent/board context and written into each workspace.
+
+`TOOLS.md` is not synced: OpenClaw 2026.9 retired it (`openclaw doctor --fix` merges it into
+`AGENTS.md`, and `agents.files.*` rejects the file). Agent credentials (`BASE_URL`,
+`AUTH_TOKEN`, ids) and tool notes render into the `## Tools` section at the top of `AGENTS.md`
+from `BOARD_AGENTS_TOOLS.md.j2`, and Mission Control reads `AUTH_TOKEN` back from that section
+(falling back to a legacy `TOOLS.md` on older gateways).
 
 ## How rendering works
 
@@ -102,7 +107,7 @@ Role-specific behavior is controlled inside that template with:
 
 Lead OpenAPI download/index generation is intentionally documented in:
 
-- `BOARD_TOOLS.md.j2`
+- `BOARD_AGENTS_TOOLS.md.j2` (included into `AGENTS.md`)
 
 This avoids relying on startup hooks to populate `api/openapi.json`.
 

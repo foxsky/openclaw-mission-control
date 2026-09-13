@@ -90,7 +90,7 @@ class LifecycleResult:
 
     - The caller passed ``wake=False`` (no wake was requested).
     - The wake was requested but was deliberately skipped because the
-      agent's credential files (``BOOTSTRAP.md`` / ``TOOLS.md``) were not
+      agent's credential files (``BOOTSTRAP.md`` / ``AGENTS.md``) were not
       visible on the gateway side, so the wake could not be answered.
 
     Callers such as
@@ -154,12 +154,12 @@ def _heartbeat_config(agent: Agent) -> dict[str, Any]:
     # Architectural contract (per Codex round-2 review): the
     # post-refactor templates (slim HEARTBEAT.md referencing AGENTS.md
     # playbooks) assume the gateway injects the full bootstrap file set
-    # — AGENTS.md, SOUL.md, IDENTITY.md, TOOLS.md, USER.md, BOOTSTRAP.md,
+    # — AGENTS.md, SOUL.md, IDENTITY.md, USER.md, BOOTSTRAP.md,
     # HEARTBEAT.md — into the heartbeat session context. That only
     # happens when lightContext is False. In lightweight mode the
     # gateway keeps ONLY HEARTBEAT.md (see pi-embedded-BYdcxQ5A.js:338
     # applyContextModeFilter + runtime-BXvktGYG.js:1152) and the agent
-    # loses the playbook references, loses TOOLS.md's credential vars,
+    # loses the playbook references, loses the AGENTS.md credential vars,
     # and ends up emitting HEARTBEAT_OK without executing anything —
     # the April 2026 incident documented in docs/NOTES.md. Warn
     # operators who explicitly opt into the broken pairing so they
@@ -172,7 +172,7 @@ def _heartbeat_config(agent: Agent) -> dict[str, Any]:
                 "gateway.heartbeat.lightContext_true_with_full_context_templates "
                 "agent_id=%s name=%s — lightContext=True strips every bootstrap "
                 "file except HEARTBEAT.md, but the current templates assume full "
-                "context (AGENTS.md playbooks, TOOLS.md credentials). This "
+                "context (AGENTS.md playbooks and credentials). This "
                 "combination produced 22 heartbeat 'ok' events with zero nudges "
                 "in the April 2026 Supervisor incident. Either override "
                 "heartbeat_config.lightContext to False or make HEARTBEAT.md "
@@ -425,7 +425,7 @@ def _workspace_path(agent: Agent, workspace_root: str) -> str:
       rather than display names to avoid collisions.
     - We preserve a historical gateway-main naming quirk to avoid moving existing directories.
 
-    This path is later interpolated into template files (TOOLS.md, etc.) that agents treat as the
+    This path is later interpolated into template files (AGENTS.md, etc.) that agents treat as the
     source of truth for where to read/write.
     """
 
@@ -1234,8 +1234,8 @@ class BaseAgentLifecycleManager(ABC):
         agent before a wake is delivered.
 
         The wake text tells the agent to read ``$BASE_URL`` and
-        ``$AUTH_TOKEN`` from ``BOOTSTRAP.md`` or ``TOOLS.md`` so it can
-        POST to ``/api/v1/agent/heartbeat``. If neither file is visible on
+        ``$AUTH_TOKEN`` from ``BOOTSTRAP.md`` or the ``## Tools`` section of
+        ``AGENTS.md`` so it can POST to ``/api/v1/agent/heartbeat``. If neither file is visible on
         the gateway side, the wake cannot be answered with a real
         check-in and the wake should be skipped rather than burning a
         retry against an agent that has no way to resolve its
@@ -1249,7 +1249,7 @@ class BaseAgentLifecycleManager(ABC):
         for the check-in curl even though it technically exists.
 
         Returns a tuple ``(visible, present_files)`` where ``visible`` is
-        True when either ``BOOTSTRAP.md`` or ``TOOLS.md`` is present and
+        True when either ``BOOTSTRAP.md`` or ``AGENTS.md`` is present and
         non-empty on any attempt, and ``present_files`` is the subset of
         credential files that were actually visible on the last attempt
         that saw at least one of them.
@@ -1260,7 +1260,7 @@ class BaseAgentLifecycleManager(ABC):
         for attempt in range(max_attempts):
             files = await self._control_plane.list_agent_files(agent_id)
             present = set()
-            for name in ("BOOTSTRAP.md", "TOOLS.md"):
+            for name in ("BOOTSTRAP.md", "AGENTS.md"):
                 entry = files.get(name)
                 if not entry:
                     continue
@@ -1413,6 +1413,9 @@ class BoardAgentLifecycleManager(BaseAgentLifecycleManager):
                 "WORKFLOW.md",
                 "STATUS.md",
                 "APIS.md",
+                # Retired by OpenClaw 2026.9; removes leftovers on older gateways
+                # (newer ones reject the delete, which the caller tolerates).
+                "TOOLS.md",
             }
         )
 
@@ -1582,7 +1585,8 @@ def _wakeup_text(agent: Agent, *, verb: str) -> str:
         "Start the agent. If BOOTSTRAP.md exists, read it first, then read AGENTS.md. "
         "Begin heartbeats after startup.\n\n"
         "REQUIRED CHECK-IN BEFORE ANY REPLY: read $BASE_URL and $AUTH_TOKEN from "
-        "BOOTSTRAP.md or TOOLS.md, then run the check-in curl in this session:\n"
+        "BOOTSTRAP.md or the ## Tools section of AGENTS.md, then run the check-in "
+        "curl in this session:\n"
         '  curl -fsS -X POST "$BASE_URL/api/v1/agent/heartbeat" '
         '-H "X-Agent-Token: $AUTH_TOKEN"\n'
         "This curl is the only thing that clears your wake-attempt counter in "
@@ -1592,7 +1596,7 @@ def _wakeup_text(agent: Agent, *, verb: str) -> str:
         "acknowledgement alone does not count as a check-in. If the curl "
         "fails after one fresh attempt, send one short error report naming "
         "the failure (e.g. exec blocked, 4xx/5xx body, missing "
-        "BOOTSTRAP.md/TOOLS.md); otherwise stay silent until it succeeds.\n\n"
+        "BOOTSTRAP.md/AGENTS.md values); otherwise stay silent until it succeeds.\n\n"
         "Do not assume exec is blocked based on an earlier session. "
         "Attempt the required command once in this session before saying you are blocked."
     )
@@ -1719,7 +1723,7 @@ class OpenClawGatewayProvisioner:
             return LifecycleResult(wake_delivered=False, wake_skip_reason=None)
 
         # Read-back check: the wake text instructs the agent to read
-        # $BASE_URL/$AUTH_TOKEN from BOOTSTRAP.md or TOOLS.md and curl the
+        # $BASE_URL/$AUTH_TOKEN from BOOTSTRAP.md or AGENTS.md (## Tools) and curl the
         # heartbeat endpoint. If neither file is visible on the gateway
         # side — e.g., because a prior file write failed or the agent
         # workspace was cleared — the wake cannot be answered with a real
@@ -1731,7 +1735,7 @@ class OpenClawGatewayProvisioner:
         if not credentials_visible:
             logger.warning(
                 "gateway.wake.skipped_no_credentials agent_id=%s session_key=%s "
-                "present_files=%s — neither BOOTSTRAP.md nor TOOLS.md visible "
+                "present_files=%s — neither BOOTSTRAP.md nor AGENTS.md visible "
                 "on gateway; skipping wake to avoid a guaranteed NO_REPLY",
                 getattr(agent, "id", "?"),
                 session_key,

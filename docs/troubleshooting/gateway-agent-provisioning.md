@@ -107,7 +107,7 @@ Actions:
 
 ## Re-syncing auth tokens when Mission Control and OpenClaw have drifted
 
-Mission Control stores a hash of each agent’s token and provisions OpenClaw by writing templates (e.g. `TOOLS.md`) that include `AUTH_TOKEN`. If the token on the gateway and the backend hash drift (e.g. after a reinstall, token change, or manual edit), heartbeats can fail with 401 and the agent may appear offline.
+Mission Control stores a hash of each agent’s token and provisions OpenClaw by writing templates that include `AUTH_TOKEN` in the `## Tools` section at the top of each agent's `AGENTS.md` (OpenClaw 2026.9 retired `TOOLS.md`; `openclaw doctor --fix` migrates it into that section, and Mission Control still reads a legacy `TOOLS.md` on older gateways). If the token on the gateway and the backend hash drift (e.g. after a reinstall, token change, or manual edit), heartbeats can fail with 401 and the agent may appear offline.
 
 To re-sync:
 

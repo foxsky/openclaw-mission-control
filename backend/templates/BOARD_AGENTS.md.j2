@@ -6,6 +6,8 @@
 
 This workspace belongs to the **Main Agent** for this gateway. You are not tied to a single board.
 
+{% include "BOARD_AGENTS_TOOLS.md.j2" %}
+
 ## First run
 - Start by reading this file and then proceed with the session checklist.
 
@@ -15,7 +17,7 @@ Before doing anything else:
 2) Read USER.md (who you serve)
 3) Read memory/YYYY-MM-DD.md for today and yesterday (create memory/ if missing)
 4) If this is the main or direct session, also read MEMORY.md
-5) Read TOOLS.md for `BASE_URL`, `AUTH_TOKEN`, and agent identity. If any are missing, stop and request a provisioning update.
+5) Use the `## Tools` section at the top of this file for `BASE_URL`, `AUTH_TOKEN`, and agent identity. If any are missing, stop and request a provisioning update.
 
 Do this immediately. Do not ask permission to read your workspace.
 
@@ -82,9 +84,9 @@ Board lead replies:
 - Use OpenClaw's configured channel(s) to reach the user (Slack/Telegram/SMS/etc). If that fails, post the question into Mission Control board chat as a fallback.
 - When you receive the user's answer, write it back to the originating board as a NON-chat memory item tagged like `["gateway_main","user_reply"]` (the exact POST + tags will be included in the request message).
 
-## Tools
+## Skills
 - Skills are authoritative. Follow SKILL.md instructions exactly.
-- Use TOOLS.md for environment-specific notes.
+- Environment values and API tooling notes are in the `## Tools` section at the top of this file.
 
 ## External vs internal actions
 Safe to do freely (internal):
@@ -116,6 +118,8 @@ This workspace is for lead agent: **{{ agent_name }}** ({{ agent_id }}).
 This workspace is for board agent: **{{ agent_name }}** ({{ agent_id }}).
 {% endif %}
 
+{% include "BOARD_AGENTS_TOOLS.md.j2" %}
+
 ## First Run
 {% if is_lead %}
 If `BOOTSTRAP.md` exists, follow it once, complete initialization, then delete it. You won’t need it again.
@@ -134,8 +138,9 @@ Before doing anything else, read in this order:
 4) `MEMORY.md` (durable board memory: decisions, status, standards, and reusable playbooks)
 {% endif %}
 5) `IDENTITY.md`
-6) `TOOLS.md`
-7) `HEARTBEAT.md`
+6) `HEARTBEAT.md`
+
+Your `BASE_URL`, `AUTH_TOKEN`, and agent identity are in the `## Tools` section at the top of this file.
 
 Do not ask permission to read local workspace files.
 If a required file is missing, create it from templates before proceeding.
@@ -164,7 +169,7 @@ Record decisions, constraints, lessons, and useful context. Skip the secrets unl
 Do not rely on "mental notes".
 
 - If told "remember this", write it to `memory/YYYY-MM-DD.md` or the correct durable file.
-- If you learn a reusable lesson, update the relevant operating file (`AGENTS.md`, `TOOLS.md`, etc.).
+- If you learn a reusable lesson, update the relevant operating file (`AGENTS.md`, `MEMORY.md`, etc.).
 - If you make a mistake, document the corrective rule to avoid repeating it.
 - “Mental notes” don’t survive session restarts. Files do.
 - Text > Brain
@@ -837,7 +842,7 @@ Respond when directly mentioned, asked, able to unblock, or needed for a lead-le
 
 ## Tools and Markdown
 - Skills are your tool system. Follow relevant `SKILL.md` instructions.
-- Keep local environment notes in `TOOLS.md` (hosts, paths, conventions, runbooks).
+- Keep local environment notes (hosts, paths, conventions, runbooks) in `MEMORY.md`; `AGENTS.md` is re-rendered on template sync.
 - Use clean, short markdown; fence commands/logs/payloads/JSON; backtick paths, commands, env vars, endpoints.
 
 ## Heartbeats

@@ -129,15 +129,15 @@ class AgentLifecycleOrchestrator(OpenClawDBService):
 
         # Only mint a new token when the agent has no token hash (first provision)
         # or when a caller provides one explicitly. Skip minting on update/reconcile
-        # to avoid DB-new/TOOLS-old mismatch when the TOOLS.md write fails.
+        # to avoid a DB-new/workspace-old token mismatch when the file write fails.
         if auth_token:
             raw_token = auth_token
         elif not locked.agent_token_hash:
             raw_token = mint_agent_token(locked)
         else:
-            # Reuse existing token from TOOLS.md (lazy import to avoid circular dep).
-            # If gateway is unreachable or TOOLS.md is unreadable, skip this lifecycle
-            # entirely rather than minting — minting would create the DB/TOOLS mismatch.
+            # Reuse the existing workspace token (lazy import to avoid circular dep).
+            # If the gateway is unreachable or the token is unreadable, skip this lifecycle
+            # entirely rather than minting — minting would create the DB/workspace mismatch.
             from app.services.openclaw.gateway_resolver import optional_gateway_client_config
             from app.services.openclaw.internal.agent_key import agent_key as _agent_key
             from app.services.openclaw.provisioning import OpenClawGatewayControlPlane
@@ -156,7 +156,7 @@ class AgentLifecycleOrchestrator(OpenClawDBService):
                 raw_token = None
 
             if raw_token and locked.agent_token_hash:
-                # Verify the TOOLS.md token matches the DB hash. If not, resync.
+                # Verify the workspace token matches the DB hash. If not, resync.
                 from app.core.agent_tokens import hash_agent_token, verify_agent_token
 
                 if not verify_agent_token(raw_token, locked.agent_token_hash):
@@ -165,10 +165,10 @@ class AgentLifecycleOrchestrator(OpenClawDBService):
                     self.session.add(locked)
 
             if not raw_token:
-                # Gateway unreachable or TOOLS.md unreadable.
-                # Skip this lifecycle to avoid DB/TOOLS mismatch from minting.
+                # Gateway unreachable or workspace token unreadable.
+                # Skip this lifecycle to avoid a DB/workspace mismatch from minting.
                 locked.last_provision_error = (
-                    "Skipped: could not read existing token from TOOLS.md. "
+                    "Skipped: could not read existing token from AGENTS.md (## Tools) or TOOLS.md. "
                     "Will retry next cycle."
                 )
                 locked.updated_at = utcnow()
