@@ -85,13 +85,14 @@ def test_wakeup_text_requires_explicit_heartbeat_checkin():
         "wake text must name the heartbeat endpoint so the agent runs the "
         "check-in curl via tool use"
     )
-    # Both BOOTSTRAP.md and TOOLS.md render the credentials on fresh
-    # provision; either must be an acceptable source so a late TOOLS.md
-    # visibility lag does not break the wake path.
-    assert "BOOTSTRAP.md" in text and "TOOLS.md" in text, (
-        "wake text must point the agent at both BOOTSTRAP.md and TOOLS.md "
+    # Both BOOTSTRAP.md and the AGENTS.md `## Tools` section render the
+    # credentials on fresh provision; either must be an acceptable source.
+    # TOOLS.md must not be named: OpenClaw 2026.9 retired it.
+    assert "BOOTSTRAP.md" in text and "AGENTS.md" in text, (
+        "wake text must point the agent at both BOOTSTRAP.md and AGENTS.md "
         "for $BASE_URL and $AUTH_TOKEN — either is a valid credential source"
     )
+    assert "TOOLS.md" not in text, "wake text must not reference the retired TOOLS.md"
 
 
 def test_wakeup_text_forbids_text_shortcut_before_checkin():
@@ -455,7 +456,7 @@ async def test_apply_agent_lifecycle_writes_files_before_wake(monkeypatch):
 
     Otherwise the agent can receive the wake text (which instructs it to
     read ``$BASE_URL`` and ``$AUTH_TOKEN`` from ``BOOTSTRAP.md`` or
-    ``TOOLS.md``) before those files are visible on the gateway side,
+    ``AGENTS.md``) before those files are visible on the gateway side,
     which produces a guaranteed NO_REPLY and burns a wake attempt.
     """
     gateway_id = uuid4()
@@ -482,11 +483,11 @@ async def test_apply_agent_lifecycle_writes_files_before_wake(monkeypatch):
         # Return credentials visible so verify_credentials_visible passes
         return {
             "BOOTSTRAP.md": {"name": "BOOTSTRAP.md", "missing": False},
-            "TOOLS.md": {"name": "TOOLS.md", "missing": False},
+            "AGENTS.md": {"name": "AGENTS.md", "missing": False},
         }
 
     def _fake_render_agent_files(*args, **kwargs):
-        return {"TOOLS.md": "contents", "BOOTSTRAP.md": "contents"}
+        return {"AGENTS.md": "contents", "BOOTSTRAP.md": "contents"}
 
     async def _fake_set_agent_files(self, **kwargs):
         call_log.append("set_agent_files")
@@ -557,7 +558,7 @@ async def test_apply_agent_lifecycle_writes_files_before_wake(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_apply_agent_lifecycle_skips_wake_when_credentials_missing(monkeypatch):
-    """Regression: if the gateway cannot see BOOTSTRAP.md or TOOLS.md after
+    """Regression: if the gateway cannot see BOOTSTRAP.md or AGENTS.md after
     the file sync step, the wake must be skipped entirely. Sending the
     wake anyway would instruct the agent to read credentials from files
     that aren't there, guaranteeing a NO_REPLY and burning a retry.
@@ -587,7 +588,7 @@ async def test_apply_agent_lifecycle_skips_wake_when_credentials_missing(monkeyp
         return {"USER.md": {"name": "USER.md", "missing": False}}
 
     def _fake_render_agent_files(*args, **kwargs):
-        return {"TOOLS.md": "contents", "BOOTSTRAP.md": "contents"}
+        return {"AGENTS.md": "contents", "BOOTSTRAP.md": "contents"}
 
     async def _fake_set_agent_files(self, **kwargs):
         call_log.append("set_agent_files")
@@ -639,7 +640,7 @@ async def test_apply_agent_lifecycle_skips_wake_when_credentials_missing(monkeyp
 
     assert "set_agent_files" in call_log, f"file sync must still run; got {call_log}"
     assert "send_message" not in call_log, (
-        "wake must be skipped when neither BOOTSTRAP.md nor TOOLS.md is "
+        "wake must be skipped when neither BOOTSTRAP.md nor AGENTS.md is "
         f"visible on the gateway; got {call_log}"
     )
     assert result.wake_delivered is False, (
@@ -681,11 +682,11 @@ async def test_apply_agent_lifecycle_returns_wake_delivered_true_on_success(monk
     async def _fake_list_agent_files(self, agent_id):
         return {
             "BOOTSTRAP.md": {"name": "BOOTSTRAP.md", "missing": False, "size": 42},
-            "TOOLS.md": {"name": "TOOLS.md", "missing": False, "size": 128},
+            "AGENTS.md": {"name": "AGENTS.md", "missing": False, "size": 128},
         }
 
     def _fake_render_agent_files(*args, **kwargs):
-        return {"TOOLS.md": "contents", "BOOTSTRAP.md": "contents"}
+        return {"AGENTS.md": "contents", "BOOTSTRAP.md": "contents"}
 
     async def _fake_set_agent_files(self, **kwargs):
         return None
@@ -830,10 +831,10 @@ async def test_verify_credentials_visible_retries_on_transient_empty_list(monkey
 
     async def _fake_list_agent_files(self, agent_id):
         attempts.append(len(attempts))
-        # First two attempts return nothing; third attempt sees TOOLS.md.
+        # First two attempts return nothing; third attempt sees AGENTS.md.
         if len(attempts) < 3:
             return {}
-        return {"TOOLS.md": {"name": "TOOLS.md", "missing": False, "size": 64}}
+        return {"AGENTS.md": {"name": "AGENTS.md", "missing": False, "size": 64}}
 
     async def _fake_sleep(seconds):
         return None
@@ -870,7 +871,7 @@ async def test_verify_credentials_visible_retries_on_transient_empty_list(monkey
     )
 
     assert visible is True
-    assert "TOOLS.md" in present
+    assert "AGENTS.md" in present
     assert len(attempts) == 3, f"expected 3 retries, got {len(attempts)}"
 
 
@@ -885,7 +886,7 @@ async def test_verify_credentials_visible_rejects_zero_byte_files(monkeypatch):
     async def _fake_list_agent_files(self, agent_id):
         return {
             "BOOTSTRAP.md": {"name": "BOOTSTRAP.md", "missing": False, "size": 0},
-            "TOOLS.md": {"name": "TOOLS.md", "missing": False, "size": 0},
+            "AGENTS.md": {"name": "AGENTS.md", "missing": False, "size": 0},
         }
 
     async def _fake_sleep(seconds):

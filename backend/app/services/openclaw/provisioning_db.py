@@ -246,7 +246,7 @@ class OpenClawProvisioningService(OpenClawDBService):
         gateway: Gateway,
         options: GatewayTemplateSyncOptions,
     ) -> GatewayTemplatesSyncResult:
-        """Synchronize AGENTS/TOOLS/etc templates to gateway-connected agents."""
+        """Synchronize AGENTS/HEARTBEAT/etc templates to gateway-connected agents."""
         template_user = options.user
         if template_user is None:
             template_user = await get_org_owner_user(
@@ -394,6 +394,26 @@ def _parse_tools_md(content: str) -> dict[str, str]:
     return values
 
 
+def _parse_agents_md_tools_section(content: str) -> dict[str, str]:
+    """Read ``KEY=VALUE`` credential lines from the ``## Tools`` section of AGENTS.md.
+
+    OpenClaw 2026.9 retired ``TOOLS.md``: ``openclaw doctor --fix`` merges it into this
+    section and ``agents.files.get`` rejects the old file. Scoped to the section because
+    AGENTS.md prose elsewhere may quote example assignments. First value per key wins.
+    """
+    values: dict[str, str] = {}
+    in_tools = False
+    for raw in content.splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("## "):
+            in_tools = stripped == "## Tools"
+            continue
+        if in_tools:
+            for key, value in _parse_tools_md(raw).items():
+                values.setdefault(key, value)
+    return values
+
+
 async def _get_agent_file(
     *,
     agent_gateway_id: str,
@@ -429,20 +449,23 @@ async def _get_existing_auth_token(
     control_plane: OpenClawGatewayControlPlane,
     backoff: GatewayBackoff | None = None,
 ) -> str | None:
-    tools = await _get_agent_file(
-        agent_gateway_id=agent_gateway_id,
-        name="TOOLS.md",
-        control_plane=control_plane,
-        backoff=backoff,
+    # AGENTS.md is the canonical location; TOOLS.md is read only for workspaces that
+    # predate the migration (older gateways, or agents not yet re-synced).
+    sources = (
+        ("AGENTS.md", _parse_agents_md_tools_section),
+        ("TOOLS.md", _parse_tools_md),
     )
-    if not tools:
-        return None
-    values = _parse_tools_md(tools)
-    token = values.get("AUTH_TOKEN")
-    if not token:
-        return None
-    token = token.strip()
-    return token or None
+    for name, parse in sources:
+        content = await _get_agent_file(
+            agent_gateway_id=agent_gateway_id,
+            name=name,
+            control_plane=control_plane,
+            backoff=backoff,
+        )
+        token = (parse(content).get("AUTH_TOKEN") or "").strip() if content else ""
+        if token:
+            return token
+    return None
 
 
 async def _paused_board_ids(session: AsyncSession, board_ids: list[UUID]) -> set[UUID]:
@@ -577,7 +600,8 @@ async def _resolve_agent_auth_token(
                 agent=agent,
                 board=board,
                 message=(
-                    "Skipping agent: unable to read AUTH_TOKEN from TOOLS.md "
+                    "Skipping agent: unable to read AUTH_TOKEN from AGENTS.md (## Tools) "
+                    "or TOOLS.md "
                     "(run with rotate_tokens=true to re-key)."
                 ),
             )
@@ -592,7 +616,7 @@ async def _resolve_agent_auth_token(
             auth_token = await _rotate_agent_token(ctx.session, agent)
         else:
             # The gateway may have rotated the token (e.g., after SIGUSR1 restart).
-            # TOOLS.md has the real token the agent will use — update the DB hash
+            # The workspace has the real token the agent will use — update the DB hash
             # to match instead of leaving auth broken.
             # Safety: only resync if the agent already had a token hash (not a new
             # agent) and the token was read from the gateway workspace (trusted path).
@@ -607,7 +631,7 @@ async def _resolve_agent_auth_token(
                     agent=agent,
                     board=board,
                     message=(
-                        "AUTH_TOKEN hash resynced from TOOLS.md "
+                        "AUTH_TOKEN hash resynced from the agent workspace "
                         "(gateway may have rotated token after restart)."
                     ),
                 )
@@ -617,7 +641,7 @@ async def _resolve_agent_auth_token(
                     agent=agent,
                     board=board,
                     message=(
-                        "Warning: AUTH_TOKEN in TOOLS.md does not match backend "
+                        "Warning: AUTH_TOKEN in the agent workspace does not match backend "
                         "token hash (agent auth may be broken)."
                     ),
                 )
@@ -726,7 +750,10 @@ async def _sync_main_agent(
         _append_sync_error(
             result,
             agent=main_agent,
-            message="Skipping gateway agent: unable to read AUTH_TOKEN from TOOLS.md.",
+            message=(
+                "Skipping gateway agent: unable to read AUTH_TOKEN from AGENTS.md "
+                "(## Tools) or TOOLS.md."
+            ),
         )
         return True
     stop_sync = False

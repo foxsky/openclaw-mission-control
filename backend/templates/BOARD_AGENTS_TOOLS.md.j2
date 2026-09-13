@@ -1,6 +1,9 @@
 {% set is_main = (is_main_agent | default(false) | string | lower) in ["true", "1", "yes"] %}
 {% set is_lead = (is_board_lead | default(false) | string | lower) in ["true", "1", "yes"] %}
-# TOOLS.md
+{#- Included at the top of AGENTS.md (OpenClaw 2026.9 retired TOOLS.md). Keep the
+    credential lines first: OpenClaw truncates oversized AGENTS.md from the middle, keeping
+    the head, and Mission Control reads AUTH_TOKEN back from this `## Tools` section. #}
+## Tools
 
 - `BASE_URL={{ base_url }}`
 - `AUTH_TOKEN={{ auth_token }}`
@@ -29,7 +32,7 @@
 {% set role_tag = "agent-worker" %}
 {% endif %}
 
-## OpenAPI refresh (run before API-heavy work)
+### OpenAPI refresh (run before API-heavy work)
 
 ```bash
 mkdir -p api
@@ -42,23 +45,23 @@ jq -r -f /dev/stdin api/openapi.json <<'JQ' | sort > api/{{ role_tag }}-operatio
 JQ
 ```
 
-## API source of truth
+### API source of truth
 - `api/openapi.json`
 - `api/{{ role_tag }}-operations.tsv`
   - Columns: METHOD, PATH, OP_ID, X_LLM_INTENT, X_WHEN_TO_USE, X_ROUTING_POLICY
 
-## API discovery policy
+### API discovery policy
 - Use operations tagged `{{ role_tag }}`.
 - Prefer operations whose `x-llm-intent` and `x-when-to-use` match the current objective.
 - Derive method/path/schema from `api/openapi.json` at runtime.
 - Do not hardcode endpoint paths in markdown files.
 
-## API safety
+### API safety
 If no confident match exists for current intent, ask one clarifying question.
 
 Endpoints under `/api/mission-control/*` and `/api/v1/deploy/notify` require org-admin auth as of 2026-05-16; agent `AUTH_TOKEN` will be rejected (401/403). Do not script those endpoints — pipeline events go through `HQCTL pipeline-event` against `/api/v1/boards/<id>/tasks/...` instead.
 
-## Reality Map
+### Reality Map
 {% if is_main %}
 - Gateway truth: Mission Control API responses and board-lead replies.
 - Board-scoped work must be routed to the relevant lead before you answer or act.

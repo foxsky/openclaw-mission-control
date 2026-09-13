@@ -33,7 +33,7 @@ curl -fsS "{{ base_url }}/healthz" >/dev/null
 ```
 
 3) Ensure required files exist:
-- `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `MEMORY.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`
+- `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`
 
 4) Create `memory/` if missing.
 
@@ -56,7 +56,7 @@ curl -s -X POST "{{ base_url }}/api/v1/agent/heartbeat" \
 {% else %}
 6) If any fields are blank, leave them blank. Do not invent values.
 
-7) Use the values below from this file/TOOLS.md to check in:
+7) Use the values below (also in the `## Tools` section of `AGENTS.md`) to check in:
 - `BASE_URL={{ base_url }}`
 - `AUTH_TOKEN={{ auth_token }}`
 - `BOARD_ID={{ board_id }}`

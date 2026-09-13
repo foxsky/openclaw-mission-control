@@ -93,14 +93,26 @@ jobs:
 
       - name: Restart backend services
         if: steps.shas.outputs.needed == 'true' && steps.surfaces.outputs.backend == 'true'
-        # systemctl handles multi-unit restart in parallel; one sleep covers
-        # all three since they spawn concurrently. Saves ~6s over sequential
-        # restart-and-wait per backend deploy.
+        # mc-gateway-subscriber is restarted only while enabled: `systemctl
+        # restart` also starts a stopped unit, so an unconditional restart would
+        # revive a subscriber the operator deliberately disabled. Each command
+        # is a single-unit form allowed by /etc/sudoers.d/mc-runner-deploy;
+        # `is-enabled` is a read and needs no sudo. One sleep covers all units.
         run: |
           set -euo pipefail
-          sudo /usr/bin/systemctl restart mc-backend mc-gateway-subscriber mc-rq-worker
+          services=(mc-backend mc-rq-worker)
+          if systemctl is-enabled --quiet mc-gateway-subscriber; then
+            services+=(mc-gateway-subscriber)
+          else
+            echo "mc-gateway-subscriber is disabled; leaving it stopped."
+          fi
+          for unit in "${services[@]}"; do
+            sudo /usr/bin/systemctl restart "$unit"
+          done
           sleep 3
-          sudo /usr/bin/systemctl is-active mc-backend mc-gateway-subscriber mc-rq-worker
+          for unit in "${services[@]}"; do
+            sudo /usr/bin/systemctl is-active "$unit"
+          done
 
       - name: Restart mission-control
         if: steps.shas.outputs.needed == 'true' && steps.surfaces.outputs.frontend == 'true'

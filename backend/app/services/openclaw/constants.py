@@ -163,11 +163,12 @@ EXTRA_IDENTITY_PROFILE_FIELDS = {
     "worker_parallel_mode": "identity_worker_parallel_mode",
 }
 
+# No TOOLS.md: OpenClaw 2026.9 retired it and rejects it in agents.files.*. Credentials
+# and tool notes render into the `## Tools` section at the top of AGENTS.md instead.
 DEFAULT_GATEWAY_FILES = frozenset(
     {
         "AGENTS.md",
         "SOUL.md",
-        "TOOLS.md",
         "IDENTITY.md",
         "USER.md",
         "HEARTBEAT.md",
@@ -185,7 +186,6 @@ LEAD_GATEWAY_FILES = frozenset(
         "SOUL.md",
         "USER.md",
         "MEMORY.md",
-        "TOOLS.md",
         "HEARTBEAT.md",
     },
 )
@@ -210,7 +210,6 @@ MAIN_TEMPLATE_MAP = {
     "MEMORY.md": "BOARD_MEMORY.md.j2",
     "HEARTBEAT.md": "BOARD_HEARTBEAT.md.j2",
     "USER.md": "BOARD_USER.md.j2",
-    "TOOLS.md": "BOARD_TOOLS.md.j2",
 }
 
 BOARD_SHARED_TEMPLATE_MAP = {
@@ -221,7 +220,6 @@ BOARD_SHARED_TEMPLATE_MAP = {
     "MEMORY.md": "BOARD_MEMORY.md.j2",
     "HEARTBEAT.md": "BOARD_HEARTBEAT.md.j2",
     "USER.md": "BOARD_USER.md.j2",
-    "TOOLS.md": "BOARD_TOOLS.md.j2",
 }
 
 LEAD_TEMPLATE_MAP: dict[str, str] = {}
