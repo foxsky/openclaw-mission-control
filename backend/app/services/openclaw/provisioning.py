@@ -1098,15 +1098,41 @@ def _references_heartbeat_md(heartbeat: object) -> bool:
     return isinstance(prompt, str) and "HEARTBEAT.md" in prompt
 
 
+# MC's default heartbeat target. On 2026.8+ a "last" target whose session has no delivery
+# channel skips every scheduled poll (reason "no-route"); MC agents report through MC's API and
+# never have one. "none" runs the turn without auto-delivering its final reply.
+_LEGACY_HEARTBEAT_TARGET = "last"
+_KEYED_HEARTBEAT_TARGET = "none"
+
+
+def _stale_keyed_heartbeat_fields(heartbeat: object) -> dict[str, Any]:
+    """Legacy MC heartbeat values keyed-layout gateways must not keep, mapped to replacements.
+
+    A ``None`` replacement deletes the key under config.patch merge-patch semantics.
+    """
+    if not isinstance(heartbeat, dict):
+        return {}
+    stale: dict[str, Any] = {}
+    if _references_heartbeat_md(heartbeat):
+        stale["prompt"] = None
+    if heartbeat.get("target") == _LEGACY_HEARTBEAT_TARGET:
+        stale["target"] = _KEYED_HEARTBEAT_TARGET
+    return stale
+
+
 def _keyed_heartbeat(heartbeat: dict[str, Any]) -> dict[str, Any]:
     """MC's desired heartbeat for keyed-layout (2026.8+) gateways.
 
-    Prompts naming HEARTBEAT.md are MC's legacy prompts. Leaving ``prompt`` unset lets
+    Prompts naming HEARTBEAT.md are MC's legacy prompts; leaving ``prompt`` unset lets
     OpenClaw's default prompt apply, which follows the heartbeat monitor scratch MC writes.
+    MC's "last" target becomes "none"; any other explicit target is an operator choice.
     """
     keyed = _without_retired_heartbeat_keys(heartbeat)
-    if _references_heartbeat_md(keyed):
-        del keyed["prompt"]
+    for field, replacement in _stale_keyed_heartbeat_fields(keyed).items():
+        if replacement is None:
+            del keyed[field]
+        else:
+            keyed[field] = replacement
     return keyed
 
 
@@ -1165,16 +1191,18 @@ def _merged_agent_entry(
     workspace_path: str,
     heartbeat: dict[str, Any],
     *,
-    drop_heartbeat_md_prompt: bool = False,
+    normalize_keyed_heartbeat: bool = False,
 ) -> dict[str, Any] | None:
     """Return the entry with MC's workspace/heartbeat applied, or None when unchanged."""
     current_heartbeat = raw_entry.get("heartbeat")
     # Checked apart from the heartbeat comparison, which ignores every field of a disabled
-    # heartbeat; otherwise disabled agents would keep the dead prompt.
-    stale_prompt = drop_heartbeat_md_prompt and _references_heartbeat_md(current_heartbeat)
+    # heartbeat; otherwise disabled agents would keep a dead prompt or a no-route target.
+    stale_fields = (
+        _stale_keyed_heartbeat_fields(current_heartbeat) if normalize_keyed_heartbeat else {}
+    )
     configs_equal = _heartbeat_configs_equal(current_heartbeat, heartbeat)
     workspace_changed = raw_entry.get("workspace") != workspace_path
-    heartbeat_changed = stale_prompt or not configs_equal
+    heartbeat_changed = bool(stale_fields) or not configs_equal
     if not workspace_changed and not heartbeat_changed:
         return None
     new_entry = dict(raw_entry)
@@ -1182,24 +1210,22 @@ def _merged_agent_entry(
     if heartbeat_changed:
         existing_hb = current_heartbeat or {}
         merged_hb = dict(existing_hb)
-        if stale_prompt and configs_equal:
-            # The stale HEARTBEAT.md prompt is the only reason to patch (this is exactly the
-            # disabled-heartbeat case, since the comparison above ignores every other field of a
-            # disabled heartbeat). Build the patched heartbeat from the existing gateway heartbeat
-            # only — overlaying MC's desired fields here would push settings MC never patched
-            # before onto entries it otherwise leaves alone.
-            merged_hb["prompt"] = None
+        if stale_fields and configs_equal:
+            # Stale legacy values are the only reason to patch (exactly the disabled-heartbeat
+            # case, since the comparison above ignores every other field of a disabled
+            # heartbeat). Replace only those — overlaying MC's desired fields here would push
+            # settings MC never patched before onto entries it otherwise leaves alone.
+            merged_hb.update(stale_fields)
         else:
             # Merge: start from existing gateway config, then overlay MC values.
             # Gateway-only fields (model, ackMaxChars, prompt) survive because
             # the merge starts from dict(existing) and MC's heartbeat dict
             # typically doesn't contain them (unless explicitly set in DB) — except
-            # on keyed layouts, where a prompt still pointing at HEARTBEAT.md after
-            # the overlay is deleted rather than kept.
+            # on keyed layouts, where legacy values still present after the overlay
+            # (a HEARTBEAT.md prompt) are replaced rather than kept.
             merged_hb.update(heartbeat)
-            if stale_prompt and _references_heartbeat_md(merged_hb):
-                # JSON null deletes the key under config.patch merge-patch semantics.
-                merged_hb["prompt"] = None
+            if normalize_keyed_heartbeat:
+                merged_hb.update(_stale_keyed_heartbeat_fields(merged_hb))
         new_entry["heartbeat"] = merged_hb
     else:
         new_entry["heartbeat"] = current_heartbeat
@@ -1243,12 +1269,15 @@ def _updated_agent_entries(
                 raw_entry,
                 workspace_path,
                 heartbeat,
-                drop_heartbeat_md_prompt=True,
+                normalize_keyed_heartbeat=True,
             )
             if merged is not None:
-                if _references_heartbeat_md(raw_entry.get("heartbeat")):
+                stale_fields = _stale_keyed_heartbeat_fields(raw_entry.get("heartbeat"))
+                if stale_fields:
                     logger.info(
-                        "gateway.heartbeat_prompt.heartbeat_md_removed agent_id=%s", agent_id
+                        "gateway.heartbeat.legacy_fields_replaced agent_id=%s fields=%s",
+                        agent_id,
+                        ",".join(sorted(stale_fields)),
                     )
                 updates[agent_id] = merged
         else:

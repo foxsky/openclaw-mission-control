@@ -206,7 +206,7 @@ async def test_patch_agent_heartbeats_drops_retired_heartbeat_keys_on_keyed_layo
     patch = json.loads(calls[1][1]["raw"])
     assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {
         "every": "20m",
-        "target": "last",
+        "target": "none",
     }
 
 
@@ -499,6 +499,139 @@ async def test_prompt_removal_converges_after_gateway_applies_the_patch(
     entries = payload["config"]["agents"]["entries"]
     assert "prompt" not in entries["mc-enabled"]["heartbeat"]
     assert "prompt" not in entries["mc-disabled"]["heartbeat"]
+    assert entries["mc-enabled"]["heartbeat"]["target"] == "none"
+
+
+# MC's DEFAULT_HEARTBEAT_CONFIG and the agent form store target "last". On 2026.8+ a "last" target
+# whose session has no delivery channel skips every scheduled poll (reason "no-route"); MC agents
+# report through MC's API and never have one, so keyed layouts get "none" (internal-only runs).
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("every", ["10m", "0m"], ids=["enabled", "disabled"])
+async def test_patch_agent_heartbeats_switches_last_target_to_none_on_keyed_layout(
+    monkeypatch: pytest.MonkeyPatch,
+    every: str,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config(
+            {
+                "mc-agent-x": {
+                    "workspace": "/w/x",
+                    "heartbeat": {"every": every, "target": "last", "model": "ollama/x"},
+                }
+            },
+        ),
+    )
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": every, "target": "last"})],
+    )
+
+    patch = json.loads(calls[1][1]["raw"])
+    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {
+        "every": every,
+        "target": "none",
+        "model": "ollama/x",
+    }
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_disabled_agent_normalizes_target_and_prompt_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config(
+            {
+                "mc-agent-x": {
+                    "workspace": "/w/x",
+                    "heartbeat": {"every": "0m", "target": "last", "prompt": _LEGACY_PROMPT},
+                }
+            },
+        ),
+    )
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "0m", "target": "last", "model": "ollama/y"})],
+    )
+
+    patch = json.loads(calls[1][1]["raw"])
+    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {
+        "every": "0m",
+        "target": "none",
+        "prompt": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_keeps_explicit_channel_target_on_keyed_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config(
+            {"mc-agent-x": {"workspace": "/w/x", "heartbeat": {"every": "10m", "target": "last"}}},
+        ),
+    )
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "10m", "target": "whatsapp"})],
+    )
+
+    patch = json.loads(calls[1][1]["raw"])
+    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {
+        "every": "10m",
+        "target": "whatsapp",
+    }
+
+
+@pytest.mark.asyncio
+async def test_target_switch_converges_after_gateway_applies_the_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _canonical_config(
+        {
+            "mc-enabled": {"workspace": "/w/e", "heartbeat": {"every": "10m", "target": "last"}},
+            "mc-disabled": {"workspace": "/w/d", "heartbeat": {"every": "0m", "target": "last"}},
+        },
+    )
+    control_plane, calls = _control_plane_with(monkeypatch, payload)
+    desired = [
+        ("mc-enabled", "/w/e", {"every": "10m", "target": "last"}),
+        ("mc-disabled", "/w/d", {"every": "0m", "target": "last"}),
+    ]
+
+    await control_plane.patch_agent_heartbeats(desired)
+    payload["config"] = _apply_merge_patch(payload["config"], json.loads(calls[1][1]["raw"]))
+    await control_plane.patch_agent_heartbeats(desired)
+
+    assert [method for method, _ in calls] == ["config.get", "config.patch", "config.get"]
+    entries = payload["config"]["agents"]["entries"]
+    assert entries["mc-enabled"]["heartbeat"]["target"] == "none"
+    assert entries["mc-disabled"]["heartbeat"]["target"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_keeps_last_target_on_legacy_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "hash": "h-legacy",
+        "config": {
+            "agents": {"list": [{"id": "mc-agent-x", "workspace": "/w/x", "heartbeat": {}}]},
+            "channels": {"defaults": {"heartbeat": dict(_VISIBILITY)}},
+        },
+    }
+    control_plane, calls = _control_plane_with(monkeypatch, payload)
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "10m", "target": "last"})],
+    )
+
+    (entry,) = json.loads(calls[1][1]["raw"])["agents"]["list"]
+    assert entry["heartbeat"] == {"every": "10m", "target": "last"}
 
 
 @pytest.mark.asyncio

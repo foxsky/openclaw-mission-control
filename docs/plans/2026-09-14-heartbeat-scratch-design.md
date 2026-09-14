@@ -105,6 +105,12 @@ Observed on the production gateway (2026.9.4), 2026-09-14:
    normal case for a disabled agent, since that comparison ignores every other field), MC patches
    only the prompt deletion — it does not overlay its other desired heartbeat fields onto an entry
    it would otherwise leave alone. MC's DB rows are not rewritten.
+   **Target (added after the first deploy).** The same stale-field mechanism maps MC's default
+   `target: "last"` to `"none"`: on 2026.9.4 a `last` target whose session has no delivery
+   channel skips every scheduled poll with `reason=no-route`
+   (`src/infra/heartbeat-runner-execution.ts:360`), and MC agents report through MC's API so they
+   never have one. `none` runs the turn without auto-delivering its reply (OpenClaw heartbeat docs:
+   "internal-only runs"). Other explicit targets are kept; legacy layouts keep `last`.
 6. **Templates, layout-aware.** A `heartbeat_in_scratch` render variable (from the layout)
    selects wording:
    - `BOARD_HEARTBEAT.md.j2`: "# Heartbeat checklist" / "this checklist" in all three role

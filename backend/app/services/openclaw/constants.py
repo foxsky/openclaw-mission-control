@@ -60,8 +60,10 @@ DEFAULT_HEARTBEAT_CONFIG: dict[str, Any] = {
 # Exception: on keyed (2026.8+) layouts, a stored prompt that still
 # references HEARTBEAT.md is deleted (sent as `prompt: null`) rather than
 # kept, since that runtime never reads HEARTBEAT.md and the gateway's
-# default prompt already follows heartbeat monitor scratch instead (see
-# _merged_agent_entry / _keyed_heartbeat in provisioning.py).
+# default prompt already follows heartbeat monitor scratch instead. Likewise
+# the "last" target below becomes "none" there: 2026.8+ skips scheduled polls
+# whose "last" target has no delivery route, which MC agents never have (see
+# _stale_keyed_heartbeat_fields / _keyed_heartbeat in provisioning.py).
 
 # Providers retired by gateway-side config migrations. The OpenClaw 2026.6.5
 # updater renamed ``openai-codex`` -> ``openai`` on the gateway; a heartbeat
