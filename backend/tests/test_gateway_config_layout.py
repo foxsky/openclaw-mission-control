@@ -425,6 +425,33 @@ async def test_patch_agent_heartbeats_keeps_custom_prompt_on_keyed_layout(
 
 
 @pytest.mark.asyncio
+async def test_patch_agent_heartbeats_replaces_heartbeat_md_prompt_with_custom_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config(
+            {
+                "mc-agent-x": {
+                    "workspace": "/w/x",
+                    "heartbeat": {"every": "10m", "prompt": _LEGACY_PROMPT},
+                }
+            },
+        ),
+    )
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "10m", "prompt": "Check the deploy queue."})],
+    )
+
+    patch = json.loads(calls[1][1]["raw"])
+    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {
+        "every": "10m",
+        "prompt": "Check the deploy queue.",
+    }
+
+
+@pytest.mark.asyncio
 async def test_prompt_removal_converges_after_gateway_applies_the_patch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1183,11 +1183,13 @@ def _merged_agent_entry(
         # Merge: start from existing gateway config, then overlay MC values.
         # Gateway-only fields (model, ackMaxChars, prompt) survive because
         # the merge starts from dict(existing) and MC's heartbeat dict
-        # typically doesn't contain them (unless explicitly set in DB).
+        # typically doesn't contain them (unless explicitly set in DB) — except
+        # on keyed layouts, where a prompt still pointing at HEARTBEAT.md after
+        # the overlay is deleted rather than kept.
         existing_hb = current_heartbeat or {}
         merged_hb = dict(existing_hb)
         merged_hb.update(heartbeat)
-        if stale_prompt:
+        if stale_prompt and _references_heartbeat_md(merged_hb):
             # JSON null deletes the key under config.patch merge-patch semantics.
             merged_hb["prompt"] = None
         new_entry["heartbeat"] = merged_hb
