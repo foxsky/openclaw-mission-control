@@ -2,8 +2,8 @@
 
 **Date:** 2026-09-14
 **Branch:** `design/heartbeat-scratch`
-**Status:** implemented on this branch (Tasks 1-7); awaiting production validation and operator
-approval to merge.
+**Status:** implemented on this branch; production read-only validation passed 2026-09-14;
+awaiting operator approval to merge.
 
 ## Goal
 
@@ -51,11 +51,12 @@ Observed on the production gateway (2026.9.4), 2026-09-14:
    rewrites only its block and preserves notes (while the same monitor job survives).
 2. **Timing:** MC writes scratch whenever it writes agent files today (lifecycle provision/update/
    wake, sweep/reconcile, template sync). No new schedule.
-3. **Prompt — CHANGED, needs re-approval.** Approved earlier: MC sets its own scratch-aware
-   prompt. Review showed OpenClaw's default already does that, with current guidance
-   (`NO_REPLY`, automations for recurring tasks). Proposed: on keyed layouts MC **stops
-   authoring a prompt** — it removes prompts that reference `HEARTBEAT.md` (MC's legacy prompts)
-   so the gateway default applies; any other stored prompt is kept as intentional customization.
+3. **Prompt — approved by the operator on 2026-09-14 (revised from MC authoring its own
+   prompt).** Approved earlier: MC sets its own scratch-aware prompt. Review showed OpenClaw's
+   default already does that, with current guidance (`NO_REPLY`, automations for recurring
+   tasks). Revised and approved: on keyed layouts MC **stops authoring a prompt** — it removes
+   prompts that reference `HEARTBEAT.md` (MC's legacy prompts) so the gateway default applies;
+   any other stored prompt is kept as intentional customization.
 4. **Approach:** A. Heartbeat scratch is a virtual destination inside the existing file-sync
    pipeline.
 
@@ -96,11 +97,14 @@ Observed on the production gateway (2026.9.4), 2026-09-14:
      block other files, credentials visibility, or the wake.
    - Scratch notes are preserved regardless of `overwrite=True` (overwrite applies to physical
      files only).
-5. **Prompt (keyed layout; pending re-approval).** When building the desired heartbeat, a prompt
-   that mentions `HEARTBEAT.md` is sent as `prompt: null` (deleted), letting the gateway default
-   apply; other stored prompts are sent unchanged. `_normalize_heartbeat_for_compare` keeps
-   `prompt` in the disabled-heartbeat comparison, so the removal also reaches the 7 disabled
-   agents. MC's DB rows are not rewritten.
+5. **Prompt (keyed layout).** When building the desired heartbeat, a prompt that mentions
+   `HEARTBEAT.md` is sent as `prompt: null` (deleted), letting the gateway default apply; other
+   stored prompts are sent unchanged. `_normalize_heartbeat_for_compare` keeps `prompt` in the
+   disabled-heartbeat comparison, so the removal also reaches the 7 disabled agents. When a stale
+   `HEARTBEAT.md` prompt is the only difference between the current and desired heartbeat (the
+   normal case for a disabled agent, since that comparison ignores every other field), MC patches
+   only the prompt deletion — it does not overlay its other desired heartbeat fields onto an entry
+   it would otherwise leave alone. MC's DB rows are not rewritten.
 6. **Templates, layout-aware.** A `heartbeat_in_scratch` render variable (from the layout)
    selects wording:
    - `BOARD_HEARTBEAT.md.j2`: "# Heartbeat checklist" / "this checklist" in all three role
@@ -244,12 +248,15 @@ Pre-merge validation against production (read-only):
 
 - Before deploy: back up `openclaw.json`, and save every MC agent's scratch
   (`openclaw cron scratch <jobId> --json`) to a file.
-- The first keyed sync deletes 8 legacy prompts: one real `config.patch`, hot-applied (heartbeat
-  runner restart + system-job reconcile), not a gateway process restart.
-- Verify:
-  - `openclaw cron scratch <jobId>` for each synced agent shows MC's markers.
-  - `openclaw.json` entries have no `HEARTBEAT.md` prompts, and a second sync is a `config.patch`
-    no-op.
+- The first sync sends one `config.patch` per synced agent (hot-applied each: heartbeat runner
+  restart + system-job reconcile), not one combined patch for the whole fleet.
+- Template sync skips paused boards: on production the "Dev Squad" board is paused, so its 7
+  agents keep their legacy `HEARTBEAT.md` prompt and unset scratch until the board is resumed and
+  a template sync runs. After resuming a board, run a board-scoped template sync.
+- Verify, per synced agent:
+  - `openclaw cron scratch <jobId>` shows MC's markers.
+  - Its `openclaw.json` entry has no `HEARTBEAT.md` prompt, and a second sync for that agent is a
+    `config.patch` no-op.
   - The gateway agent's next ordinary heartbeat run includes "Heartbeat monitor scratch:" in its
     prompt (session transcript) and the agent checks in to MC.
   - Sync/lifecycle results carry no warnings.

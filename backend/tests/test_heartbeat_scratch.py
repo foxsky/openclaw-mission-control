@@ -202,7 +202,13 @@ async def test_writer_sets_spliced_scratch_with_current_revision_when_scratch_un
 
     assert warning is None
     assert gateway.params("cron.list") == [
-        {"agentId": AGENT, "includeDisabled": True, "limit": 200, "offset": 0},
+        {
+            "agentId": AGENT,
+            "includeDisabled": True,
+            "includeDeliveryPreviews": False,
+            "limit": 200,
+            "offset": 0,
+        },
     ]
     assert gateway.params("cron.scratch.get") == [{"id": "job-1"}]
     assert gateway.params("cron.scratch.set") == [

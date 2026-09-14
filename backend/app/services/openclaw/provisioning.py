@@ -1172,25 +1172,34 @@ def _merged_agent_entry(
     # Checked apart from the heartbeat comparison, which ignores every field of a disabled
     # heartbeat; otherwise disabled agents would keep the dead prompt.
     stale_prompt = drop_heartbeat_md_prompt and _references_heartbeat_md(current_heartbeat)
+    configs_equal = _heartbeat_configs_equal(current_heartbeat, heartbeat)
     workspace_changed = raw_entry.get("workspace") != workspace_path
-    heartbeat_changed = stale_prompt or not _heartbeat_configs_equal(current_heartbeat, heartbeat)
+    heartbeat_changed = stale_prompt or not configs_equal
     if not workspace_changed and not heartbeat_changed:
         return None
     new_entry = dict(raw_entry)
     new_entry["workspace"] = workspace_path
     if heartbeat_changed:
-        # Merge: start from existing gateway config, then overlay MC values.
-        # Gateway-only fields (model, ackMaxChars, prompt) survive because
-        # the merge starts from dict(existing) and MC's heartbeat dict
-        # typically doesn't contain them (unless explicitly set in DB) — except
-        # on keyed layouts, where a prompt still pointing at HEARTBEAT.md after
-        # the overlay is deleted rather than kept.
         existing_hb = current_heartbeat or {}
         merged_hb = dict(existing_hb)
-        merged_hb.update(heartbeat)
-        if stale_prompt and _references_heartbeat_md(merged_hb):
-            # JSON null deletes the key under config.patch merge-patch semantics.
+        if stale_prompt and configs_equal:
+            # The stale HEARTBEAT.md prompt is the only reason to patch (this is exactly the
+            # disabled-heartbeat case, since the comparison above ignores every other field of a
+            # disabled heartbeat). Build the patched heartbeat from the existing gateway heartbeat
+            # only — overlaying MC's desired fields here would push settings MC never patched
+            # before onto entries it otherwise leaves alone.
             merged_hb["prompt"] = None
+        else:
+            # Merge: start from existing gateway config, then overlay MC values.
+            # Gateway-only fields (model, ackMaxChars, prompt) survive because
+            # the merge starts from dict(existing) and MC's heartbeat dict
+            # typically doesn't contain them (unless explicitly set in DB) — except
+            # on keyed layouts, where a prompt still pointing at HEARTBEAT.md after
+            # the overlay is deleted rather than kept.
+            merged_hb.update(heartbeat)
+            if stale_prompt and _references_heartbeat_md(merged_hb):
+                # JSON null deletes the key under config.patch merge-patch semantics.
+                merged_hb["prompt"] = None
         new_entry["heartbeat"] = merged_hb
     else:
         new_entry["heartbeat"] = current_heartbeat

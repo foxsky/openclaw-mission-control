@@ -369,6 +369,44 @@ async def test_patch_agent_heartbeats_deletes_heartbeat_md_prompt_on_keyed_layou
 
 
 @pytest.mark.asyncio
+async def test_patch_agent_heartbeats_disabled_agent_drops_only_stale_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A disabled agent's only reason to patch is its dead HEARTBEAT.md prompt —
+    _heartbeat_configs_equal ignores every other field for a disabled heartbeat. MC must patch
+    only the prompt deletion here, not overlay its other desired fields (e.g. ``target``) onto
+    an entry it would otherwise leave alone."""
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config(
+            {
+                "mc-agent-x": {
+                    "workspace": "/w/x",
+                    "heartbeat": {
+                        "every": "0m",
+                        "target": "none",
+                        "model": "ollama/x",
+                        "prompt": _LEGACY_PROMPT,
+                    },
+                }
+            },
+        ),
+    )
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "0m", "target": "last"})],
+    )
+
+    patch = json.loads(calls[1][1]["raw"])
+    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {
+        "every": "0m",
+        "target": "none",
+        "model": "ollama/x",
+        "prompt": None,
+    }
+
+
+@pytest.mark.asyncio
 async def test_patch_agent_heartbeats_ignores_stored_heartbeat_md_prompt_on_keyed_layout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

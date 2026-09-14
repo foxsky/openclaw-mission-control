@@ -271,7 +271,7 @@ export default function NewAgentPage() {
                 disabled={isLoading}
               />
               <p className="text-xs text-slate-500">
-                How often this agent runs HEARTBEAT.md (10m, 30m, 2h).
+                How often this agent runs its heartbeat checklist (10m, 30m, 2h).
               </p>
             </div>
           </div>

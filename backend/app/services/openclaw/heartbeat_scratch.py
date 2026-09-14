@@ -159,7 +159,17 @@ class HeartbeatScratchWriter:
         while True:
             page = await self._rpc(
                 "cron.list",
-                {"agentId": agent_id, "includeDisabled": True, "limit": 200, "offset": offset},
+                {
+                    "agentId": agent_id,
+                    "includeDisabled": True,
+                    # Skip OpenClaw's per-job delivery-preview computation — MC only needs
+                    # declarationKey/payload.kind to find the job, not the preview text.
+                    # Not `compact`: that flag also drops `payload`, which
+                    # `_is_heartbeat_job` needs to check `payload.kind == "heartbeat"`.
+                    "includeDeliveryPreviews": False,
+                    "limit": 200,
+                    "offset": offset,
+                },
             )
             if not isinstance(page, dict):
                 msg = "cron.list returned invalid payload"

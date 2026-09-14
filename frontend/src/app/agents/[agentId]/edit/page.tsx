@@ -438,7 +438,7 @@ export default function EditAgentPage() {
                 disabled={isLoading}
               />
               <p className="text-xs text-slate-500">
-                Set how often this agent runs HEARTBEAT.md.
+                Set how often this agent runs its heartbeat checklist.
               </p>
             </div>
           </div>

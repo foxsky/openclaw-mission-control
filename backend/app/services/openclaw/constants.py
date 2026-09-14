@@ -57,6 +57,11 @@ DEFAULT_HEARTBEAT_CONFIG: dict[str, Any] = {
 # here. They survive heartbeat syncs because MC merges client-side: the
 # overlay starts from the existing gateway heartbeat dict and only
 # overwrites MC-managed keys (see _updated_agent_list in provisioning.py).
+# Exception: on keyed (2026.8+) layouts, a stored prompt that still
+# references HEARTBEAT.md is deleted (sent as `prompt: null`) rather than
+# kept, since that runtime never reads HEARTBEAT.md and the gateway's
+# default prompt already follows heartbeat monitor scratch instead (see
+# _merged_agent_entry / _keyed_heartbeat in provisioning.py).
 
 # Providers retired by gateway-side config migrations. The OpenClaw 2026.6.5
 # updater renamed ``openai-codex`` -> ``openai`` on the gateway; a heartbeat
