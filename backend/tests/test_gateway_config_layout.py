@@ -246,3 +246,74 @@ async def test_patch_agent_heartbeats_keeps_heartbeat_keys_on_legacy_layout(
     patch = json.loads(calls[1][1]["raw"])
     (entry,) = patch["agents"]["list"]
     assert entry["heartbeat"] == {"every": "10m", **_RETIRED_HEARTBEAT_FIELDS}
+
+
+@pytest.mark.asyncio
+async def test_control_plane_remembers_layout_read_by_patch_agent_heartbeats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config({"mc-agent-x": {"workspace": "/w/x", "heartbeat": {"every": "10m"}}}),
+    )
+
+    await control_plane.patch_agent_heartbeats([("mc-agent-x", "/w/x", {"every": "10m"})])
+
+    assert await control_plane.uses_keyed_agent_entries() is True
+    assert [method for method, _ in calls] == ["config.get"]
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"hash": "h", "config": {"agents": {"entries": {}}}}, True),
+        ({"hash": "h", "config": {"agents": {"list": []}}}, False),
+    ],
+    ids=["keyed", "legacy"],
+)
+@pytest.mark.asyncio
+async def test_control_plane_reads_layout_once_when_nothing_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+    expected: bool,
+) -> None:
+    control_plane, calls = _control_plane_with(monkeypatch, payload)
+
+    assert await control_plane.uses_keyed_agent_entries() is expected
+    assert await control_plane.uses_keyed_agent_entries() is expected
+    assert [method for method, _ in calls] == ["config.get"]
+
+
+@pytest.mark.asyncio
+async def test_control_plane_writes_heartbeat_scratch_through_gateway_rpc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    job = {"id": "job-1", "declarationKey": "heartbeat:mc-agent-x", "payload": {"kind": "heartbeat"}}
+
+    async def _fake_openclaw_call(
+        method: str,
+        params: dict[str, Any] | None = None,
+        config: object = None,
+    ) -> object:
+        _ = config
+        calls.append((method, params))
+        responses: dict[str, object] = {
+            "cron.list": {"jobs": [job], "hasMore": False, "nextOffset": None},
+            "cron.scratch.get": {"scratch": None, "currentRevision": 0, "maxBytes": 262144},
+            "cron.scratch.set": {"ok": True, "scratch": None, "currentRevision": 1, "maxBytes": 1},
+        }
+        return responses[method]
+
+    monkeypatch.setattr(agent_provisioning, "openclaw_call", _fake_openclaw_call)
+    control_plane = agent_provisioning.OpenClawGatewayControlPlane(
+        agent_provisioning.GatewayClientConfig(url="ws://gateway.example/ws", token=None),
+    )
+
+    warning = await control_plane.write_heartbeat_scratch(
+        agent_id="mc-agent-x",
+        instructions="1. Check in.",
+    )
+
+    assert warning is None
+    assert [method for method, _ in calls] == ["cron.list", "cron.scratch.get", "cron.scratch.set"]

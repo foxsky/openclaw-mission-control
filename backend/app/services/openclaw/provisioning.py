@@ -52,6 +52,7 @@ from app.services.openclaw.gateway_compat import (
     extract_config_last_touched_version,
 )
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
+from app.services.openclaw.heartbeat_scratch import HeartbeatScratchWriter
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import (
     OpenClawGatewayError,
@@ -785,12 +786,23 @@ class GatewayControlPlane(ABC):
     ) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    async def uses_keyed_agent_entries(self) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def write_heartbeat_scratch(self, *, agent_id: str, instructions: str) -> str | None:
+        raise NotImplementedError
+
 
 class OpenClawGatewayControlPlane(GatewayControlPlane):
     """OpenClaw gateway RPC implementation of the lifecycle control-plane contract."""
 
     def __init__(self, config: GatewayClientConfig) -> None:
         self._config = config
+        # Layout from this control plane's last config read. A lifecycle builds its own control
+        # plane and reads config in patch_agent_heartbeats before any file is rendered.
+        self._keyed_agent_entries: bool | None = None
 
     async def health(self) -> object:
         return await openclaw_call("health", config=self._config)
@@ -924,6 +936,8 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
         entries: list[tuple[str, str, dict[str, Any]]],
     ) -> None:
         base_hash, config_data, keyed_entries = await _gateway_config_snapshot(self._config)
+        # Recorded before the no-change return below; file routing relies on it.
+        self._keyed_agent_entries = keyed_entries
         entry_by_id = _heartbeat_entry_map(entries)
         agents_section = config_data.get("agents")
         if not isinstance(agents_section, dict):
@@ -1006,6 +1020,20 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
         if base_hash:
             params["baseHash"] = base_hash
         await openclaw_call("config.patch", params, config=self._config)
+
+    async def uses_keyed_agent_entries(self) -> bool:
+        if self._keyed_agent_entries is None:
+            _, _, keyed_entries = await _gateway_config_snapshot(self._config)
+            self._keyed_agent_entries = keyed_entries
+            return keyed_entries
+        return self._keyed_agent_entries
+
+    async def write_heartbeat_scratch(self, *, agent_id: str, instructions: str) -> str | None:
+        async def _call(method: str, params: dict[str, Any]) -> object:
+            return await openclaw_call(method, params, config=self._config)
+
+        writer = HeartbeatScratchWriter(_call)
+        return await writer.write(agent_id=agent_id, instructions=instructions)
 
 
 def _warn_unconfigured_heartbeat_model_providers(
