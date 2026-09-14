@@ -162,11 +162,8 @@ class HeartbeatScratchWriter:
                 {
                     "agentId": agent_id,
                     "includeDisabled": True,
-                    # Skip OpenClaw's per-job delivery-preview computation — MC only needs
-                    # declarationKey/payload.kind to find the job, not the preview text.
-                    # Not `compact`: that flag also drops `payload`, which
-                    # `_is_heartbeat_job` needs to check `payload.kind == "heartbeat"`.
-                    "includeDeliveryPreviews": False,
+                    # No preview or compact flag: compact drops payload (needed to verify
+                    # job.kind), and preview flag is not in every gateway version's closed schema.
                     "limit": 200,
                     "offset": offset,
                 },

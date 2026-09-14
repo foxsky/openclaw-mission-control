@@ -205,7 +205,6 @@ async def test_writer_sets_spliced_scratch_with_current_revision_when_scratch_un
         {
             "agentId": AGENT,
             "includeDisabled": True,
-            "includeDeliveryPreviews": False,
             "limit": 200,
             "offset": 0,
         },
