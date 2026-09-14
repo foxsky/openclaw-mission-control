@@ -8,11 +8,14 @@ everything else as agent notes.
 
 from __future__ import annotations
 
+import asyncio
 import re
+from typing import Any
 
 import pytest
 
 import app.services.openclaw.heartbeat_scratch as heartbeat_scratch
+from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 
 BEGIN = heartbeat_scratch.MC_BLOCK_BEGIN
 END = heartbeat_scratch.MC_BLOCK_END
@@ -114,3 +117,236 @@ def test_markers_with_empty_notes_alone_would_be_empty() -> None:
     # Guards the port: markers + heading only is empty in OpenClaw, so MC must always
     # ship real instructions inside the block.
     assert _openclaw_effectively_empty(f"{BEGIN}\n{END}\n\n## Agent notes\n")
+
+
+AGENT = "mc-agent-x"
+
+
+def _heartbeat_job(job_id: str = "job-1", *, kind: str = "heartbeat") -> dict[str, Any]:
+    return {
+        "id": job_id,
+        "declarationKey": f"heartbeat:{AGENT}",
+        "enabled": False,
+        "payload": {"kind": kind},
+    }
+
+
+def _other_job(job_id: str = "job-other") -> dict[str, Any]:
+    return {"id": job_id, "declarationKey": None, "enabled": True, "payload": {"kind": "agentTurn"}}
+
+
+def _page(jobs: list[dict[str, Any]], *, next_offset: int | None = None) -> dict[str, Any]:
+    return {"jobs": jobs, "hasMore": next_offset is not None, "nextOffset": next_offset}
+
+
+def _state(content: str | None, revision: int) -> dict[str, Any]:
+    scratch = (
+        None if content is None else {"content": content, "revision": revision, "updatedAtMs": 1}
+    )
+    return {"scratch": scratch, "currentRevision": revision, "maxBytes": 262144}
+
+
+_SET_OK = {"ok": True, "scratch": None, "currentRevision": 1, "maxBytes": 262144}
+
+
+def _conflict(revision: int) -> dict[str, Any]:
+    return {"ok": False, "reason": "revision-conflict", "currentRevision": revision}
+
+
+class _ScriptedGateway:
+    """Returns queued responses per RPC method; raises queued exceptions."""
+
+    def __init__(self, responses: dict[str, list[object]]) -> None:
+        self._responses = {method: list(queue) for method, queue in responses.items()}
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def __call__(self, method: str, params: dict[str, Any]) -> object:
+        self.calls.append((method, params))
+        queue = self._responses.get(method)
+        if not queue:
+            raise AssertionError(f"unexpected call: {method}")
+        response = queue.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    def params(self, method: str) -> list[dict[str, Any]]:
+        return [params for called, params in self.calls if called == method]
+
+
+def _writer(gateway: _ScriptedGateway) -> heartbeat_scratch.HeartbeatScratchWriter:
+    return heartbeat_scratch.HeartbeatScratchWriter(gateway, lookup_delays=(0.0, 0.0))
+
+
+@pytest.mark.asyncio
+async def test_writer_sets_spliced_scratch_with_current_revision_when_scratch_unset() -> None:
+    gateway = _ScriptedGateway(
+        {
+            "cron.list": [_page([_other_job(), _heartbeat_job()])],
+            "cron.scratch.get": [_state(None, 3)],
+            "cron.scratch.set": [_SET_OK],
+        },
+    )
+
+    warning = await _writer(gateway).write(agent_id=AGENT, instructions=INSTRUCTIONS)
+
+    assert warning is None
+    assert gateway.params("cron.list") == [
+        {"agentId": AGENT, "includeDisabled": True, "limit": 200, "offset": 0},
+    ]
+    assert gateway.params("cron.scratch.get") == [{"id": "job-1"}]
+    assert gateway.params("cron.scratch.set") == [
+        {
+            "id": "job-1",
+            "content": heartbeat_scratch.splice_mc_block(None, INSTRUCTIONS),
+            "expectedRevision": 3,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_writer_pages_until_it_finds_the_heartbeat_job() -> None:
+    gateway = _ScriptedGateway(
+        {
+            "cron.list": [_page([_other_job()], next_offset=200), _page([_heartbeat_job()])],
+            "cron.scratch.get": [_state(None, 0)],
+            "cron.scratch.set": [_SET_OK],
+        },
+    )
+
+    assert await _writer(gateway).write(agent_id=AGENT, instructions=INSTRUCTIONS) is None
+    assert [params["offset"] for params in gateway.params("cron.list")] == [0, 200]
+
+
+@pytest.mark.asyncio
+async def test_writer_retries_lookup_until_the_monitor_job_appears() -> None:
+    gateway = _ScriptedGateway(
+        {
+            "cron.list": [_page([]), _page([]), _page([_heartbeat_job()])],
+            "cron.scratch.get": [_state(None, 0)],
+            "cron.scratch.set": [_SET_OK],
+        },
+    )
+
+    assert await _writer(gateway).write(agent_id=AGENT, instructions=INSTRUCTIONS) is None
+    assert len(gateway.params("cron.list")) == 3
+
+
+@pytest.mark.asyncio
+async def test_writer_reports_missing_job_after_three_lookups() -> None:
+    gateway = _ScriptedGateway(
+        {"cron.list": [_page([]), _page([_heartbeat_job(kind="agentTurn")]), _page([])]},
+    )
+
+    warning = await _writer(gateway).write(agent_id=AGENT, instructions=INSTRUCTIONS)
+
+    assert warning == heartbeat_scratch.WARNING_JOB_MISSING
+    assert [method for method, _ in gateway.calls] == ["cron.list"] * 3
+
+
+@pytest.mark.asyncio
+async def test_writer_skips_set_when_scratch_already_current() -> None:
+    current = heartbeat_scratch.splice_mc_block("note", INSTRUCTIONS)
+    gateway = _ScriptedGateway(
+        {"cron.list": [_page([_heartbeat_job()])], "cron.scratch.get": [_state(current, 7)]},
+    )
+
+    assert await _writer(gateway).write(agent_id=AGENT, instructions=INSTRUCTIONS) is None
+    assert gateway.params("cron.scratch.set") == []
+
+
+@pytest.mark.asyncio
+async def test_writer_rereads_after_one_conflict_and_keeps_new_notes() -> None:
+    gateway = _ScriptedGateway(
+        {
+            "cron.list": [_page([_heartbeat_job()]), _page([_heartbeat_job()])],
+            "cron.scratch.get": [_state(None, 4), _state("note written by the agent", 5)],
+            "cron.scratch.set": [_conflict(5), _SET_OK],
+        },
+    )
+
+    assert await _writer(gateway).write(agent_id=AGENT, instructions=INSTRUCTIONS) is None
+    second_set = gateway.params("cron.scratch.set")[1]
+    assert second_set["expectedRevision"] == 5
+    assert second_set["content"] == heartbeat_scratch.splice_mc_block(
+        "note written by the agent",
+        INSTRUCTIONS,
+    )
+
+
+@pytest.mark.asyncio
+async def test_writer_gives_up_after_two_conflicts() -> None:
+    gateway = _ScriptedGateway(
+        {
+            "cron.list": [_page([_heartbeat_job()]), _page([_heartbeat_job()])],
+            "cron.scratch.get": [_state(None, 1), _state(None, 2)],
+            "cron.scratch.set": [_conflict(2), _conflict(3)],
+        },
+    )
+
+    warning = await _writer(gateway).write(agent_id=AGENT, instructions=INSTRUCTIONS)
+
+    assert warning == heartbeat_scratch.WARNING_CONFLICT
+
+
+@pytest.mark.asyncio
+async def test_writer_refuses_content_over_the_utf8_byte_limit() -> None:
+    # 131,073 "é" fit the RPC schema's 262,144-character limit but are 262,146 bytes.
+    gateway = _ScriptedGateway(
+        {"cron.list": [_page([_heartbeat_job()])], "cron.scratch.get": [_state(None, 0)]},
+    )
+
+    warning = await _writer(gateway).write(agent_id=AGENT, instructions="é" * 131_073)
+
+    assert warning == heartbeat_scratch.WARNING_TOO_LARGE
+    assert gateway.params("cron.scratch.set") == []
+
+
+@pytest.mark.asyncio
+async def test_writer_treats_not_found_as_missing_job() -> None:
+    gateway = _ScriptedGateway(
+        {
+            "cron.list": [_page([_heartbeat_job()])],
+            "cron.scratch.get": [
+                OpenClawGatewayError("Automation not found: job-1. List automations and retry."),
+            ],
+        },
+    )
+
+    warning = await _writer(gateway).write(agent_id=AGENT, instructions=INSTRUCTIONS)
+
+    assert warning == heartbeat_scratch.WARNING_JOB_MISSING
+
+
+@pytest.mark.asyncio
+async def test_writer_contains_gateway_errors() -> None:
+    gateway = _ScriptedGateway({"cron.list": [OpenClawGatewayError("connect call failed")]})
+
+    warning = await _writer(gateway).write(agent_id=AGENT, instructions=INSTRUCTIONS)
+
+    assert warning == heartbeat_scratch.WARNING_GATEWAY_ERROR
+
+
+@pytest.mark.asyncio
+async def test_writer_bounds_each_rpc_with_a_timeout() -> None:
+    async def _hanging_call(method: str, params: dict[str, Any]) -> object:
+        await asyncio.sleep(10)
+        return None
+
+    writer = heartbeat_scratch.HeartbeatScratchWriter(
+        _hanging_call,
+        call_timeout_seconds=0.01,
+        lookup_delays=(),
+    )
+
+    assert await writer.write(agent_id=AGENT, instructions=INSTRUCTIONS) == (
+        heartbeat_scratch.WARNING_GATEWAY_ERROR
+    )
+
+
+@pytest.mark.asyncio
+async def test_writer_propagates_cancellation() -> None:
+    gateway = _ScriptedGateway({"cron.list": [asyncio.CancelledError()]})
+
+    with pytest.raises(asyncio.CancelledError):
+        await _writer(gateway).write(agent_id=AGENT, instructions=INSTRUCTIONS)
