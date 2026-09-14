@@ -145,7 +145,9 @@ def test_keyed_agents_md_realistic_variants_never_mention_heartbeat_md(variant: 
     assert "HEARTBEAT.md" not in _render_variant("BOARD_AGENTS.md.j2", variant, "true")
 
 
-@pytest.mark.parametrize("role", ["lead", "worker"])  # main AGENTS.md has no Heartbeats section
+@pytest.mark.parametrize(
+    "role", ["lead", "worker"]
+)  # main only has a keyed-layout Heartbeats section
 def test_legacy_layout_agents_md_still_reads_heartbeat_md(role: str) -> None:
     rendered = _render("BOARD_AGENTS.md.j2", role, "false")
     assert "Read `HEARTBEAT.md` first." in rendered
@@ -218,6 +220,39 @@ def test_keyed_agents_md_has_persistent_scratch_preservation_guidance(variant: s
 def test_legacy_agents_md_has_no_scratch_preservation_guidance(variant: str) -> None:
     rendered = _render_variant("BOARD_AGENTS.md.j2", variant, "false")
     assert _SCRATCH_GUIDANCE not in rendered
+
+
+def _between(text: str, start_marker: str, end_marker: str) -> str:
+    start = text.index(start_marker)
+    end = text.index(end_marker, start)
+    return text[start:end]
+
+
+def test_legacy_agents_md_has_no_triple_blank_lines() -> None:
+    # K1 added a keyed-only main-role "## Heartbeats" block (wrapped in its
+    # own blank lines) and folded a shared sentence into the pre-existing
+    # lead/worker "## Heartbeats" clause. With trim_blocks/lstrip_blocks, an
+    # {% if %}/{% endif %} pair contributes zero newlines when its branch
+    # doesn't render, so a blank line placed outside the conditional on
+    # *both* sides collapses into a double blank line on the legacy (false)
+    # render. Legacy output must stay byte-identical to the pre-K1 template.
+    # Scoped to the sections K1 touched: unrelated pre-existing triple-blank
+    # spots elsewhere in this template (e.g. around "### OpenAPI refresh" and
+    # "## Safety", present before K1 on every role/layout) are out of scope
+    # for this regression guard.
+    main_legacy = _render("BOARD_AGENTS.md.j2", "main", "false")
+    assert "\n\n\n" not in _between(main_legacy, "## Decision Discipline", "## API Discovery")
+
+    for role in ("lead", "worker"):
+        for layout in ("false", "true"):
+            rendered = _render("BOARD_AGENTS.md.j2", role, layout)
+            window = _between(rendered, "## Tools and Markdown", "## Heartbeat vs Cron")
+            assert "\n\n\n" not in window, f"{role}/{layout}"
+
+
+def test_keyed_main_agents_md_heartbeats_section_has_no_triple_blank_lines() -> None:
+    main_keyed = _render("BOARD_AGENTS.md.j2", "main", "true")
+    assert "\n\n\n" not in _between(main_keyed, "## Decision Discipline", "## API Discovery")
 
 
 @pytest.mark.parametrize("role", sorted(_ROLES))
