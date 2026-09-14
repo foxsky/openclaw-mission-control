@@ -2,8 +2,8 @@
 
 **Date:** 2026-09-14
 **Branch:** `design/heartbeat-scratch`
-**Status:** revised after Codex review (gpt-6-astra, xhigh); awaiting operator review. One approved
-decision (prompt) is proposed for change — see "Decisions".
+**Status:** implemented on this branch (Tasks 1-7); awaiting production validation and operator
+approval to merge.
 
 ## Goal
 
@@ -111,7 +111,8 @@ Observed on the production gateway (2026.9.4), 2026-09-14:
      points at the checklist in the heartbeat prompt; the scratch-preservation rule lives here too
      (persistent context also covers wake turns that never see scratch).
    - `BOARD_BOOTSTRAP.md.j2`: `HEARTBEAT.md` dropped from the required-files list on keyed layouts.
-   - `scripts/check_agent_workspace_drift.py`: skip `HEARTBEAT.md` on keyed layouts.
+   - `scripts/check_agent_workspace_drift.py` needs no change: it only compares template/workspace
+     pairs the operator passes.
 7. **Diagnostics.** `_set_agent_files` returns warning codes; `LifecycleResult` gains
    `warnings: tuple[str, ...]`; `GatewayTemplatesSyncResult` gains `warnings: list[...]` (same
    shape as errors). Warnings don't count as errors (CLI exit code unchanged) and don't set
@@ -196,6 +197,12 @@ raises for `HEARTBEAT.md` on keyed layouts.
   and synced (or a lifecycle run touches them).
 - Prompt removal and first scratch write are not atomic; between them the agent gets the default
   prompt with no scratch (no worse than today).
+- An inherited `agents.defaults.heartbeat.prompt` that names `HEARTBEAT.md` is not removed (MC
+  only edits per-agent entries); OpenClaw merges defaults under entries, so such a default would
+  stay effective for MC agents until an operator removes it (production has none as of
+  2026-09-14).
+- A scratch warning from a run whose later step (e.g. session reset) fails is only logged, not
+  reported in the sync result; that agent's sync error is reported and it is retried.
 
 ## Testing
 
