@@ -939,7 +939,12 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
             if not isinstance(raw_entries, dict):
                 msg = "config agents.entries is not an object"
                 raise OpenClawGatewayError(msg)
-            updated_entries = _updated_agent_entries(raw_entries, entry_by_id)
+            # Stripped before comparing too, so a retired key alone never forces a patch.
+            keyed_heartbeats = {
+                agent_id: (workspace_path, _without_retired_heartbeat_keys(heartbeat))
+                for agent_id, (workspace_path, heartbeat) in entry_by_id.items()
+            }
+            updated_entries = _updated_agent_entries(raw_entries, keyed_heartbeats)
             agents_changed = bool(updated_entries)
             agents_patch = {"entries": updated_entries} if updated_entries else {}
             # ``id`` only labels the provider warning; keyed entries are sent without it.
@@ -1046,6 +1051,15 @@ def _warn_unconfigured_heartbeat_model_providers(
 # ``agents.defaults.compaction.truncateAfterCompaction`` in the same release. Gateways
 # reject the other layout's keys, so one detection per config read drives all three.
 _KEYED_AGENT_ENTRIES_MIN_VERSION = "2026.8.1"
+
+# The same release made the heartbeat schema strict. ``skipWhenBusy`` was removed (busy
+# sessions are skipped by default, reason "requests-in-flight") and ``includeReasoning``
+# was never a heartbeat option; 2026.8+ gateways reject both. Older gateways still get them.
+_RETIRED_HEARTBEAT_KEYS = frozenset({"includeReasoning", "skipWhenBusy"})
+
+
+def _without_retired_heartbeat_keys(heartbeat: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in heartbeat.items() if key not in _RETIRED_HEARTBEAT_KEYS}
 
 
 def _uses_keyed_agent_entries(payload: Mapping[str, object], config_data: dict[str, Any]) -> bool:

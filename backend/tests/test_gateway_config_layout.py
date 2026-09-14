@@ -182,3 +182,67 @@ async def test_patch_agent_heartbeats_skips_patch_when_keyed_entry_matches(
     await control_plane.patch_agent_heartbeats([("mc-agent-x", "/w/x", {"every": "10m"})])
 
     assert [method for method, _ in calls] == ["config.get"]
+
+
+# MC's DEFAULT_HEARTBEAT_CONFIG and stored agent overrides carry these; the strict
+# 2026.8+ heartbeat schema rejects them (`Unrecognized keys: "includeReasoning",
+# "skipWhenBusy"`), which failed every wake after the layout fix.
+_RETIRED_HEARTBEAT_FIELDS = {"includeReasoning": False, "skipWhenBusy": True}
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_drops_retired_heartbeat_keys_on_keyed_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config({"mc-agent-x": {"workspace": "/w/x", "heartbeat": {"every": "10m"}}}),
+    )
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "20m", "target": "last", **_RETIRED_HEARTBEAT_FIELDS})],
+    )
+
+    patch = json.loads(calls[1][1]["raw"])
+    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {
+        "every": "20m",
+        "target": "last",
+    }
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_ignores_retired_keys_when_comparing_keyed_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config({"mc-agent-x": {"workspace": "/w/x", "heartbeat": {"every": "10m"}}}),
+    )
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "10m", **_RETIRED_HEARTBEAT_FIELDS})],
+    )
+
+    assert [method for method, _ in calls] == ["config.get"]
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_keeps_heartbeat_keys_on_legacy_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "hash": "h-legacy",
+        "config": {
+            "agents": {"list": [{"id": "mc-agent-x", "workspace": "/w/x", "heartbeat": {}}]},
+            "channels": {"defaults": {"heartbeat": dict(_VISIBILITY)}},
+        },
+    }
+    control_plane, calls = _control_plane_with(monkeypatch, payload)
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "10m", **_RETIRED_HEARTBEAT_FIELDS})],
+    )
+
+    patch = json.loads(calls[1][1]["raw"])
+    (entry,) = patch["agents"]["list"]
+    assert entry["heartbeat"] == {"every": "10m", **_RETIRED_HEARTBEAT_FIELDS}
