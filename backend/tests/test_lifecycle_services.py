@@ -582,3 +582,72 @@ async def test_run_lifecycle_delivered_wake_consumes_strike_and_enqueues_reconci
     assert agent.status == "online"
     assert agent.last_provision_error is None
     assert len(enqueued) == 1, f"exactly one reconcile task should be enqueued; got {len(enqueued)}"
+
+
+@pytest.mark.asyncio
+async def test_run_lifecycle_exposes_lifecycle_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _make_orchestrator_stub_agent()
+    agent.agent_token_hash = "existing"
+    board = SimpleNamespace(id=agent.board_id, gateway_id=agent.gateway_id, name="Dev Squad")
+    gateway = SimpleNamespace(
+        id=agent.gateway_id,
+        url="ws://gw.example/ws",
+        token=None,
+        workspace_root="/tmp/openclaw",
+        organization_id=uuid4(),
+        allow_insecure_tls=False,
+        disable_device_pairing=False,
+    )
+
+    async def _fake_lock_agent(self, *, agent_id):
+        return agent
+
+    async def _fake_get_existing_auth_token(*, agent_gateway_id, control_plane):
+        return "existing-raw-token"
+
+    async def _fake_apply_agent_lifecycle(self, **kwargs):
+        return LifecycleResult(wake_delivered=False, warnings=("heartbeat_scratch.conflict",))
+
+    import app.core.agent_tokens as agent_tokens_module
+    import app.services.openclaw.gateway_resolver as gateway_resolver_module
+    import app.services.openclaw.provisioning_db as provisioning_db_module
+
+    monkeypatch.setattr(
+        lifecycle_orchestrator_module.AgentLifecycleOrchestrator,
+        "_lock_agent",
+        _fake_lock_agent,
+    )
+    monkeypatch.setattr(
+        provisioning_db_module,
+        "_get_existing_auth_token",
+        _fake_get_existing_auth_token,
+    )
+    monkeypatch.setattr(agent_tokens_module, "verify_agent_token", lambda raw, hashed: True)
+    monkeypatch.setattr(
+        gateway_resolver_module,
+        "optional_gateway_client_config",
+        lambda gw: GatewayClientConfig(url="ws://gw.example/ws", token=None),
+    )
+    monkeypatch.setattr(
+        provisioning_module.OpenClawGatewayProvisioner,
+        "apply_agent_lifecycle",
+        _fake_apply_agent_lifecycle,
+    )
+    monkeypatch.setattr(
+        lifecycle_orchestrator_module, "enqueue_lifecycle_reconcile", lambda task: None
+    )
+    orchestrator = lifecycle_orchestrator_module.AgentLifecycleOrchestrator(
+        _OrchestratorFakeSession(),  # type: ignore[arg-type]
+    )
+
+    await orchestrator.run_lifecycle(
+        gateway=gateway,  # type: ignore[arg-type]
+        agent_id=agent.id,
+        board=board,  # type: ignore[arg-type]
+        user=None,
+        action="update",
+        wake=False,
+    )
+
+    assert orchestrator.last_lifecycle_warnings == ("heartbeat_scratch.conflict",)
+    assert agent.last_provision_error is None

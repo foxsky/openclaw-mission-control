@@ -89,3 +89,5 @@ class GatewayTemplatesSyncResult(SQLModel):
     agents_skipped: int
     main_updated: bool
     errors: list[GatewayTemplatesSyncError] = Field(default_factory=list)
+    # Non-fatal per-agent problems (e.g. heartbeat scratch not written); never counted as errors.
+    warnings: list[GatewayTemplatesSyncError] = Field(default_factory=list)

@@ -232,3 +232,31 @@ async def test_apply_agent_lifecycle_returns_provision_warnings(
     )
 
     assert result.warnings == ("heartbeat_scratch.too_large",)
+
+
+def test_sync_warnings_are_recorded_apart_from_errors() -> None:
+    import app.services.openclaw.provisioning_db as provisioning_db
+    from app.schemas.gateways import GatewayTemplatesSyncResult
+
+    result = GatewayTemplatesSyncResult(
+        gateway_id=uuid4(),
+        include_main=True,
+        reset_sessions=False,
+        agents_updated=1,
+        agents_skipped=0,
+        main_updated=False,
+    )
+    agent = SimpleNamespace(id=uuid4(), name="Supervisor")
+    board = SimpleNamespace(id=uuid4())
+
+    provisioning_db._append_sync_warnings(
+        result,
+        ("heartbeat_scratch.job_missing",),
+        agent=agent,  # type: ignore[arg-type]
+        board=board,  # type: ignore[arg-type]
+    )
+
+    assert result.errors == []
+    assert [(w.agent_name, w.board_id, w.message) for w in result.warnings] == [
+        ("Supervisor", board.id, "heartbeat_scratch.job_missing"),
+    ]

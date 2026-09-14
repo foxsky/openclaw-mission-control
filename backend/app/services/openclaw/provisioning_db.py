@@ -521,6 +521,24 @@ def _append_sync_error(
     )
 
 
+def _append_sync_warnings(
+    result: GatewayTemplatesSyncResult,
+    warnings: tuple[str, ...],
+    *,
+    agent: Agent,
+    board: Board | None = None,
+) -> None:
+    for warning in warnings:
+        result.warnings.append(
+            GatewayTemplatesSyncError(
+                agent_id=agent.id,
+                agent_name=agent.name,
+                board_id=board.id if board else None,
+                message=warning,
+            ),
+        )
+
+
 async def _rotate_agent_token(session: AsyncSession, agent: Agent) -> str:
     token = mint_agent_token(agent)
     agent.updated_at = utcnow()
@@ -666,10 +684,11 @@ async def _sync_one_agent(
     if not auth_token:
         return False
     try:
+        orchestrator = AgentLifecycleOrchestrator(ctx.session)
 
         async def _do_provision() -> bool:
             try:
-                await AgentLifecycleOrchestrator(ctx.session).run_lifecycle(
+                await orchestrator.run_lifecycle(
                     gateway=ctx.gateway,
                     agent_id=agent.id,
                     board=board,
@@ -693,6 +712,9 @@ async def _sync_one_agent(
 
         await ctx.backoff.run(_do_provision)
         result.agents_updated += 1
+        _append_sync_warnings(
+            result, orchestrator.last_lifecycle_warnings, agent=agent, board=board
+        )
     except TimeoutError as exc:  # pragma: no cover - gateway/network dependent
         result.agents_skipped += 1
         _append_sync_error(result, agent=agent, board=board, message=str(exc))
@@ -758,10 +780,11 @@ async def _sync_main_agent(
         return True
     stop_sync = False
     try:
+        orchestrator = AgentLifecycleOrchestrator(ctx.session)
 
         async def _do_provision_main() -> bool:
             try:
-                await AgentLifecycleOrchestrator(ctx.session).run_lifecycle(
+                await orchestrator.run_lifecycle(
                     gateway=ctx.gateway,
                     agent_id=main_agent.id,
                     board=None,
@@ -801,6 +824,7 @@ async def _sync_main_agent(
         )
     else:
         result.main_updated = True
+        _append_sync_warnings(result, orchestrator.last_lifecycle_warnings, agent=main_agent)
     return stop_sync
 
 

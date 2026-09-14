@@ -112,6 +112,13 @@ async def _run() -> int:
         f"agents_skipped={result.agents_skipped} "
         f"main_updated={result.main_updated}\n",
     )
+    if result.warnings:
+        sys.stdout.write("warnings:\n")
+        for warning in result.warnings:
+            agent = f"{warning.agent_name} ({warning.agent_id})" if warning.agent_id else "n/a"
+            sys.stdout.write(
+                f"- agent={agent} board_id={warning.board_id} message={warning.message}\n",
+            )
     if result.errors:
         sys.stdout.write("errors:\n")
         for err in result.errors:

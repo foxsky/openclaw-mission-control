@@ -17,4 +17,5 @@ export interface GatewayTemplatesSyncResult {
   include_main: boolean;
   main_updated: boolean;
   reset_sessions: boolean;
+  warnings?: GatewayTemplatesSyncError[];
 }

@@ -83,6 +83,8 @@ class AgentLifecycleOrchestrator(OpenClawDBService):
 
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
+        # Warning codes from the most recent run_lifecycle (e.g. heartbeat scratch problems).
+        self.last_lifecycle_warnings: tuple[str, ...] = ()
 
     async def _lock_agent(self, *, agent_id: UUID) -> Agent:
         statement = select(Agent).where(col(Agent.id) == agent_id).with_for_update()
@@ -111,6 +113,7 @@ class AgentLifecycleOrchestrator(OpenClawDBService):
     ) -> Agent:
         """Provision or update any agent under a per-agent lock."""
 
+        self.last_lifecycle_warnings = ()
         locked = await self._lock_agent(agent_id=agent_id)
         template_user = user
         if board is None and template_user is None:
@@ -252,6 +255,8 @@ class AgentLifecycleOrchestrator(OpenClawDBService):
                     detail=f"Unexpected error {action}ing gateway provisioning.",
                 ) from exc
             return locked
+
+        self.last_lifecycle_warnings = lifecycle_result.warnings
 
         # Branch on the wake-delivery outcome. Only a genuinely-delivered
         # wake should consume a strike, set a check-in deadline, flip the
