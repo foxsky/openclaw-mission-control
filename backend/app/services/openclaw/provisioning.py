@@ -1024,9 +1024,7 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
 
     async def uses_keyed_agent_entries(self) -> bool:
         if self._keyed_agent_entries is None:
-            _, _, keyed_entries = await _gateway_config_snapshot(self._config)
-            self._keyed_agent_entries = keyed_entries
-            return keyed_entries
+            _, _, self._keyed_agent_entries = await _gateway_config_snapshot(self._config)
         return self._keyed_agent_entries
 
     async def write_heartbeat_scratch(self, *, agent_id: str, instructions: str) -> str | None:
@@ -1237,9 +1235,11 @@ def _updated_agent_entries(
                 heartbeat,
                 drop_heartbeat_md_prompt=True,
             )
-            if merged is not None and _references_heartbeat_md(raw_entry.get("heartbeat")):
-                logger.info("gateway.heartbeat_prompt.heartbeat_md_removed agent_id=%s", agent_id)
             if merged is not None:
+                if _references_heartbeat_md(raw_entry.get("heartbeat")):
+                    logger.info(
+                        "gateway.heartbeat_prompt.heartbeat_md_removed agent_id=%s", agent_id
+                    )
                 updates[agent_id] = merged
         else:
             updates[agent_id] = _new_agent_entry(agent_id, workspace_path, heartbeat)

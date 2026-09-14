@@ -345,8 +345,10 @@ def _apply_merge_patch(target: object, patch: object) -> object:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("every", ["10m", "0m"], ids=["enabled", "disabled"])
 async def test_patch_agent_heartbeats_deletes_heartbeat_md_prompt_on_keyed_layout(
     monkeypatch: pytest.MonkeyPatch,
+    every: str,
 ) -> None:
     control_plane, calls = _control_plane_with(
         monkeypatch,
@@ -354,38 +356,16 @@ async def test_patch_agent_heartbeats_deletes_heartbeat_md_prompt_on_keyed_layou
             {
                 "mc-agent-x": {
                     "workspace": "/w/x",
-                    "heartbeat": {"every": "10m", "prompt": _LEGACY_PROMPT},
+                    "heartbeat": {"every": every, "prompt": _LEGACY_PROMPT},
                 }
             },
         ),
     )
 
-    await control_plane.patch_agent_heartbeats([("mc-agent-x", "/w/x", {"every": "10m"})])
+    await control_plane.patch_agent_heartbeats([("mc-agent-x", "/w/x", {"every": every})])
 
     patch = json.loads(calls[1][1]["raw"])
-    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {"every": "10m", "prompt": None}
-
-
-@pytest.mark.asyncio
-async def test_patch_agent_heartbeats_deletes_heartbeat_md_prompt_for_disabled_heartbeat(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    control_plane, calls = _control_plane_with(
-        monkeypatch,
-        _canonical_config(
-            {
-                "mc-agent-x": {
-                    "workspace": "/w/x",
-                    "heartbeat": {"every": "0m", "prompt": _LEGACY_PROMPT},
-                }
-            },
-        ),
-    )
-
-    await control_plane.patch_agent_heartbeats([("mc-agent-x", "/w/x", {"every": "0m"})])
-
-    patch = json.loads(calls[1][1]["raw"])
-    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {"every": "0m", "prompt": None}
+    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {"every": every, "prompt": None}
 
 
 @pytest.mark.asyncio
