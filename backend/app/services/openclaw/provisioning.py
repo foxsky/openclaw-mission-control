@@ -52,7 +52,6 @@ from app.services.openclaw.gateway_compat import (
     extract_config_last_touched_version,
 )
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
-from app.services.openclaw.heartbeat_scratch import HeartbeatScratchWriter
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import (
     OpenClawGatewayError,
@@ -60,6 +59,7 @@ from app.services.openclaw.gateway_rpc import (
     openclaw_call,
     send_message,
 )
+from app.services.openclaw.heartbeat_scratch import HeartbeatScratchWriter
 from app.services.openclaw.internal.agent_key import agent_key as _agent_key
 from app.services.openclaw.internal.agent_key import slugify
 from app.services.openclaw.internal.session_keys import (

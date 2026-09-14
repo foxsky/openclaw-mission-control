@@ -289,7 +289,11 @@ async def test_control_plane_writes_heartbeat_scratch_through_gateway_rpc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, Any]] = []
-    job = {"id": "job-1", "declarationKey": "heartbeat:mc-agent-x", "payload": {"kind": "heartbeat"}}
+    job = {
+        "id": "job-1",
+        "declarationKey": "heartbeat:mc-agent-x",
+        "payload": {"kind": "heartbeat"},
+    }
 
     async def _fake_openclaw_call(
         method: str,
