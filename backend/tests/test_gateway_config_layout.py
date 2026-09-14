@@ -321,3 +321,157 @@ async def test_control_plane_writes_heartbeat_scratch_through_gateway_rpc(
 
     assert warning is None
     assert [method for method, _ in calls] == ["cron.list", "cron.scratch.get", "cron.scratch.set"]
+
+
+# Every MC agent on the 2026.9.4 gateway carried this prompt; 2026.8+ never reads HEARTBEAT.md,
+# and OpenClaw's default prompt already follows heartbeat monitor scratch.
+_LEGACY_PROMPT = (
+    "Read HEARTBEAT.md and follow it strictly. Do not infer or repeat old tasks from prior "
+    "chats. If nothing needs attention, reply HEARTBEAT_OK."
+)
+
+
+def _apply_merge_patch(target: object, patch: object) -> object:
+    """RFC 7396 merge patch, as OpenClaw's config.patch applies it (null deletes)."""
+    if not isinstance(patch, dict):
+        return patch
+    result = dict(target) if isinstance(target, dict) else {}
+    for key, value in patch.items():
+        if value is None:
+            result.pop(key, None)
+        else:
+            result[key] = _apply_merge_patch(result.get(key), value)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_deletes_heartbeat_md_prompt_on_keyed_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config(
+            {
+                "mc-agent-x": {
+                    "workspace": "/w/x",
+                    "heartbeat": {"every": "10m", "prompt": _LEGACY_PROMPT},
+                }
+            },
+        ),
+    )
+
+    await control_plane.patch_agent_heartbeats([("mc-agent-x", "/w/x", {"every": "10m"})])
+
+    patch = json.loads(calls[1][1]["raw"])
+    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {"every": "10m", "prompt": None}
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_deletes_heartbeat_md_prompt_for_disabled_heartbeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config(
+            {
+                "mc-agent-x": {
+                    "workspace": "/w/x",
+                    "heartbeat": {"every": "0m", "prompt": _LEGACY_PROMPT},
+                }
+            },
+        ),
+    )
+
+    await control_plane.patch_agent_heartbeats([("mc-agent-x", "/w/x", {"every": "0m"})])
+
+    patch = json.loads(calls[1][1]["raw"])
+    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {"every": "0m", "prompt": None}
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_ignores_stored_heartbeat_md_prompt_on_keyed_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config({"mc-agent-x": {"workspace": "/w/x", "heartbeat": {"every": "10m"}}}),
+    )
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "10m", "prompt": _LEGACY_PROMPT})],
+    )
+
+    assert [method for method, _ in calls] == ["config.get"]
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_keeps_custom_prompt_on_keyed_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control_plane, calls = _control_plane_with(
+        monkeypatch,
+        _canonical_config({"mc-agent-x": {"workspace": "/w/x", "heartbeat": {"every": "10m"}}}),
+    )
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "20m", "prompt": "Check the deploy queue."})],
+    )
+
+    patch = json.loads(calls[1][1]["raw"])
+    assert patch["agents"]["entries"]["mc-agent-x"]["heartbeat"] == {
+        "every": "20m",
+        "prompt": "Check the deploy queue.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_prompt_removal_converges_after_gateway_applies_the_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _canonical_config(
+        {
+            "mc-enabled": {
+                "workspace": "/w/e",
+                "heartbeat": {"every": "10m", "target": "last", "prompt": _LEGACY_PROMPT},
+            },
+            "mc-disabled": {
+                "workspace": "/w/d",
+                "heartbeat": {"every": "0m", "prompt": _LEGACY_PROMPT},
+            },
+        },
+    )
+    control_plane, calls = _control_plane_with(monkeypatch, payload)
+    desired = [
+        ("mc-enabled", "/w/e", {"every": "10m", "target": "last", "prompt": _LEGACY_PROMPT}),
+        ("mc-disabled", "/w/d", {"every": "0m", "target": "last", "prompt": _LEGACY_PROMPT}),
+    ]
+
+    await control_plane.patch_agent_heartbeats(desired)
+    payload["config"] = _apply_merge_patch(payload["config"], json.loads(calls[1][1]["raw"]))
+    await control_plane.patch_agent_heartbeats(desired)
+
+    assert [method for method, _ in calls] == ["config.get", "config.patch", "config.get"]
+    entries = payload["config"]["agents"]["entries"]
+    assert "prompt" not in entries["mc-enabled"]["heartbeat"]
+    assert "prompt" not in entries["mc-disabled"]["heartbeat"]
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_heartbeats_keeps_heartbeat_md_prompt_on_legacy_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "hash": "h-legacy",
+        "config": {
+            "agents": {"list": [{"id": "mc-agent-x", "workspace": "/w/x", "heartbeat": {}}]},
+            "channels": {"defaults": {"heartbeat": dict(_VISIBILITY)}},
+        },
+    }
+    control_plane, calls = _control_plane_with(monkeypatch, payload)
+
+    await control_plane.patch_agent_heartbeats(
+        [("mc-agent-x", "/w/x", {"every": "10m", "prompt": _LEGACY_PROMPT})],
+    )
+
+    (entry,) = json.loads(calls[1][1]["raw"])["agents"]["list"]
+    assert entry["heartbeat"] == {"every": "10m", "prompt": _LEGACY_PROMPT}

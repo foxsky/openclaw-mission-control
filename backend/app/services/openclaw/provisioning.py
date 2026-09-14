@@ -953,9 +953,10 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
             if not isinstance(raw_entries, dict):
                 msg = "config agents.entries is not an object"
                 raise OpenClawGatewayError(msg)
-            # Stripped before comparing too, so a retired key alone never forces a patch.
+            # Normalized before comparing too, so a retired key or MC's legacy prompt alone
+            # never forces a patch.
             keyed_heartbeats = {
-                agent_id: (workspace_path, _without_retired_heartbeat_keys(heartbeat))
+                agent_id: (workspace_path, _keyed_heartbeat(heartbeat))
                 for agent_id, (workspace_path, heartbeat) in entry_by_id.items()
             }
             updated_entries = _updated_agent_entries(raw_entries, keyed_heartbeats)
@@ -1090,6 +1091,26 @@ def _without_retired_heartbeat_keys(heartbeat: dict[str, Any]) -> dict[str, Any]
     return {key: value for key, value in heartbeat.items() if key not in _RETIRED_HEARTBEAT_KEYS}
 
 
+def _references_heartbeat_md(heartbeat: object) -> bool:
+    """Whether a heartbeat prompt points at HEARTBEAT.md, which 2026.8+ gateways never read."""
+    if not isinstance(heartbeat, dict):
+        return False
+    prompt = heartbeat.get("prompt")
+    return isinstance(prompt, str) and "HEARTBEAT.md" in prompt
+
+
+def _keyed_heartbeat(heartbeat: dict[str, Any]) -> dict[str, Any]:
+    """MC's desired heartbeat for keyed-layout (2026.8+) gateways.
+
+    Prompts naming HEARTBEAT.md are MC's legacy prompts. Leaving ``prompt`` unset lets
+    OpenClaw's default prompt apply, which follows the heartbeat monitor scratch MC writes.
+    """
+    keyed = _without_retired_heartbeat_keys(heartbeat)
+    if _references_heartbeat_md(keyed):
+        del keyed["prompt"]
+    return keyed
+
+
 def _uses_keyed_agent_entries(payload: Mapping[str, object], config_data: dict[str, Any]) -> bool:
     """Return whether the gateway config uses the OpenClaw 2026.8+ layout."""
     agents = config_data.get("agents")
@@ -1144,10 +1165,16 @@ def _merged_agent_entry(
     raw_entry: dict[str, Any],
     workspace_path: str,
     heartbeat: dict[str, Any],
+    *,
+    drop_heartbeat_md_prompt: bool = False,
 ) -> dict[str, Any] | None:
     """Return the entry with MC's workspace/heartbeat applied, or None when unchanged."""
+    current_heartbeat = raw_entry.get("heartbeat")
+    # Checked apart from the heartbeat comparison, which ignores every field of a disabled
+    # heartbeat; otherwise disabled agents would keep the dead prompt.
+    stale_prompt = drop_heartbeat_md_prompt and _references_heartbeat_md(current_heartbeat)
     workspace_changed = raw_entry.get("workspace") != workspace_path
-    heartbeat_changed = not _heartbeat_configs_equal(raw_entry.get("heartbeat"), heartbeat)
+    heartbeat_changed = stale_prompt or not _heartbeat_configs_equal(current_heartbeat, heartbeat)
     if not workspace_changed and not heartbeat_changed:
         return None
     new_entry = dict(raw_entry)
@@ -1157,12 +1184,15 @@ def _merged_agent_entry(
         # Gateway-only fields (model, ackMaxChars, prompt) survive because
         # the merge starts from dict(existing) and MC's heartbeat dict
         # typically doesn't contain them (unless explicitly set in DB).
-        existing_hb = raw_entry.get("heartbeat") or {}
+        existing_hb = current_heartbeat or {}
         merged_hb = dict(existing_hb)
         merged_hb.update(heartbeat)
+        if stale_prompt:
+            # JSON null deletes the key under config.patch merge-patch semantics.
+            merged_hb["prompt"] = None
         new_entry["heartbeat"] = merged_hb
     else:
-        new_entry["heartbeat"] = raw_entry.get("heartbeat")
+        new_entry["heartbeat"] = current_heartbeat
     return new_entry
 
 
@@ -1199,7 +1229,14 @@ def _updated_agent_entries(
     for agent_id, (workspace_path, heartbeat) in entry_by_id.items():
         raw_entry = raw_entries.get(agent_id)
         if isinstance(raw_entry, dict):
-            merged = _merged_agent_entry(raw_entry, workspace_path, heartbeat)
+            merged = _merged_agent_entry(
+                raw_entry,
+                workspace_path,
+                heartbeat,
+                drop_heartbeat_md_prompt=True,
+            )
+            if merged is not None and _references_heartbeat_md(raw_entry.get("heartbeat")):
+                logger.info("gateway.heartbeat_prompt.heartbeat_md_removed agent_id=%s", agent_id)
             if merged is not None:
                 updates[agent_id] = merged
         else:
