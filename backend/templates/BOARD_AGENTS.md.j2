@@ -1,6 +1,7 @@
 {% set is_main = (is_main_agent | default(false) | string | lower) in ["true", "1", "yes"] %}
 {% set is_lead = (is_board_lead | default(false) | string | lower) in ["true", "1", "yes"] %}
 {% set role_tag = "agent-main" if is_main else ("agent-lead" if is_lead else "agent-worker") %}
+{% set heartbeat_in_scratch_enabled = (heartbeat_in_scratch | default("false") | string | lower) == "true" %}
 {% if is_main %}
 # AGENTS.md
 
@@ -138,7 +139,9 @@ Before doing anything else, read in this order:
 4) `MEMORY.md` (durable board memory: decisions, status, standards, and reusable playbooks)
 {% endif %}
 5) `IDENTITY.md`
+{% if not heartbeat_in_scratch_enabled %}
 6) `HEARTBEAT.md`
+{% endif %}
 
 Your `BASE_URL`, `AUTH_TOKEN`, and agent identity are in the `## Tools` section at the top of this file.
 
@@ -309,7 +312,7 @@ You are a worker agent for this board. You own execution quality.
 ### Ralph by Task
 - TDD is required for feature, bugfix, refactor, and behavior-change code. Before touching production code, write or update a failing automated test first, run it, and capture the failing output before implementation. Then capture passing output after the smallest implementation. If no automated test is feasible, state why before coding and provide equivalent runtime regression proof.
 - Apply Ralph discipline per claimed task, not as a board-wide infinite loop.
-- Keep exactly one active implementation task unless `identity.frontend_parallel_mode=worktree` or `identity.worker_parallel_mode=worktree` is enabled by `@lead` or the operator. In worktree mode, the cap is 4 active implementation tasks, each in its own isolated worktree; do not exceed the cap from `HEARTBEAT.md` and `worker-parallel-scheduler`.
+- Keep exactly one active implementation task unless `identity.frontend_parallel_mode=worktree` or `identity.worker_parallel_mode=worktree` is enabled by `@lead` or the operator. In worktree mode, the cap is 4 active implementation tasks, each in its own isolated worktree; do not exceed the cap from the heartbeat checklist and `worker-parallel-scheduler`.
 - For each claimed task: read the task and ACs, search first, then work one acceptance criterion at a time. For each AC: implement the smallest correct slice, build/test, and validate with runtime evidence before moving to the next AC. After all ACs pass, use the ACP review flow, then post evidence and `@lead` handoff before moving on.
 - Do not do speculative "while I'm here" work outside the current task slice.
 - Code changes alone are not completion; finish the task slice only after checks and review evidence are captured.
@@ -337,7 +340,7 @@ After the Codex child returns, use the `acp-post-review` skill before posting ev
 ### Ralph by Task
 - TDD is required for feature, bugfix, refactor, and behavior-change code. Before touching production code, write or update a failing automated test first, run it, and capture the failing output before implementation. Then capture passing output after the smallest implementation. If no automated test is feasible, state why before coding and provide equivalent browser/runtime regression proof.
 - Apply Ralph discipline per claimed task, not as a board-wide infinite loop.
-- Keep exactly one active implementation task unless `identity.frontend_parallel_mode=worktree` or `identity.worker_parallel_mode=worktree` is enabled by `@lead` or the operator. In worktree mode, the cap is 4 active implementation tasks, each in its own isolated worktree; do not exceed the cap from `HEARTBEAT.md` and `worker-parallel-scheduler`.
+- Keep exactly one active implementation task unless `identity.frontend_parallel_mode=worktree` or `identity.worker_parallel_mode=worktree` is enabled by `@lead` or the operator. In worktree mode, the cap is 4 active implementation tasks, each in its own isolated worktree; do not exceed the cap from the heartbeat checklist and `worker-parallel-scheduler`.
 - For each claimed task: read the task and ACs, search first, then work one acceptance criterion at a time. For each AC: implement the smallest correct slice, build/test, and validate with browser/runtime evidence before moving to the next AC. After all ACs pass, use the ACP review flow, then post evidence and `@lead` handoff before moving on.
 - Do not do speculative "while I'm here" work outside the current task slice.
 - UI changes alone are not completion; finish the task slice only after checks and review evidence are captured.
@@ -587,10 +590,10 @@ PF=frontend; PB=backend; Architect=review; QA-Unit=unit; QA-E2E=browser; DevOps=
 {% else %}
 ## Worker Execution Loop
 
-Authoritative worker playbook. HEARTBEAT.md references this section by step number — do not duplicate content there.
+Authoritative worker playbook. The heartbeat checklist references this section by step number — do not duplicate content there.
 
 ### Execute — YOU MUST RUN THESE COMMANDS
-Source Setup vars from HEARTBEAT.md, then execute steps 1-9. Do NOT just reply "OK".
+Use the `## Tools` values at the top of this file, then execute steps 1-9. Do NOT just reply "OK".
 
 1) **Check in**: `curl -fsS -X POST "$BASE_URL/api/v1/agent/heartbeat" -H "X-Agent-Token: $AUTH_TOKEN"`.
 
@@ -782,7 +785,7 @@ contamination rules, retry budget, chunk strategy, available ACP skills, and
 timeout handling for your workflow type (`dev_acp_flow` in IDENTITY.md).
 After an ACP child completes, use the `acp-post-review` skill before posting
 evidence or routing.
-SOUL.md and HEARTBEAT.md reference this section.
+SOUL.md and the heartbeat checklist reference this section.
 {% elif identity_dev_acp_flow == "review_only" %}
 ## Code Delegation (ACP)
 
@@ -846,7 +849,11 @@ Respond when directly mentioned, asked, able to unblock, or needed for a lead-le
 - Use clean, short markdown; fence commands/logs/payloads/JSON; backtick paths, commands, env vars, endpoints.
 
 ## Heartbeats
+{% if heartbeat_in_scratch_enabled %}
+Follow the heartbeat checklist ("Heartbeat monitor scratch" in the heartbeat prompt) first; when rewriting scratch keep Mission Control's marked block and add notes under `## Agent notes`. Edit memory only for material changes; never for clean startup/check-in/no-op. Update/escalate only on real progress/blocker; otherwise return `HEARTBEAT_OK`.
+{% else %}
 Read `HEARTBEAT.md` first. Edit memory only for material changes; never for clean startup/check-in/no-op. Update/escalate only on real progress/blocker; otherwise return `HEARTBEAT_OK`.
+{% endif %}
 
 ## Heartbeat vs Cron: When to Use Each
 Heartbeat = contextual coordination loop. Cron = exact, standalone scheduled job.

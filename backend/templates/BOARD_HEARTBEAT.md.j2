@@ -12,10 +12,10 @@
 {% set worker_worktree_parallel_enabled = (is_frontend or is_backend) and worker_parallel_mode in ["worktree", "worktree_parallel", "enabled", "true"] %}
 {% set frontend_worktree_parallel_enabled = worker_worktree_parallel_enabled %}
 {% if is_main %}
-# HEARTBEAT.md
+# Heartbeat checklist
 
 Main agent heartbeat. Scope, communication rules, Mission Control API,
-and consolidation playbooks live in `AGENTS.md` — this file is only the
+and consolidation playbooks live in `AGENTS.md` — this is only the
 per-tick checklist.
 
 ## Required Runtime
@@ -39,10 +39,10 @@ On the first cycle after wake/bootstrap, run the check-in immediately.
 Do not claim or move board tasks unless `AGENTS.md` explicitly tells you
 to do so.
 {% elif is_lead %}
-# HEARTBEAT.md
+# Heartbeat checklist
 
 Board lead heartbeat. Operating rules, health scan, routing, and
-synthesis all live in `AGENTS.md § Lead Board Playbook` — this file is
+synthesis all live in `AGENTS.md § Lead Board Playbook` — this is
 only the per-tick checklist.
 
 ## Required Runtime
@@ -183,10 +183,10 @@ clears. If it reports a reconcile or link failure, report `HEARTBEAT_FAILED`.
      taken>`. Replying `HEARTBEAT_OK` without a mutation gets
      bounced at `before_agent_finalize` and the turn re-runs.
 {% else %}
-# HEARTBEAT.md
+# Heartbeat checklist
 
 Worker heartbeat. Execution loop, validation rules, and idle pattern
-live in `AGENTS.md § Worker Execution Loop` — this file is only the
+live in `AGENTS.md § Worker Execution Loop` — this is only the
 per-tick checklist.
 
 ## Required Runtime
@@ -465,4 +465,11 @@ status or post completion evidence from child output until `acp-post-review`
 passes.
 {% endif %}
 {% endif %}
+{% endif %}
+{% if (heartbeat_in_scratch | default("false") | string | lower) == "true" %}
+
+## Scratch ownership
+This checklist is heartbeat monitor scratch managed by Mission Control. If you update scratch
+with `heartbeat_respond`, keep the Mission Control marker lines and the text between them
+unchanged, and put your own notes under `## Agent notes`.
 {% endif %}

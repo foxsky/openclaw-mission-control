@@ -103,6 +103,12 @@ Role-specific behavior is controlled inside that template with:
 - `is_main_agent`
 - `is_board_lead`
 
+On OpenClaw 2026.8+ gateways (keyed `agents.entries` config) the gateway never reads
+`HEARTBEAT.md`. Mission Control writes the rendered checklist into the agent's heartbeat
+monitor scratch instead, inside `mission-control:heartbeat` marker lines, and keeps any other
+scratch text under `## Agent notes` (`app/services/openclaw/heartbeat_scratch.py`). Templates
+receive `heartbeat_in_scratch` (`"true"`/`"false"`) to pick matching wording.
+
 ## OpenAPI refresh location
 
 Lead OpenAPI download/index generation is intentionally documented in:
