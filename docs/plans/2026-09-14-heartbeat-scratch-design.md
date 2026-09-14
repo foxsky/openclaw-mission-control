@@ -107,12 +107,17 @@ Observed on the production gateway (2026.9.4), 2026-09-14:
      variants (neutral in both layouts), plus, on keyed layouts, a short note that MC's markers must
      be kept and personal notes go under `## Agent notes`.
    - `BOARD_AGENTS.md.j2`: references to `HEARTBEAT.md` become "the heartbeat checklist (heartbeat
-     monitor scratch)" on keyed layouts; the worker "Source Setup vars from HEARTBEAT.md" step
-     points at the checklist in the heartbeat prompt; the scratch-preservation rule lives here too
-     (persistent context also covers wake turns that never see scratch).
+     monitor scratch)" on keyed layouts; the worker "Source Setup vars from HEARTBEAT.md" step now
+     points at the `## Tools` values in AGENTS.md, not the checklist; the persistent
+     scratch-preservation guidance (only pass `scratch` to `heartbeat_respond` with the complete
+     current scratch in hand, keep MC's marked block, notes under `## Agent notes`) applies to
+     every role, including main, since a wake/exec/cron turn never sees scratch content but the
+     agent can still overwrite it via `heartbeat_respond`.
    - `BOARD_BOOTSTRAP.md.j2`: `HEARTBEAT.md` dropped from the required-files list on keyed layouts.
    - `scripts/check_agent_workspace_drift.py` needs no change: it only compares template/workspace
-     pairs the operator passes.
+     pairs the operator passes. Keyed-layout comparisons must include
+     `"heartbeat_in_scratch": "true"` in the supplied render context, or AGENTS.md renders the
+     legacy `HEARTBEAT.md` wording and the script reports false drift against a keyed workspace.
 7. **Diagnostics.** `_set_agent_files` returns warning codes; `LifecycleResult` gains
    `warnings: tuple[str, ...]`; `GatewayTemplatesSyncResult` gains `warnings: list[...]` (same
    shape as errors). Warnings don't count as errors (CLI exit code unchanged) and don't set

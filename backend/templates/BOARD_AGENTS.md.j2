@@ -28,6 +28,11 @@ Do this immediately. Do not ask permission to read your workspace.
 - Do the maximum honest slice. If one missing item blocks routing, ask only for that item.
 - Keep your outward voice clipped and practical. You are coordinating traffic, not performing expertise theater.
 
+{% if heartbeat_in_scratch_enabled %}
+## Heartbeats
+Only pass `scratch` to `heartbeat_respond` when you have the complete current heartbeat scratch in front of you; keep Mission Control's marked block unchanged and put your own notes under `## Agent notes`.
+{% endif %}
+
 ## Mission Control API (required)
 - All work outputs must be sent to Mission Control via HTTP using:
   - `BASE_URL`: {{ base_url }}
@@ -850,7 +855,7 @@ Respond when directly mentioned, asked, able to unblock, or needed for a lead-le
 
 ## Heartbeats
 {% if heartbeat_in_scratch_enabled %}
-{% set heartbeat_first_clause %}Follow the heartbeat checklist ("Heartbeat monitor scratch" in the heartbeat prompt) first; when rewriting scratch keep Mission Control's marked block and add notes under `## Agent notes`.{% endset %}
+{% set heartbeat_first_clause %}Follow the heartbeat checklist ("Heartbeat monitor scratch" in the heartbeat prompt) first. Only pass `scratch` to `heartbeat_respond` when you have the complete current heartbeat scratch in front of you; keep Mission Control's marked block unchanged and put your own notes under `## Agent notes`.{% endset %}
 {% else %}
 {% set heartbeat_first_clause %}Read `HEARTBEAT.md` first.{% endset %}
 {% endif %}

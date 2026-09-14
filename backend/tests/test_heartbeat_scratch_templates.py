@@ -104,6 +104,12 @@ _REALISTIC_VARIANTS: dict[str, dict[str, object]] = {
         "identity_dev_acp_flow": "codex_then_claude_review",
         "identity_worker_parallel_mode": "worktree",
     },
+    "qa_worker": {
+        "is_main_agent": "false",
+        "is_board_lead": "false",
+        "agent_name": "QA-Specialist",
+        "identity_role": "Quality Assurance",
+    },
 }
 
 
@@ -190,3 +196,40 @@ def test_keyed_heartbeat_checklist_fits_scratch_with_room_for_notes() -> None:
         size = len(_render("BOARD_HEARTBEAT.md.j2", role, "true").encode("utf-8"))
         # OpenClaw scratch limit is 262,144 UTF-8 bytes; keep most of it for agent notes.
         assert size <= 64_000, f"{role} checklist is {size} bytes"
+
+
+_SCRATCH_GUIDANCE = "Only pass `scratch` to `heartbeat_respond`"
+
+
+@pytest.mark.parametrize("variant", sorted(_REALISTIC_VARIANTS))
+def test_keyed_agents_md_has_persistent_scratch_preservation_guidance(variant: str) -> None:
+    # On exec/cron/wake-payload turns the heartbeat prompt omits scratch content,
+    # but heartbeat_respond's `scratch` argument still lets an agent that never
+    # saw MC's checklist overwrite the whole thing. Every role (including main,
+    # which has no Heartbeats section pre-existing) needs this guidance so an
+    # agent never blind-replaces scratch and wipes MC's marked block.
+    rendered = _render_variant("BOARD_AGENTS.md.j2", variant, "true")
+    assert (
+        rendered.count(_SCRATCH_GUIDANCE) == 1
+    ), f"{variant}: expected exactly one occurrence, found {rendered.count(_SCRATCH_GUIDANCE)}"
+
+
+@pytest.mark.parametrize("variant", sorted(_REALISTIC_VARIANTS))
+def test_legacy_agents_md_has_no_scratch_preservation_guidance(variant: str) -> None:
+    rendered = _render_variant("BOARD_AGENTS.md.j2", variant, "false")
+    assert _SCRATCH_GUIDANCE not in rendered
+
+
+@pytest.mark.parametrize("role", sorted(_ROLES))
+def test_bootstrap_required_files_bullet_is_its_own_line(role: str) -> None:
+    # The required-files bullet must end the list line cleanly so the next
+    # numbered bootstrap step (`4) Create memory/ if missing.`) isn't glued
+    # onto the same line as `BOOTSTRAP.md`.
+    for layout in ("true", "false"):
+        rendered = _render("BOARD_BOOTSTRAP.md.j2", role, layout)
+        match = re.search(r"^- .*`BOOTSTRAP\.md`\n", rendered, re.M)
+        assert match is not None, f"{role}/{layout}: required-files bullet not found"
+        tail = rendered[match.end() :]
+        assert tail.startswith("\n") or re.match(
+            r"^\d+\)", tail
+        ), f"{role}/{layout}: bullet line glued to next content: {tail[:40]!r}"
