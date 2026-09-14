@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.core.logging import get_logger
-from app.services.openclaw.gateway_rpc import OpenClawGatewayError
+from app.services.openclaw.gateway_rpc import OpenClawGatewayError, redact_gateway_error_message
 
 logger = get_logger(__name__)
 
@@ -71,10 +71,14 @@ class HeartbeatScratchWriter:
         call: GatewayCall,
         *,
         call_timeout_seconds: float = 10.0,
+        total_timeout_seconds: float = 30.0,
         lookup_delays: tuple[float, ...] = (0.5, 1.0),
     ) -> None:
         self._call = call
         self._call_timeout_seconds = call_timeout_seconds
+        # Bounds the whole write() (paging + lookup retries + up to two CAS rounds), not
+        # just one RPC, so a slow gateway can't hold the heartbeat lifecycle step open.
+        self._total_timeout_seconds = total_timeout_seconds
         # A new agent's monitor job appears after gateway reconciliation; OpenClaw retries a
         # failed reconcile after 30 s, so this short wait is best effort only.
         self._lookup_delays = lookup_delays
@@ -83,17 +87,31 @@ class HeartbeatScratchWriter:
         """Return a warning code, or None when scratch holds the current block."""
         detail = ""
         try:
-            warning = await self._write(agent_id, instructions)
+            async with asyncio.timeout(self._total_timeout_seconds):
+                warning = await self._write(agent_id, instructions)
         except OpenClawGatewayError as exc:
             detail = str(exc)
             # The job can disappear between lookup and read/write (agent re-enrolled).
             missing = "not found" in detail.lower()
             warning = WARNING_JOB_MISSING if missing else WARNING_GATEWAY_ERROR
         except TimeoutError:
-            detail = f"no response within {self._call_timeout_seconds}s"
+            # Per-RPC timeouts are converted to OpenClawGatewayError in _rpc(), so a bare
+            # TimeoutError here can only be the total-budget asyncio.timeout() above.
+            detail = f"exceeded total budget of {self._total_timeout_seconds}s"
+            warning = WARNING_GATEWAY_ERROR
+        except Exception as exc:  # noqa: BLE001 - failures become warning codes, never raise.
+            # openclaw_call can raise things besides OpenClawGatewayError/TimeoutError (e.g.
+            # ValueError from _build_gateway_url, which runs outside its own try). CancelledError
+            # is a BaseException, not an Exception, so cancellation still propagates.
+            detail = f"{type(exc).__name__}: {exc}"
             warning = WARNING_GATEWAY_ERROR
         if warning is not None:
-            logger.warning("gateway.%s agent_id=%s detail=%s", warning, agent_id, detail)
+            logger.warning(
+                "gateway.%s agent_id=%s detail=%s",
+                warning,
+                agent_id,
+                redact_gateway_error_message(detail),
+            )
         return warning
 
     async def _write(self, agent_id: str, instructions: str) -> str | None:
@@ -147,15 +165,28 @@ class HeartbeatScratchWriter:
                 if _is_heartbeat_job(job, declaration_key):
                     return str(job["id"])
             next_offset = page.get("nextOffset")
-            if page.get("hasMore") is not True or not isinstance(next_offset, int):
+            # A gateway that reports hasMore without a strictly advancing offset would
+            # otherwise loop forever; treat it the same as "no more pages".
+            if (
+                page.get("hasMore") is not True
+                or not isinstance(next_offset, int)
+                or next_offset <= offset
+            ):
                 return None
             offset = next_offset
 
     async def _rpc(self, method: str, params: dict[str, Any]) -> object:
-        return await asyncio.wait_for(
-            self._call(method, params),
-            timeout=self._call_timeout_seconds,
-        )
+        try:
+            return await asyncio.wait_for(
+                self._call(method, params),
+                timeout=self._call_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            # Converted here (not left as a bare TimeoutError) so write()'s TimeoutError
+            # handler can assume any TimeoutError it sees came from the total-budget
+            # asyncio.timeout(), not from this per-RPC wait_for.
+            msg = f"no response within {self._call_timeout_seconds}s"
+            raise OpenClawGatewayError(msg) from exc
 
 
 def _is_heartbeat_job(job: object, declaration_key: str) -> bool:
