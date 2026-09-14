@@ -163,9 +163,10 @@ would otherwise bump revision on identical writes).
 6. `{ok: false, reason: "revision-conflict"}` → back to step 1 (re-resolve: the job may have been
    replaced), at most one retry; then warning `heartbeat_scratch.conflict`.
 
-Bounds: each RPC wrapped in `asyncio.wait_for` (10 s; `openclaw_call` itself has no response
+Bounds: each RPC wrapped in `asyncio.wait_for` (5 s; `openclaw_call` itself has no response
 deadline); job-missing retries use `asyncio.sleep` (0.5 s, 1 s — 3 lookups); total writer budget
-≈ 30 s. Cancellation propagates.
+15 s (total, enforced), well under the 60 s lifecycle deadline in heartbeat_sweep/lifecycle_reconcile.
+Cancellation propagates.
 
 ## Error handling
 

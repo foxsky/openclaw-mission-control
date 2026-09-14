@@ -70,14 +70,17 @@ class HeartbeatScratchWriter:
         self,
         call: GatewayCall,
         *,
-        call_timeout_seconds: float = 10.0,
-        total_timeout_seconds: float = 30.0,
+        call_timeout_seconds: float = 5.0,
+        total_timeout_seconds: float = 15.0,
         lookup_delays: tuple[float, ...] = (0.5, 1.0),
     ) -> None:
         self._call = call
         self._call_timeout_seconds = call_timeout_seconds
         # Bounds the whole write() (paging + lookup retries + up to two CAS rounds), not
         # just one RPC, so a slow gateway can't hold the heartbeat lifecycle step open.
+        # Scratch runs before session reset, credential verification and wake, all inside
+        # the caller's 60 s lifecycle deadline (heartbeat_sweep/lifecycle_reconcile), so
+        # this budget must stay well under 60 s to leave those steps room to finish.
         self._total_timeout_seconds = total_timeout_seconds
         # A new agent's monitor job appears after gateway reconciliation; OpenClaw retries a
         # failed reconcile after 30 s, so this short wait is best effort only.

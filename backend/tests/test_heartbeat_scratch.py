@@ -9,6 +9,7 @@ everything else as agent notes.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import re
 from typing import Any
@@ -430,3 +431,14 @@ async def test_writer_stops_paging_when_next_offset_does_not_advance() -> None:
 
     assert warning == heartbeat_scratch.WARNING_JOB_MISSING
     assert len(gateway.params("cron.list")) == 1
+
+
+def test_writer_default_budget_stays_well_under_the_lifecycle_deadline() -> None:
+    """heartbeat_sweep/lifecycle_reconcile enforce a 60 s lifecycle deadline around the whole
+    agent lifecycle (session reset, credential verification, wake) and scratch writes run
+    before those steps, so the writer's own default budget must leave them plenty of room."""
+    params = inspect.signature(heartbeat_scratch.HeartbeatScratchWriter).parameters
+
+    assert params["call_timeout_seconds"].default == 5.0
+    assert params["total_timeout_seconds"].default == 15.0
+    assert params["total_timeout_seconds"].default <= 20.0  # well under the 60 s lifecycle deadline
