@@ -111,6 +111,12 @@ Observed on the production gateway (2026.9.4), 2026-09-14:
    (`src/infra/heartbeat-runner-execution.ts:360`), and MC agents report through MC's API so they
    never have one. `none` runs the turn without auto-delivering its reply (OpenClaw heartbeat docs:
    "internal-only runs"). Other explicit targets are kept; legacy layouts keep `last`.
+   Known limits (Codex review 2026-09-14): a `last` an operator chose on purpose is switched too
+   (MC can't tell it from its default; no MC agent has a delivery route today); the agent edit
+   form and board-group heartbeat update already overwrite any stored target with `last`, which
+   now becomes `none` (follow-up: preserve the stored target); sweeps skip disabled agents, so
+   disabled entries switch only on a lifecycle run or template sync. The explicit `message` tool is
+   unaffected, and main-session cron jobs still request `target: "last"` for their own delivery.
 6. **Templates, layout-aware.** A `heartbeat_in_scratch` render variable (from the layout)
    selects wording:
    - `BOARD_HEARTBEAT.md.j2`: "# Heartbeat checklist" / "this checklist" in all three role
