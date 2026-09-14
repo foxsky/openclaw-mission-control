@@ -33,11 +33,7 @@ curl -fsS "{{ base_url }}/healthz" >/dev/null
 ```
 
 3) Ensure required files exist:
-{% if (heartbeat_in_scratch | default("false") | string | lower) == "true" %}
-- `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `MEMORY.md`, `BOOTSTRAP.md`
-{% else %}
-- `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`
-{% endif %}
+- `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `MEMORY.md`{% if (heartbeat_in_scratch | default("false") | string | lower) != "true" %}, `HEARTBEAT.md`{% endif %}, `BOOTSTRAP.md`
 
 4) Create `memory/` if missing.
 

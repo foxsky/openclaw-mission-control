@@ -850,10 +850,11 @@ Respond when directly mentioned, asked, able to unblock, or needed for a lead-le
 
 ## Heartbeats
 {% if heartbeat_in_scratch_enabled %}
-Follow the heartbeat checklist ("Heartbeat monitor scratch" in the heartbeat prompt) first; when rewriting scratch keep Mission Control's marked block and add notes under `## Agent notes`. Edit memory only for material changes; never for clean startup/check-in/no-op. Update/escalate only on real progress/blocker; otherwise return `HEARTBEAT_OK`.
+{% set heartbeat_first_clause %}Follow the heartbeat checklist ("Heartbeat monitor scratch" in the heartbeat prompt) first; when rewriting scratch keep Mission Control's marked block and add notes under `## Agent notes`.{% endset %}
 {% else %}
-Read `HEARTBEAT.md` first. Edit memory only for material changes; never for clean startup/check-in/no-op. Update/escalate only on real progress/blocker; otherwise return `HEARTBEAT_OK`.
+{% set heartbeat_first_clause %}Read `HEARTBEAT.md` first.{% endset %}
 {% endif %}
+{{ heartbeat_first_clause }} Edit memory only for material changes; never for clean startup/check-in/no-op. Update/escalate only on real progress/blocker; otherwise return `HEARTBEAT_OK`.
 
 ## Heartbeat vs Cron: When to Use Each
 Heartbeat = contextual coordination loop. Cron = exact, standalone scheduled job.

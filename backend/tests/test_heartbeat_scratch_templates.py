@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -106,24 +107,25 @@ _REALISTIC_VARIANTS: dict[str, dict[str, object]] = {
 }
 
 
+# Shared module-level environment: one FileSystemLoader/env build reused by
+# every render below instead of constructing a fresh Environment per call.
+_ENV = _template_env()
+_ENV.loader = FileSystemLoader(str(TEMPLATES_DIR))
+_ENV.undefined = Undefined  # optional template variables are omitted here
+
+
 def _render(template: str, role: str, heartbeat_in_scratch: str) -> str:
-    env = _template_env()
-    env.loader = FileSystemLoader(str(TEMPLATES_DIR))
-    env.undefined = Undefined  # optional template variables are omitted here
     context = {**_CONTEXT, **_ROLES[role], "heartbeat_in_scratch": heartbeat_in_scratch}
-    return env.get_template(template).render(**context)
+    return _ENV.get_template(template).render(**context)
 
 
 def _render_variant(template: str, variant: str, heartbeat_in_scratch: str) -> str:
-    env = _template_env()
-    env.loader = FileSystemLoader(str(TEMPLATES_DIR))
-    env.undefined = Undefined  # optional template variables are omitted here
     context = {
         **_REALISTIC_CONTEXT,
         **_REALISTIC_VARIANTS[variant],
         "heartbeat_in_scratch": heartbeat_in_scratch,
     }
-    return env.get_template(template).render(**context)
+    return _ENV.get_template(template).render(**context)
 
 
 @pytest.mark.parametrize("role", sorted(_ROLES))
@@ -168,15 +170,19 @@ def test_keyed_heartbeat_checklist_explains_scratch_ownership(role: str) -> None
     assert "## Agent notes" not in _render("BOARD_HEARTBEAT.md.j2", role, "false")
 
 
-@pytest.mark.parametrize("variant", ["devops_worker", "backend_dev_worker"])
+@pytest.mark.parametrize("variant", sorted(_REALISTIC_VARIANTS))
 def test_keyed_heartbeat_checklist_has_single_blank_before_scratch_ownership(
     variant: str,
 ) -> None:
-    # DevOps (frontend/backend parallel-mode block skipped) previously left
-    # a double blank line before "## Scratch ownership"; backend (block
-    # renders) is the control case that must stay at a single blank line.
+    # Every role/variant (main, lead, and every worker shape — including
+    # DevOps and QA/Architect, whose parallel-mode block above renders
+    # nothing) must land exactly one blank line before "## Scratch
+    # ownership"; the left-trimming section tag makes this unconditional
+    # rather than dependent on what rendered just above it.
     rendered = _render_variant("BOARD_HEARTBEAT.md.j2", variant, "true")
-    assert "\n\n\n## Scratch ownership" not in rendered
+    match = re.search(r"(\n*)## Scratch ownership", rendered)
+    assert match is not None
+    assert match.group(1) == "\n\n", f"{variant}: {match.group(1)!r} blank lines before heading"
 
 
 def test_keyed_heartbeat_checklist_fits_scratch_with_room_for_notes() -> None:
