@@ -78,7 +78,7 @@ async def test_keyed_layout_writes_heartbeat_to_scratch_after_physical_files() -
         heartbeat_in_scratch=True,
     )
 
-    assert warnings == []
+    assert warnings == ()
     assert control_plane.events == [
         ("set", "AGENTS.md"),
         ("delete", "TOOLS.md"),
@@ -100,7 +100,7 @@ async def test_keyed_layout_returns_scratch_warning_without_raising() -> None:
         heartbeat_in_scratch=True,
     )
 
-    assert warnings == ["heartbeat_scratch.job_missing"]
+    assert warnings == ("heartbeat_scratch.job_missing",)
 
 
 @pytest.mark.asyncio
@@ -171,9 +171,9 @@ async def test_provision_passes_layout_to_templates_and_file_routing(
         seen["context"] = dict(context)
         return {"AGENTS.md": "agents", "HEARTBEAT.md": "1. Check in."}
 
-    async def _fake_set_agent_files(self: Any, **kwargs: Any) -> list[str]:
+    async def _fake_set_agent_files(self: Any, **kwargs: Any) -> tuple[str, ...]:
         seen["set_kwargs"] = kwargs
-        return ["heartbeat_scratch.conflict"]
+        return ("heartbeat_scratch.conflict",)
 
     monkeypatch.setattr(agent_provisioning, "_render_agent_files", _fake_render)
     monkeypatch.setattr(
@@ -192,7 +192,7 @@ async def test_provision_passes_layout_to_templates_and_file_routing(
         options=agent_provisioning.ProvisionOptions(action="update"),
     )
 
-    assert warnings == ["heartbeat_scratch.conflict"]
+    assert warnings == ("heartbeat_scratch.conflict",)
     assert seen["context"]["heartbeat_in_scratch"] == ("true" if keyed else "false")
     assert seen["set_kwargs"]["heartbeat_in_scratch"] is keyed
 
@@ -204,8 +204,8 @@ async def test_apply_agent_lifecycle_returns_provision_warnings(
     async def _fake_openclaw_call(*args: Any, **kwargs: Any) -> object:
         return {"ok": True}
 
-    async def _fake_provision(self: Any, **kwargs: Any) -> list[str]:
-        return ["heartbeat_scratch.too_large"]
+    async def _fake_provision(self: Any, **kwargs: Any) -> tuple[str, ...]:
+        return ("heartbeat_scratch.too_large",)
 
     monkeypatch.setattr(agent_provisioning, "openclaw_call", _fake_openclaw_call)
     monkeypatch.setattr(agent_provisioning.BaseAgentLifecycleManager, "provision", _fake_provision)

@@ -1339,7 +1339,7 @@ class BaseAgentLifecycleManager(ABC):
         action: str,
         overwrite: bool = False,
         heartbeat_in_scratch: bool = False,
-    ) -> list[str]:
+    ) -> tuple[str, ...]:
         heartbeat_instructions = ""
         if heartbeat_in_scratch:
             # 2026.8+ gateways never read HEARTBEAT.md and reject writing it; the checklist goes
@@ -1408,12 +1408,12 @@ class BaseAgentLifecycleManager(ABC):
                     raise
 
         if not heartbeat_instructions:
-            return []
+            return ()
         warning = await self._control_plane.write_heartbeat_scratch(
             agent_id=agent_id,
             instructions=heartbeat_instructions,
         )
-        return [] if warning is None else [warning]
+        return () if warning is None else (warning,)
 
     async def verify_credentials_visible(
         self,
@@ -1482,7 +1482,7 @@ class BaseAgentLifecycleManager(ABC):
         options: ProvisionOptions,
         board: Board | None = None,
         session_label: str | None = None,
-    ) -> list[str]:
+    ) -> tuple[str, ...]:
         if not self._gateway.workspace_root:
             msg = "gateway_workspace_root is required"
             raise ValueError(msg)
@@ -1894,20 +1894,18 @@ class OpenClawGatewayProvisioner:
                 disable_device_pairing=gateway.disable_device_pairing,
             ),
         )
-        provision_warnings = tuple(
-            await manager.provision(
-                agent=agent,
-                board=board,
-                session_key=session_key,
-                auth_token=auth_token,
-                user=user,
-                options=ProvisionOptions(
-                    action=action,
-                    force_bootstrap=force_bootstrap,
-                    overwrite=overwrite,
-                ),
-                session_label=agent.name or "Gateway Agent",
-            )
+        provision_warnings = await manager.provision(
+            agent=agent,
+            board=board,
+            session_key=session_key,
+            auth_token=auth_token,
+            user=user,
+            options=ProvisionOptions(
+                action=action,
+                force_bootstrap=force_bootstrap,
+                overwrite=overwrite,
+            ),
+            session_label=agent.name or "Gateway Agent",
         )
 
         if reset_session:

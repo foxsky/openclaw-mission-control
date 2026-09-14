@@ -6,10 +6,14 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
+
+if TYPE_CHECKING:
+    from app.schemas.gateways import GatewayTemplatesSyncError
 
 
 def _parse_args() -> argparse.Namespace:
@@ -65,6 +69,15 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _write_entries(label: str, entries: list[GatewayTemplatesSyncError]) -> None:
+    sys.stdout.write(f"{label}:\n")
+    for entry in entries:
+        agent = f"{entry.agent_name} ({entry.agent_id})" if entry.agent_id else "n/a"
+        sys.stdout.write(
+            f"- agent={agent} board_id={entry.board_id} message={entry.message}\n",
+        )
+
+
 async def _run() -> int:
     from app.db.session import async_session_maker
     from app.models.gateways import Gateway
@@ -113,19 +126,9 @@ async def _run() -> int:
         f"main_updated={result.main_updated}\n",
     )
     if result.warnings:
-        sys.stdout.write("warnings:\n")
-        for warning in result.warnings:
-            agent = f"{warning.agent_name} ({warning.agent_id})" if warning.agent_id else "n/a"
-            sys.stdout.write(
-                f"- agent={agent} board_id={warning.board_id} message={warning.message}\n",
-            )
+        _write_entries("warnings", result.warnings)
     if result.errors:
-        sys.stdout.write("errors:\n")
-        for err in result.errors:
-            agent = f"{err.agent_name} ({err.agent_id})" if err.agent_id else "n/a"
-            sys.stdout.write(
-                f"- agent={agent} board_id={err.board_id} message={err.message}\n",
-            )
+        _write_entries("errors", result.errors)
         return 1
     return 0
 

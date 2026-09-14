@@ -504,6 +504,20 @@ async def _paused_board_ids(session: AsyncSession, board_ids: list[UUID]) -> set
     return {row[0] for row in rows if row[0] in board_id_set}
 
 
+def _sync_entry(
+    message: str,
+    *,
+    agent: Agent | None,
+    board: Board | None,
+) -> GatewayTemplatesSyncError:
+    return GatewayTemplatesSyncError(
+        agent_id=agent.id if agent else None,
+        agent_name=agent.name if agent else None,
+        board_id=board.id if board else None,
+        message=message,
+    )
+
+
 def _append_sync_error(
     result: GatewayTemplatesSyncResult,
     *,
@@ -511,14 +525,7 @@ def _append_sync_error(
     agent: Agent | None = None,
     board: Board | None = None,
 ) -> None:
-    result.errors.append(
-        GatewayTemplatesSyncError(
-            agent_id=agent.id if agent else None,
-            agent_name=agent.name if agent else None,
-            board_id=board.id if board else None,
-            message=message,
-        ),
-    )
+    result.errors.append(_sync_entry(message, agent=agent, board=board))
 
 
 def _append_sync_warnings(
@@ -529,14 +536,7 @@ def _append_sync_warnings(
     board: Board | None = None,
 ) -> None:
     for warning in warnings:
-        result.warnings.append(
-            GatewayTemplatesSyncError(
-                agent_id=agent.id,
-                agent_name=agent.name,
-                board_id=board.id if board else None,
-                message=warning,
-            ),
-        )
+        result.warnings.append(_sync_entry(warning, agent=agent, board=board))
 
 
 async def _rotate_agent_token(session: AsyncSession, agent: Agent) -> str:
