@@ -109,6 +109,8 @@ class LifecycleResult:
 
     wake_delivered: bool
     wake_skip_reason: str | None = None
+    # Heartbeat-scratch warning codes; they never fail the lifecycle (see heartbeat_scratch).
+    warnings: tuple[str, ...] = ()
 
 
 _ROLE_SOUL_MAX_CHARS = 24_000
@@ -1336,7 +1338,16 @@ class BaseAgentLifecycleManager(ABC):
         existing_files: dict[str, dict[str, Any]],
         action: str,
         overwrite: bool = False,
-    ) -> None:
+        heartbeat_in_scratch: bool = False,
+    ) -> list[str]:
+        heartbeat_instructions = ""
+        if heartbeat_in_scratch:
+            # 2026.8+ gateways never read HEARTBEAT.md and reject writing it; the checklist goes
+            # to heartbeat monitor scratch once the physical files are in place.
+            rendered = dict(rendered)
+            heartbeat_instructions = rendered.pop("HEARTBEAT.md", "")
+            if desired_file_names is not None:
+                desired_file_names = desired_file_names - {"HEARTBEAT.md"}
         preserve_files = (
             self._preserve_files(agent) if agent is not None else set(PRESERVE_AGENT_EDITABLE_FILES)
         )
@@ -1373,28 +1384,36 @@ class BaseAgentLifecycleManager(ABC):
             )
             raise RuntimeError(msg)
 
-        if agent is None or not self._allow_stale_file_deletion(agent):
-            return
+        if agent is not None and self._allow_stale_file_deletion(agent):
+            stale_names = (
+                set(existing_files.keys()) & self._stale_file_candidates(agent)
+            ) - target_file_names
+            if heartbeat_in_scratch:
+                stale_names.discard("HEARTBEAT.md")
+            for name in sorted(stale_names):
+                try:
+                    await self._control_plane.delete_agent_file(agent_id=agent_id, name=name)
+                except OpenClawGatewayError as exc:
+                    message = str(exc).lower()
+                    if any(
+                        marker in message
+                        for marker in (
+                            "unsupported",
+                            "unknown method",
+                            "not found",
+                            "no such file",
+                        )
+                    ):
+                        continue
+                    raise
 
-        stale_names = (
-            set(existing_files.keys()) & self._stale_file_candidates(agent)
-        ) - target_file_names
-        for name in sorted(stale_names):
-            try:
-                await self._control_plane.delete_agent_file(agent_id=agent_id, name=name)
-            except OpenClawGatewayError as exc:
-                message = str(exc).lower()
-                if any(
-                    marker in message
-                    for marker in (
-                        "unsupported",
-                        "unknown method",
-                        "not found",
-                        "no such file",
-                    )
-                ):
-                    continue
-                raise
+        if not heartbeat_instructions:
+            return []
+        warning = await self._control_plane.write_heartbeat_scratch(
+            agent_id=agent_id,
+            instructions=heartbeat_instructions,
+        )
+        return [] if warning is None else [warning]
 
     async def verify_credentials_visible(
         self,
@@ -1463,7 +1482,7 @@ class BaseAgentLifecycleManager(ABC):
         options: ProvisionOptions,
         board: Board | None = None,
         session_label: str | None = None,
-    ) -> None:
+    ) -> list[str]:
         if not self._gateway.workspace_root:
             msg = "gateway_workspace_root is required"
             raise ValueError(msg)
@@ -1493,6 +1512,9 @@ class BaseAgentLifecycleManager(ABC):
             board=board,
         )
         context = await self._augment_context(agent=agent, context=context)
+        # Known from the config read in upsert_agent (patch_agent_heartbeats).
+        heartbeat_in_scratch = await self._control_plane.uses_keyed_agent_entries()
+        context["heartbeat_in_scratch"] = "true" if heartbeat_in_scratch else "false"
         # Always attempt to sync Mission Control's full template set.
         # Do not introspect gateway defaults (avoids touching gateway "main" agent state).
         file_names = self._file_names(agent)
@@ -1510,7 +1532,7 @@ class BaseAgentLifecycleManager(ABC):
             template_overrides=self._template_overrides(agent),
         )
 
-        await self._set_agent_files(
+        return await self._set_agent_files(
             agent=agent,
             agent_id=agent_id,
             rendered=rendered,
@@ -1518,6 +1540,7 @@ class BaseAgentLifecycleManager(ABC):
             existing_files=existing_files,
             action=options.action,
             overwrite=options.overwrite,
+            heartbeat_in_scratch=heartbeat_in_scratch,
         )
 
 
@@ -1871,18 +1894,20 @@ class OpenClawGatewayProvisioner:
                 disable_device_pairing=gateway.disable_device_pairing,
             ),
         )
-        await manager.provision(
-            agent=agent,
-            board=board,
-            session_key=session_key,
-            auth_token=auth_token,
-            user=user,
-            options=ProvisionOptions(
-                action=action,
-                force_bootstrap=force_bootstrap,
-                overwrite=overwrite,
-            ),
-            session_label=agent.name or "Gateway Agent",
+        provision_warnings = tuple(
+            await manager.provision(
+                agent=agent,
+                board=board,
+                session_key=session_key,
+                auth_token=auth_token,
+                user=user,
+                options=ProvisionOptions(
+                    action=action,
+                    force_bootstrap=force_bootstrap,
+                    overwrite=overwrite,
+                ),
+                session_label=agent.name or "Gateway Agent",
+            )
         )
 
         if reset_session:
@@ -1893,7 +1918,9 @@ class OpenClawGatewayProvisioner:
                     raise
 
         if not wake:
-            return LifecycleResult(wake_delivered=False, wake_skip_reason=None)
+            return LifecycleResult(
+                wake_delivered=False, wake_skip_reason=None, warnings=provision_warnings
+            )
 
         # Read-back check: the wake text instructs the agent to read
         # $BASE_URL/$AUTH_TOKEN from BOOTSTRAP.md or AGENTS.md (## Tools) and curl the
@@ -1917,6 +1944,7 @@ class OpenClawGatewayProvisioner:
             return LifecycleResult(
                 wake_delivered=False,
                 wake_skip_reason=WAKE_SKIP_CREDENTIALS_NOT_VISIBLE,
+                warnings=provision_warnings,
             )
 
         client_config = GatewayClientConfig(
@@ -1933,7 +1961,9 @@ class OpenClawGatewayProvisioner:
             config=client_config,
             deliver=deliver_wakeup,
         )
-        return LifecycleResult(wake_delivered=True, wake_skip_reason=None)
+        return LifecycleResult(
+            wake_delivered=True, wake_skip_reason=None, warnings=provision_warnings
+        )
 
     async def delete_agent_lifecycle(
         self,

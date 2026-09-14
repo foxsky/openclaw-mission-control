@@ -305,7 +305,7 @@ async def test_apply_agent_lifecycle_enables_global_heartbeats(
         return {"ok": True}
 
     async def _fake_provision(self, **kwargs):
-        return None
+        return []
 
     monkeypatch.setattr(provisioning, "openclaw_call", _fake_openclaw_call)
     monkeypatch.setattr(provisioning, "ensure_session", _fake_ensure_session)
@@ -380,7 +380,7 @@ async def test_apply_agent_lifecycle_skips_enable_when_all_boards_paused(
         return {"ok": True}
 
     async def _fake_provision(self, **kwargs):
-        return None
+        return []
 
     async def _fake_any_board_active(gateway_id):  # noqa: ANN001
         return False

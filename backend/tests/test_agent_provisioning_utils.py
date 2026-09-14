@@ -491,6 +491,7 @@ async def test_apply_agent_lifecycle_writes_files_before_wake(monkeypatch):
 
     async def _fake_set_agent_files(self, **kwargs):
         call_log.append("set_agent_files")
+        return []
 
     async def _fake_ensure_session(session_key, *, config, label=None):
         call_log.append("ensure_session")
@@ -592,6 +593,7 @@ async def test_apply_agent_lifecycle_skips_wake_when_credentials_missing(monkeyp
 
     async def _fake_set_agent_files(self, **kwargs):
         call_log.append("set_agent_files")
+        return []
 
     async def _fake_ensure_session(session_key, *, config, label=None):
         call_log.append("ensure_session")
@@ -689,7 +691,7 @@ async def test_apply_agent_lifecycle_returns_wake_delivered_true_on_success(monk
         return {"AGENTS.md": "contents", "BOOTSTRAP.md": "contents"}
 
     async def _fake_set_agent_files(self, **kwargs):
-        return None
+        return []
 
     async def _fake_ensure_session(session_key, *, config, label=None):
         return None
@@ -772,7 +774,7 @@ async def test_apply_agent_lifecycle_returns_wake_delivered_false_when_wake_not_
         return {}
 
     async def _fake_set_agent_files(self, **kwargs):
-        return None
+        return []
 
     monkeypatch.setattr(
         agent_provisioning.OpenClawGatewayControlPlane,
@@ -959,7 +961,7 @@ async def test_provision_main_agent_uses_dedicated_openclaw_agent_id(monkeypatch
         return {}
 
     async def _fake_set_agent_files(self, **kwargs):
-        return None
+        return []
 
     monkeypatch.setattr(
         agent_provisioning.OpenClawGatewayControlPlane,
