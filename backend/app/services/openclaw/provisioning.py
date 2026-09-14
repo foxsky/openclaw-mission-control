@@ -11,7 +11,7 @@ import asyncio
 import json
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -46,6 +46,10 @@ from app.services.openclaw.constants import (
     LEAD_TEMPLATE_MAP,
     MAIN_TEMPLATE_MAP,
     PRESERVE_AGENT_EDITABLE_FILES,
+)
+from app.services.openclaw.gateway_compat import (
+    evaluate_gateway_version,
+    extract_config_last_touched_version,
 )
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
@@ -227,35 +231,28 @@ def _tools_exec_host_patch(config_data: dict[str, Any]) -> dict[str, Any] | None
     return {"exec": {"host": "gateway"}}
 
 
-def _channel_heartbeat_visibility_patch(config_data: dict[str, Any]) -> dict[str, Any] | None:
+def _channel_heartbeat_visibility_patch(
+    config_data: dict[str, Any],
+    *,
+    keyed_agent_entries: bool,
+) -> dict[str, Any] | None:
     """Build a minimal patch ensuring channel default heartbeat visibility is configured.
 
     Gateways may have existing channel config; we only want to fill missing keys rather than
     overwrite operator intent. Returns `None` if no change is needed, otherwise returns a shallow
-    patch dict suitable for a config merge."""
+    patch dict suitable for a config merge. OpenClaw 2026.8+ names the block
+    ``heartbeatVisibility``; older gateways use ``heartbeat``."""
+    block = "heartbeatVisibility" if keyed_agent_entries else "heartbeat"
     channels = config_data.get("channels")
-    if not isinstance(channels, dict):
-        return {"defaults": {"heartbeat": DEFAULT_CHANNEL_HEARTBEAT_VISIBILITY.copy()}}
+    defaults = channels.get("defaults") if isinstance(channels, dict) else None
+    visibility = defaults.get(block) if isinstance(defaults, dict) else None
+    if not isinstance(visibility, dict):
+        return {"defaults": {block: DEFAULT_CHANNEL_HEARTBEAT_VISIBILITY.copy()}}
 
-    defaults = channels.get("defaults")
-    if not isinstance(defaults, dict):
-        return {"defaults": {"heartbeat": DEFAULT_CHANNEL_HEARTBEAT_VISIBILITY.copy()}}
-
-    heartbeat = defaults.get("heartbeat")
-    if not isinstance(heartbeat, dict):
-        return {"defaults": {"heartbeat": DEFAULT_CHANNEL_HEARTBEAT_VISIBILITY.copy()}}
-
-    merged = dict(heartbeat)
-    changed = False
-    for key, value in DEFAULT_CHANNEL_HEARTBEAT_VISIBILITY.items():
-        if key not in merged:
-            merged[key] = value
-            changed = True
-
-    if not changed:
+    merged = {**DEFAULT_CHANNEL_HEARTBEAT_VISIBILITY, **visibility}
+    if merged == visibility:
         return None
-
-    return {"defaults": {"heartbeat": merged}}
+    return {"defaults": {block: merged}}
 
 
 def _whatsapp_media_max_mb_patch(config_data: dict[str, Any]) -> dict[str, Any] | None:
@@ -320,7 +317,11 @@ def _invalid_positive_int(value: object) -> bool:
     return isinstance(value, bool) or not isinstance(value, int) or value <= 0
 
 
-def _openclaw_426_runtime_patch(config_data: dict[str, Any]) -> dict[str, Any] | None:
+def _openclaw_426_runtime_patch(
+    config_data: dict[str, Any],
+    *,
+    keyed_agent_entries: bool,
+) -> dict[str, Any] | None:
     """Build a minimal OpenClaw 4.26 runtime hardening patch.
 
     MC provisions long-lived heartbeat sessions. OpenClaw 4.26 added a
@@ -343,7 +344,8 @@ def _openclaw_426_runtime_patch(config_data: dict[str, Any]) -> dict[str, Any] |
     if not isinstance(compaction, dict):
         compaction = {}
     merged_compaction = dict(compaction)
-    if merged_compaction.get("truncateAfterCompaction") is not True:
+    # Retired in OpenClaw 2026.8 (gateways reject the key); keep it for older gateways.
+    if not keyed_agent_entries and merged_compaction.get("truncateAfterCompaction") is not True:
         merged_compaction["truncateAfterCompaction"] = True
     if _disabled_byte_guard(merged_compaction.get("maxActiveTranscriptBytes")):
         merged_compaction["maxActiveTranscriptBytes"] = (
@@ -921,19 +923,49 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
         self,
         entries: list[tuple[str, str, dict[str, Any]]],
     ) -> None:
-        base_hash, raw_list, config_data = await _gateway_config_agent_list(self._config)
+        base_hash, config_data, keyed_entries = await _gateway_config_snapshot(self._config)
         entry_by_id = _heartbeat_entry_map(entries)
-        new_list = _updated_agent_list(raw_list, entry_by_id)
+        agents_section = config_data.get("agents")
+        if not isinstance(agents_section, dict):
+            agents_section = {}
 
-        channels_patch = _channel_heartbeat_visibility_patch(config_data)
+        # Only MC-managed entries are sent. Keyed entries merge per key under
+        # config.patch, so other gateway agents are untouched; the legacy list
+        # is resent whole, as before.
+        agents_patch: dict[str, Any]
+        outgoing: Sequence[object]
+        if keyed_entries:
+            raw_entries = agents_section.get("entries") or {}
+            if not isinstance(raw_entries, dict):
+                msg = "config agents.entries is not an object"
+                raise OpenClawGatewayError(msg)
+            updated_entries = _updated_agent_entries(raw_entries, entry_by_id)
+            agents_changed = bool(updated_entries)
+            agents_patch = {"entries": updated_entries} if updated_entries else {}
+            # ``id`` only labels the provider warning; keyed entries are sent without it.
+            outgoing = [{"id": agent_id, **entry} for agent_id, entry in updated_entries.items()]
+        else:
+            raw_list = agents_section.get("list") or []
+            if not isinstance(raw_list, list):
+                msg = "config agents.list is not a list"
+                raise OpenClawGatewayError(msg)
+            new_list = _updated_agent_list(raw_list, entry_by_id)
+            agents_changed = new_list != raw_list
+            agents_patch = {"list": new_list}
+            outgoing = new_list
+
+        channels_patch = _channel_heartbeat_visibility_patch(
+            config_data,
+            keyed_agent_entries=keyed_entries,
+        )
         whatsapp_patch = _whatsapp_media_max_mb_patch(config_data)
         tools_patch = _tools_exec_host_patch(config_data)
-        runtime_patch = _openclaw_426_runtime_patch(config_data)
+        runtime_patch = _openclaw_426_runtime_patch(config_data, keyed_agent_entries=keyed_entries)
 
         # Skip config.patch entirely when nothing changed — avoids an unnecessary
         # gateway SIGUSR1 restart that rotates agent tokens and breaks active sessions.
         if (
-            new_list == raw_list
+            not agents_changed
             and channels_patch is None
             and whatsapp_patch is None
             and tools_patch is None
@@ -942,17 +974,19 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
             logger.debug("patch_agent_heartbeats: no changes detected, skipping config.patch")
             return
 
-        _warn_unconfigured_heartbeat_model_providers(new_list, config_data)
+        _warn_unconfigured_heartbeat_model_providers(outgoing, config_data)
 
-        patch: dict[str, Any] = {"agents": {"list": new_list}}
+        patch: dict[str, Any] = {}
+        if agents_patch:
+            patch["agents"] = agents_patch
         if runtime_patch is not None:
             for key, value in runtime_patch.items():
                 if key == "agents":
-                    patch["agents"].update(value)
+                    patch.setdefault("agents", {}).update(value)
                 else:
                     patch[key] = value
         # channels_patch and whatsapp_patch both live under ``channels`` but
-        # at disjoint sub-keys (``defaults.heartbeat`` vs ``whatsapp.mediaMaxMb``).
+        # at disjoint sub-keys (``defaults.*`` vs ``whatsapp.mediaMaxMb``).
         # Merge at the top so we send one ``channels`` block.
         if channels_patch is not None or whatsapp_patch is not None:
             merged_channels: dict[str, Any] = {}
@@ -1007,9 +1041,43 @@ def _warn_unconfigured_heartbeat_model_providers(
             )
 
 
-async def _gateway_config_agent_list(
+# OpenClaw 2026.8.1 moved ``agents.list`` to keyed ``agents.entries``, renamed
+# ``channels.defaults.heartbeat`` to ``heartbeatVisibility`` and retired
+# ``agents.defaults.compaction.truncateAfterCompaction`` in the same release. Gateways
+# reject the other layout's keys, so one detection per config read drives all three.
+_KEYED_AGENT_ENTRIES_MIN_VERSION = "2026.8.1"
+
+
+def _uses_keyed_agent_entries(payload: Mapping[str, object], config_data: dict[str, Any]) -> bool:
+    """Return whether the gateway config uses the OpenClaw 2026.8+ layout."""
+    agents = config_data.get("agents")
+    if isinstance(agents, dict):
+        if isinstance(agents.get("entries"), dict):
+            return True
+        if isinstance(agents.get("list"), list):
+            return False
+        defaults = agents.get("defaults")
+        compaction = defaults.get("compaction") if isinstance(defaults, dict) else None
+        if isinstance(compaction, dict) and "truncateAfterCompaction" in compaction:
+            return False
+    channels = config_data.get("channels")
+    channel_defaults = channels.get("defaults") if isinstance(channels, dict) else None
+    if isinstance(channel_defaults, dict) and "heartbeat" in channel_defaults:
+        return False
+    # No layout-specific keys yet (fresh gateway): use the version that last wrote the
+    # config, defaulting to the current layout when the gateway reports none.
+    version = extract_config_last_touched_version(payload)
+    if version is None:
+        return True
+    return evaluate_gateway_version(
+        current_version=version,
+        minimum_version=_KEYED_AGENT_ENTRIES_MIN_VERSION,
+    ).compatible
+
+
+async def _gateway_config_snapshot(
     config: GatewayClientConfig,
-) -> tuple[str | None, list[object], dict[str, Any]]:
+) -> tuple[str | None, dict[str, Any], bool]:
     cfg = await openclaw_call("config.get", config=config)
     if not isinstance(cfg, dict):
         msg = "config.get returned invalid payload"
@@ -1019,13 +1087,7 @@ async def _gateway_config_agent_list(
     if not isinstance(data, dict):
         msg = "config.get returned invalid config"
         raise OpenClawGatewayError(msg)
-
-    agents_section = data.get("agents") or {}
-    agents_list = agents_section.get("list") or []
-    if not isinstance(agents_list, list):
-        msg = "config agents.list is not a list"
-        raise OpenClawGatewayError(msg)
-    return cfg.get("hash"), agents_list, data
+    return cfg.get("hash"), data, _uses_keyed_agent_entries(cfg, data)
 
 
 def _heartbeat_entry_map(
@@ -1034,6 +1096,73 @@ def _heartbeat_entry_map(
     return {
         agent_id: (workspace_path, heartbeat) for agent_id, workspace_path, heartbeat in entries
     }
+
+
+def _merged_agent_entry(
+    raw_entry: dict[str, Any],
+    workspace_path: str,
+    heartbeat: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the entry with MC's workspace/heartbeat applied, or None when unchanged."""
+    workspace_changed = raw_entry.get("workspace") != workspace_path
+    heartbeat_changed = not _heartbeat_configs_equal(raw_entry.get("heartbeat"), heartbeat)
+    if not workspace_changed and not heartbeat_changed:
+        return None
+    new_entry = dict(raw_entry)
+    new_entry["workspace"] = workspace_path
+    if heartbeat_changed:
+        # Merge: start from existing gateway config, then overlay MC values.
+        # Gateway-only fields (model, ackMaxChars, prompt) survive because
+        # the merge starts from dict(existing) and MC's heartbeat dict
+        # typically doesn't contain them (unless explicitly set in DB).
+        existing_hb = raw_entry.get("heartbeat") or {}
+        merged_hb = dict(existing_hb)
+        merged_hb.update(heartbeat)
+        new_entry["heartbeat"] = merged_hb
+    else:
+        new_entry["heartbeat"] = raw_entry.get("heartbeat")
+    return new_entry
+
+
+def _new_agent_entry(
+    agent_id: str,
+    workspace_path: str,
+    heartbeat: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a gateway agent entry for an agent the gateway does not know yet (no ``id``)."""
+    entry: dict[str, Any] = {"workspace": workspace_path, "heartbeat": heartbeat}
+    # Supervisor lead-* needs the ``message`` tool to reply on
+    # WhatsApp/Discord; 5.12 doctor flags the gap, but the symptom
+    # (silent Supervisor) is invisible until an operator reports
+    # it. Workers are intentionally excluded — they report via
+    # task comments and should not bypass the Supervisor.
+    #
+    # ``subagents.delegationMode: "prefer"`` (OpenClaw 5.9 prompt-
+    # only knob) steers the Supervisor toward spawning ACP children
+    # for /codex, /simplify, and parallel-mode work instead of doing
+    # the work inline. Manually set on .60's existing Supervisor;
+    # seed here so new boards inherit it without manual config.
+    if agent_id.startswith(_LEAD_AGENT_PREFIX):
+        entry["tools"] = {"alsoAllow": ["message"]}
+        entry["subagents"] = {"delegationMode": "prefer"}
+    return entry
+
+
+def _updated_agent_entries(
+    raw_entries: dict[str, Any],
+    entry_by_id: dict[str, tuple[str, dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    """Return only the keyed ``agents.entries`` MC needs to add or change."""
+    updates: dict[str, dict[str, Any]] = {}
+    for agent_id, (workspace_path, heartbeat) in entry_by_id.items():
+        raw_entry = raw_entries.get(agent_id)
+        if isinstance(raw_entry, dict):
+            merged = _merged_agent_entry(raw_entry, workspace_path, heartbeat)
+            if merged is not None:
+                updates[agent_id] = merged
+        else:
+            updates[agent_id] = _new_agent_entry(agent_id, workspace_path, heartbeat)
+    return updates
 
 
 def _updated_agent_list(
@@ -1051,53 +1180,16 @@ def _updated_agent_list(
         if not isinstance(agent_id, str) or agent_id not in entry_by_id:
             new_list.append(raw_entry)
             continue
-
         workspace_path, heartbeat = entry_by_id[agent_id]
-        workspace_changed = raw_entry.get("workspace") != workspace_path
-        heartbeat_changed = not _heartbeat_configs_equal(raw_entry.get("heartbeat"), heartbeat)
-        if not workspace_changed and not heartbeat_changed:
-            new_list.append(raw_entry)
-            updated_ids.add(agent_id)
-            continue
-        new_entry = dict(raw_entry)
-        new_entry["workspace"] = workspace_path
-        if heartbeat_changed:
-            # Merge: start from existing gateway config, then overlay MC values.
-            # Gateway-only fields (model, ackMaxChars, prompt) survive because
-            # the merge starts from dict(existing) and MC's heartbeat dict
-            # typically doesn't contain them (unless explicitly set in DB).
-            existing_hb = raw_entry.get("heartbeat") or {}
-            merged_hb = dict(existing_hb)
-            merged_hb.update(heartbeat)
-            new_entry["heartbeat"] = merged_hb
-        else:
-            new_entry["heartbeat"] = raw_entry.get("heartbeat")
-        new_list.append(new_entry)
+        merged = _merged_agent_entry(raw_entry, workspace_path, heartbeat)
+        new_list.append(raw_entry if merged is None else merged)
         updated_ids.add(agent_id)
 
     for agent_id, (workspace_path, heartbeat) in entry_by_id.items():
         if agent_id in updated_ids:
             continue
-        entry: dict[str, Any] = {
-            "id": agent_id,
-            "workspace": workspace_path,
-            "heartbeat": heartbeat,
-        }
-        # Supervisor lead-* needs the ``message`` tool to reply on
-        # WhatsApp/Discord; 5.12 doctor flags the gap, but the symptom
-        # (silent Supervisor) is invisible until an operator reports
-        # it. Workers are intentionally excluded — they report via
-        # task comments and should not bypass the Supervisor.
-        #
-        # ``subagents.delegationMode: "prefer"`` (OpenClaw 5.9 prompt-
-        # only knob) steers the Supervisor toward spawning ACP children
-        # for /codex, /simplify, and parallel-mode work instead of doing
-        # the work inline. Manually set on .60's existing Supervisor;
-        # seed here so new boards inherit it without manual config.
-        if agent_id.startswith(_LEAD_AGENT_PREFIX):
-            entry["tools"] = {"alsoAllow": ["message"]}
-            entry["subagents"] = {"delegationMode": "prefer"}
-        new_list.append(entry)
+        new_entry = _new_agent_entry(agent_id, workspace_path, heartbeat)
+        new_list.append({"id": agent_id, **new_entry})
 
     return new_list
 
