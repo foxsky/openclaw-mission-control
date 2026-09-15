@@ -47,6 +47,13 @@ DEFAULT_GATEWAY_CLIENT_ID = "gateway-client"
 DEFAULT_GATEWAY_CLIENT_MODE = "backend"
 GATEWAY_WS_OPEN_TIMEOUT_SECONDS = 35
 GATEWAY_WS_CLOSE_TIMEOUT_SECONDS = 5
+# Whole-call deadline: connect, handshake and response. The websocket library only bounds the
+# open, so a gateway that never answers (e.g. a superseded config reload) hung callers — and any
+# DB row lock they held — indefinitely. Kept above the open timeout so slow connects still report
+# their own error.
+GATEWAY_RPC_TIMEOUT_SECONDS = 45.0
+# config.patch replies only after the gateway has applied the change (hot reload).
+GATEWAY_RPC_TIMEOUT_OVERRIDES_SECONDS: dict[str, float] = {"config.patch": 90.0}
 GatewayConnectMode = Literal["device", "control_ui"]
 
 # NOTE: These are the base gateway methods from the OpenClaw gateway repo.
@@ -649,13 +656,16 @@ async def openclaw_call(
         config.allow_insecure_tls,
         config.disable_device_pairing,
     )
+    timeout_seconds = GATEWAY_RPC_TIMEOUT_OVERRIDES_SECONDS.get(method, GATEWAY_RPC_TIMEOUT_SECONDS)
+    deadline = asyncio.timeout(timeout_seconds)
     try:
-        payload = await _openclaw_call_once(
-            method,
-            params,
-            config=config,
-            gateway_url=gateway_url,
-        )
+        async with deadline:
+            payload = await _openclaw_call_once(
+                method,
+                params,
+                config=config,
+                gateway_url=gateway_url,
+            )
         logger.debug(
             "gateway.rpc.call.success method=%s duration_ms=%s",
             method,
@@ -689,6 +699,9 @@ async def openclaw_call(
             int((perf_counter() - started_at) * 1000),
             exc.__class__.__name__,
         )
+        if deadline.expired():
+            msg = f"gateway rpc {method} timed out after {timeout_seconds:g}s"
+            raise OpenClawGatewayError(msg) from exc
         raise OpenClawGatewayError(str(exc)) from exc
 
 
@@ -700,11 +713,13 @@ async def openclaw_connect_metadata(*, config: GatewayConfig) -> object:
         "gateway.rpc.connect_metadata.start gateway_url=%s",
         _redacted_url_for_log(gateway_url),
     )
+    deadline = asyncio.timeout(GATEWAY_RPC_TIMEOUT_SECONDS)
     try:
-        metadata = await _openclaw_connect_metadata_once(
-            config=config,
-            gateway_url=gateway_url,
-        )
+        async with deadline:
+            metadata = await _openclaw_connect_metadata_once(
+                config=config,
+                gateway_url=gateway_url,
+            )
         logger.debug(
             "gateway.rpc.connect_metadata.success duration_ms=%s",
             int((perf_counter() - started_at) * 1000),
@@ -728,6 +743,9 @@ async def openclaw_connect_metadata(*, config: GatewayConfig) -> object:
             int((perf_counter() - started_at) * 1000),
             exc.__class__.__name__,
         )
+        if deadline.expired():
+            msg = f"gateway connect timed out after {GATEWAY_RPC_TIMEOUT_SECONDS:g}s"
+            raise OpenClawGatewayError(msg) from exc
         raise OpenClawGatewayError(str(exc)) from exc
 
 

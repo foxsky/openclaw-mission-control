@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
@@ -368,6 +369,37 @@ class _SyncContext:
     options: GatewayTemplateSyncOptions
 
 
+# Cap for one agent's template-sync lifecycle, backoff retries included. The lifecycle holds the
+# agent's row lock from its first flush until commit, so an unbounded wait blocks that agent's
+# check-ins (heartbeat_sweep and lifecycle_reconcile cap theirs at 60 s). Must exceed the
+# config.patch RPC deadline.
+_SYNC_LIFECYCLE_TIMEOUT_SECONDS = 180.0
+
+
+async def _run_sync_lifecycle(
+    ctx: _SyncContext,
+    run: Callable[[], Awaitable[bool]],
+    *,
+    agent_name: str,
+) -> None:
+    deadline = asyncio.timeout(_SYNC_LIFECYCLE_TIMEOUT_SECONDS)
+    try:
+        async with deadline:
+            await ctx.backoff.run(run)
+    except TimeoutError as exc:
+        # Cancelling the lifecycle leaves its transaction (row lock, partial agent update) open
+        # on the session the sync shares across agents; without the rollback the next agent's
+        # commit would persist it.
+        await ctx.session.rollback()
+        if deadline.expired():
+            msg = (
+                f"Template sync for {agent_name} exceeded "
+                f"{_SYNC_LIFECYCLE_TIMEOUT_SECONDS:g}s; gateway did not finish in time."
+            )
+            raise TimeoutError(msg) from exc
+        raise
+
+
 def _converge_agent_dev_acp_flow(agent: Agent) -> bool:
     profile = converge_identity_dev_acp_flow(agent.identity_profile)
     if profile is None:
@@ -710,7 +742,7 @@ async def _sync_one_agent(
                 raise
             return True
 
-        await ctx.backoff.run(_do_provision)
+        await _run_sync_lifecycle(ctx, _do_provision, agent_name=agent.name)
         result.agents_updated += 1
         _append_sync_warnings(
             result, orchestrator.last_lifecycle_warnings, agent=agent, board=board
@@ -806,7 +838,7 @@ async def _sync_main_agent(
                 raise
             return True
 
-        await ctx.backoff.run(_do_provision_main)
+        await _run_sync_lifecycle(ctx, _do_provision_main, agent_name=main_agent.name)
     except TimeoutError as exc:  # pragma: no cover - gateway/network dependent
         _append_sync_error(result, agent=main_agent, message=str(exc))
         stop_sync = True
