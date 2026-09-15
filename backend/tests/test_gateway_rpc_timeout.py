@@ -77,7 +77,7 @@ def test_deadlines_cover_supported_slow_gateway_operations() -> None:
     overrides = gateway_rpc.GATEWAY_RPC_TIMEOUT_OVERRIDES_SECONDS
     # OpenClaw 2026.9.4: ACP parent+child session cleanup ~4 x 15 s steps; secret providers may
     # take up to 120 s before config.patch applies.
-    assert overrides["sessions.reset"] >= 60
+    assert overrides["sessions.reset"] > 4 * 15 + gateway_rpc.GATEWAY_WS_OPEN_TIMEOUT_SECONDS
     assert overrides["config.patch"] > 120
 
 
