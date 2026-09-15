@@ -86,6 +86,10 @@ jobs:
         if: steps.shas.outputs.needed == 'true' && steps.surfaces.outputs.frontend == 'true'
         env:
           NEXT_TELEMETRY_DISABLED: "1"
+          # next build's whole-program type check exhausted memory on this 4 GB host with
+          # Next.js 16.1.7 (2026-09-15). CI already type-checks and builds this exact commit
+          # before deploy runs (ci.yml "Run frontend checks"), so skip that pass here.
+          MC_SKIP_BUILD_TYPECHECK: "1"
         run: |
           set -euo pipefail
           cd /home/mcontrol/openclaw-mission-control/frontend

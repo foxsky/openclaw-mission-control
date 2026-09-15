@@ -19,6 +19,12 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  typescript: {
+    // The production host (4 GB) runs out of memory in `next build`'s whole-program type check.
+    // CI type-checks (`make frontend-typecheck`) and builds every commit before the deploy runs,
+    // so the deploy workflow sets MC_SKIP_BUILD_TYPECHECK=1; local and CI builds still check.
+    ignoreBuildErrors: process.env.MC_SKIP_BUILD_TYPECHECK === "1",
+  },
 };
 
 export default nextConfig;
