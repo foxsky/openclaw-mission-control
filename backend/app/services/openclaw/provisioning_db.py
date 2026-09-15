@@ -24,7 +24,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.core.agent_tokens import hash_agent_token, verify_agent_token
 from app.core.durations import parse_every_to_seconds
-from app.core.logging import TRACE_LEVEL
+from app.core.logging import TRACE_LEVEL, get_logger
 from app.core.time import utcnow
 from app.db import crud
 from app.db.pagination import paginate
@@ -108,6 +108,7 @@ if TYPE_CHECKING:
 
 
 _T = TypeVar("_T")
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -371,9 +372,10 @@ class _SyncContext:
 
 # Cap for one agent's template-sync lifecycle, backoff retries included. The lifecycle holds the
 # agent's row lock from its first flush until commit, so an unbounded wait blocks that agent's
-# check-ins (heartbeat_sweep and lifecycle_reconcile cap theirs at 60 s). Must exceed the
-# config.patch RPC deadline.
-_SYNC_LIFECYCLE_TIMEOUT_SECONDS = 180.0
+# check-ins (heartbeat_sweep and lifecycle_reconcile cap theirs at 60 s). Must exceed the slowest
+# single RPC deadline.
+_SYNC_LIFECYCLE_TIMEOUT_SECONDS = 300.0
+_CANCELLED_TRANSACTION_CLEANUP_SECONDS = 10.0
 
 
 async def _run_sync_lifecycle(
@@ -387,17 +389,27 @@ async def _run_sync_lifecycle(
         async with deadline:
             await ctx.backoff.run(run)
     except TimeoutError as exc:
-        # Cancelling the lifecycle leaves its transaction (row lock, partial agent update) open
-        # on the session the sync shares across agents; without the rollback the next agent's
-        # commit would persist it.
-        await ctx.session.rollback()
-        if deadline.expired():
-            msg = (
-                f"Template sync for {agent_name} exceeded "
-                f"{_SYNC_LIFECYCLE_TIMEOUT_SECONDS:g}s; gateway did not finish in time."
-            )
-            raise TimeoutError(msg) from exc
-        raise
+        if not deadline.expired():
+            raise
+        msg = (
+            f"Template sync lifecycle for {agent_name} did not finish within "
+            f"{_SYNC_LIFECYCLE_TIMEOUT_SECONDS:g}s."
+        )
+        raise TimeoutError(msg) from exc
+
+
+async def _discard_cancelled_transaction(session: AsyncSession) -> None:
+    """Release what a cancelled lifecycle left open: its row lock and flushed agent update.
+
+    Only the current transaction is undone; commits from earlier backoff attempts stay. Rollback
+    expires every ORM object in the session, so callers record errors from those objects first.
+    """
+    try:
+        async with asyncio.timeout(_CANCELLED_TRANSACTION_CLEANUP_SECONDS):
+            await session.rollback()
+    except Exception:  # noqa: BLE001 - an unusable connection must still release its lock
+        logger.warning("gateway.template_sync.rollback_failed; invalidating session")
+        await session.invalidate()
 
 
 def _converge_agent_dev_acp_flow(agent: Agent) -> bool:
@@ -747,9 +759,10 @@ async def _sync_one_agent(
         _append_sync_warnings(
             result, orchestrator.last_lifecycle_warnings, agent=agent, board=board
         )
-    except TimeoutError as exc:  # pragma: no cover - gateway/network dependent
+    except TimeoutError as exc:
         result.agents_skipped += 1
         _append_sync_error(result, agent=agent, board=board, message=str(exc))
+        await _discard_cancelled_transaction(ctx.session)
         return True
     except (OSError, RuntimeError, ValueError) as exc:  # pragma: no cover
         result.agents_skipped += 1
@@ -841,6 +854,7 @@ async def _sync_main_agent(
         await _run_sync_lifecycle(ctx, _do_provision_main, agent_name=main_agent.name)
     except TimeoutError as exc:  # pragma: no cover - gateway/network dependent
         _append_sync_error(result, agent=main_agent, message=str(exc))
+        await _discard_cancelled_transaction(ctx.session)
         stop_sync = True
     except (OSError, RuntimeError, ValueError) as exc:  # pragma: no cover
         _append_sync_error(

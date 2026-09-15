@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import platform
+from collections.abc import Generator
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -466,9 +469,25 @@ async def test_openclaw_call_config_patch_builds_operator_connect_params(
     assert "device" in connect_params
 
 
+class _FakeConnection:
+    def __init__(self) -> None:
+        self.transport = SimpleNamespace(abort=lambda: None)
+
+    async def close(self) -> None:
+        return None
+
+
 class _FakeConnectContext:
+    """Like ``websockets.connect``: awaitable (and usable as an async context manager)."""
+
+    def __await__(self) -> Generator[Any, None, _FakeConnection]:
+        async def _connect() -> _FakeConnection:
+            return _FakeConnection()
+
+        return _connect().__await__()
+
     async def __aenter__(self) -> object:
-        return object()
+        return _FakeConnection()
 
     async def __aexit__(self, _exc_type: object, _exc: object, _tb: object) -> bool:
         return False

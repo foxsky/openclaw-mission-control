@@ -11,6 +11,7 @@ import asyncio
 import json
 import re
 import ssl
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import perf_counter, time
 from typing import Any, Literal
@@ -51,9 +52,16 @@ GATEWAY_WS_CLOSE_TIMEOUT_SECONDS = 5
 # open, so a gateway that never answers (e.g. a superseded config reload) hung callers — and any
 # DB row lock they held — indefinitely. Kept above the open timeout so slow connects still report
 # their own error.
-GATEWAY_RPC_TIMEOUT_SECONDS = 45.0
-# config.patch replies only after the gateway has applied the change (hot reload).
-GATEWAY_RPC_TIMEOUT_OVERRIDES_SECONDS: dict[str, float] = {"config.patch": 90.0}
+GATEWAY_RPC_TIMEOUT_SECONDS = 60.0
+# Supported slow mutations in OpenClaw 2026.9.4: sessions.reset awaits ACP parent and child
+# cleanup (four 15 s steps); config.patch awaits secret providers (up to 120 s) before
+# persisting and hot-applying.
+GATEWAY_RPC_TIMEOUT_OVERRIDES_SECONDS: dict[str, float] = {
+    "sessions.reset": 120.0,
+    "config.patch": 150.0,
+}
+# Graceful closes that outlive the caller; strong references keep them from being collected.
+_BACKGROUND_CLOSES: set[asyncio.Task[None]] = set()
 GatewayConnectMode = Literal["device", "control_ui"]
 
 # NOTE: These are the base gateway methods from the OpenClaw gateway repo.
@@ -592,6 +600,58 @@ async def _recv_first_message_or_none(
         return None
 
 
+async def _open_gateway_connection(
+    config: GatewayConfig,
+    gateway_url: str,
+) -> websockets.ClientConnection:
+    origin = _build_control_ui_origin(gateway_url) if config.disable_device_pairing else None
+    ssl_context = _create_ssl_context(config)
+    connect_kwargs: dict[str, Any] = {
+        "ping_interval": None,
+        "open_timeout": GATEWAY_WS_OPEN_TIMEOUT_SECONDS,
+        "close_timeout": GATEWAY_WS_CLOSE_TIMEOUT_SECONDS,
+    }
+    if origin is not None:
+        connect_kwargs["origin"] = origin
+    if ssl_context is not None:
+        connect_kwargs["ssl"] = ssl_context
+    return await websockets.connect(gateway_url, **connect_kwargs)
+
+
+async def _close_gateway_connection(ws: websockets.ClientConnection) -> None:
+    # websockets' close() drains the send buffer before its own close timeout applies, so a peer
+    # that stops reading could hold this forever; give up and drop the transport instead.
+    try:
+        async with asyncio.timeout(GATEWAY_WS_CLOSE_TIMEOUT_SECONDS):
+            await ws.close()
+    except asyncio.CancelledError:
+        ws.transport.abort()
+        raise
+    except Exception:  # noqa: BLE001 - every close failure ends in an abort
+        ws.transport.abort()
+
+
+async def _with_gateway_connection(
+    config: GatewayConfig,
+    gateway_url: str,
+    exchange: Callable[[websockets.ClientConnection], Awaitable[object]],
+) -> object:
+    ws = await _open_gateway_connection(config, gateway_url)
+    try:
+        result = await exchange(ws)
+    except BaseException:
+        # Timeout, cancellation or protocol error: nothing left to say, so drop the connection
+        # immediately instead of waiting on a close handshake the caller's deadline won't cover.
+        ws.transport.abort()
+        raise
+    # The answer is in hand; close in the background so a deadline firing during teardown
+    # can't discard it.
+    task = asyncio.get_running_loop().create_task(_close_gateway_connection(ws))
+    _BACKGROUND_CLOSES.add(task)
+    task.add_done_callback(_BACKGROUND_CLOSES.discard)
+    return result
+
+
 async def _openclaw_call_once(
     method: str,
     params: dict[str, Any] | None,
@@ -599,21 +659,12 @@ async def _openclaw_call_once(
     config: GatewayConfig,
     gateway_url: str,
 ) -> object:
-    origin = _build_control_ui_origin(gateway_url) if config.disable_device_pairing else None
-    ssl_context = _create_ssl_context(config)
-    connect_kwargs: dict[str, Any] = {
-        "ping_interval": None,
-        "open_timeout": GATEWAY_WS_OPEN_TIMEOUT_SECONDS,
-        "close_timeout": GATEWAY_WS_CLOSE_TIMEOUT_SECONDS,
-    }
-    if origin is not None:
-        connect_kwargs["origin"] = origin
-    if ssl_context is not None:
-        connect_kwargs["ssl"] = ssl_context
-    async with websockets.connect(gateway_url, **connect_kwargs) as ws:
+    async def _exchange(ws: websockets.ClientConnection) -> object:
         first_message = await _recv_first_message_or_none(ws)
         await _ensure_connected(ws, first_message, config)
         return await _send_request(ws, method, params)
+
+    return await _with_gateway_connection(config, gateway_url, _exchange)
 
 
 async def _openclaw_connect_metadata_once(
@@ -621,20 +672,11 @@ async def _openclaw_connect_metadata_once(
     config: GatewayConfig,
     gateway_url: str,
 ) -> object:
-    origin = _build_control_ui_origin(gateway_url) if config.disable_device_pairing else None
-    ssl_context = _create_ssl_context(config)
-    connect_kwargs: dict[str, Any] = {
-        "ping_interval": None,
-        "open_timeout": GATEWAY_WS_OPEN_TIMEOUT_SECONDS,
-        "close_timeout": GATEWAY_WS_CLOSE_TIMEOUT_SECONDS,
-    }
-    if origin is not None:
-        connect_kwargs["origin"] = origin
-    if ssl_context is not None:
-        connect_kwargs["ssl"] = ssl_context
-    async with websockets.connect(gateway_url, **connect_kwargs) as ws:
+    async def _exchange(ws: websockets.ClientConnection) -> object:
         first_message = await _recv_first_message_or_none(ws)
         return await _ensure_connected(ws, first_message, config)
+
+    return await _with_gateway_connection(config, gateway_url, _exchange)
 
 
 async def openclaw_call(

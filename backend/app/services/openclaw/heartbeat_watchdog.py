@@ -63,8 +63,8 @@ logger = get_logger(__name__)
 WATCHDOG_INTERVAL_SECONDS = 60
 REPEAT_REPAIR_ALERT_WINDOW = timedelta(hours=1)
 REPEAT_REPAIR_ALERT_THRESHOLD = 3
-# Part E.1 safety cap: ``openclaw_call`` has no end-to-end RPC timeout
-# (only a 2s connect handshake), so an unresponsive gateway would
+# Part E.1 safety cap: ``openclaw_call``'s own deadline (60s) is longer than
+# this sweep can afford, so an unresponsive gateway would
 # otherwise block the 60s sweep forever. Auth-status is purely
 # observability — 5s is plenty for any healthy gateway and keeps the
 # sweep on schedule when one isn't.
@@ -192,10 +192,9 @@ async def _fetch_auth_status_by_gateway(
     pays the round-trip once.
 
     Each per-gateway RPC is wrapped in ``asyncio.wait_for`` — the
-    underlying ``openclaw_call`` has no end-to-end response timeout
-    after connect+send (only a 2s connect-handshake timeout), so a
-    non-responsive gateway could otherwise stall the 60s watchdog
-    sweep indefinitely. The cap is short (5s) because this is pure
+    underlying ``openclaw_call`` deadline (60s) would otherwise let a
+    non-responsive gateway eat the whole 60s watchdog sweep. The cap
+    is short (5s) because this is pure
     observability; an unreachable gateway reduces to ``None`` and
     repair still happens immediately.
     """
